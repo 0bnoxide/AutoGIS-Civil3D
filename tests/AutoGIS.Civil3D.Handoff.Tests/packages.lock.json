@@ -122,6 +122,12 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "autogis-civil3d-handoff": {
+        "type": "Project",
+        "dependencies": {
+          "AutoGIS.Civil3D.Handoff": "[1.0.0, )"
+        }
+      },
       "autogis.civil3d.handoff": {
         "type": "Project",
         "dependencies": {

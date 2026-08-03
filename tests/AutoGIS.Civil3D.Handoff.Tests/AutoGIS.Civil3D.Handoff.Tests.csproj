@@ -10,5 +10,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/AutoGIS.Civil3D.Handoff/AutoGIS.Civil3D.Handoff.csproj" />
+    <ProjectReference Include="../../src/AutoGIS.Civil3D.Handoff.Cli/AutoGIS.Civil3D.Handoff.Cli.csproj" />
   </ItemGroup>
 </Project>
