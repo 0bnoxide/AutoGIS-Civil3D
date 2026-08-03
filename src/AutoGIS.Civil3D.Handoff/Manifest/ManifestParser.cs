@@ -113,7 +113,8 @@ internal static class ManifestParser
         string version = GetRequiredString(producerElement, "version");
         string? sourceCommit = GetOptionalString(producerElement, "source_commit");
 
-        ValidateName(name, "producer.name", issues);
+        ValidateTrimmedProducerField(name, "producer.name", issues);
+        ValidateTrimmedProducerField(version, "producer.version", issues);
         if (IsPathShaped(name) || IsPathShaped(version) ||
             (sourceCommit is not null && IsPathShaped(sourceCommit)))
         {
@@ -129,15 +130,19 @@ internal static class ManifestParser
     private static SurfaceManifest ParseSurface(JsonElement surfaceElement, ICollection<ValidationIssue> issues)
     {
         string name = GetRequiredString(surfaceElement, "name");
-        ValidateName(name, "surface.name", issues);
+        string normalizedName = name.Trim();
+        if (normalizedName.Length == 0)
+        {
+            issues.Add(SemanticIssue("Surface name must not be blank after trimming.", "surface.name"));
+        }
 
         return new SurfaceManifest(
             GetRequiredString(surfaceElement, "filename"),
             GetRequiredString(surfaceElement, "sha256"),
             GetRequiredString(surfaceElement, "landxml_version"),
-            name,
-            surfaceElement.GetProperty("point_count").GetInt64(),
-            surfaceElement.GetProperty("face_count").GetInt64());
+            normalizedName,
+            GetRequiredInt64(surfaceElement, "point_count", "surface.point_count", issues),
+            GetRequiredInt64(surfaceElement, "face_count", "surface.face_count", issues));
     }
 
     private static CoordinateReferenceManifest ParseCoordinateReference(JsonElement coordinateReferenceElement, ICollection<ValidationIssue> issues)
@@ -157,7 +162,11 @@ internal static class ManifestParser
             ? new VerticalDatumManifest(
                 status,
                 GetRequiredString(datumElement, "authority"),
-                datumElement.GetProperty("code").GetInt32(),
+                GetRequiredInt32(
+                    datumElement,
+                    "code",
+                    "coordinate_reference.vertical.datum.code",
+                    issues),
                 GetRequiredString(datumElement, "name"),
                 null)
             : new VerticalDatumManifest(
@@ -169,18 +178,25 @@ internal static class ManifestParser
 
         return new CoordinateReferenceManifest(
             new HorizontalReferenceManifest(
-                horizontalElement.GetProperty("code").GetInt32(),
+                GetRequiredInt32(
+                    horizontalElement,
+                    "code",
+                    "coordinate_reference.horizontal.code",
+                    issues),
                 ParseLinearUnit(GetRequiredString(horizontalElement, "unit"))),
             new VerticalReferenceManifest(
                 ParseLinearUnit(GetRequiredString(verticalElement, "unit")),
                 datum));
     }
 
-    private static void ValidateName(string value, string location, ICollection<ValidationIssue> issues)
+    private static void ValidateTrimmedProducerField(
+        string value,
+        string location,
+        ICollection<ValidationIssue> issues)
     {
         if (string.IsNullOrWhiteSpace(value) || !string.Equals(value, value.Trim(), StringComparison.Ordinal))
         {
-            issues.Add(SemanticIssue("Names must not be blank or padded with whitespace.", location));
+            issues.Add(SemanticIssue("Producer fields must not be blank or padded with whitespace.", location));
         }
     }
 
@@ -204,6 +220,36 @@ internal static class ManifestParser
 
     private static string? GetOptionalString(JsonElement element, string propertyName) =>
         element.TryGetProperty(propertyName, out JsonElement value) ? value.GetString() : null;
+
+    private static int GetRequiredInt32(
+        JsonElement element,
+        string propertyName,
+        string location,
+        ICollection<ValidationIssue> issues)
+    {
+        if (element.GetProperty(propertyName).TryGetInt32(out int value))
+        {
+            return value;
+        }
+
+        issues.Add(SemanticIssue($"{propertyName} must fit within a 32-bit signed integer.", location));
+        return default;
+    }
+
+    private static long GetRequiredInt64(
+        JsonElement element,
+        string propertyName,
+        string location,
+        ICollection<ValidationIssue> issues)
+    {
+        if (element.GetProperty(propertyName).TryGetInt64(out long value))
+        {
+            return value;
+        }
+
+        issues.Add(SemanticIssue($"{propertyName} must fit within a 64-bit signed integer.", location));
+        return default;
+    }
 
     private static ValidationIssue SemanticIssue(string message, string location) =>
         new(IssueCodes.ManifestSemanticViolation, IssueSeverity.Error, message, location);

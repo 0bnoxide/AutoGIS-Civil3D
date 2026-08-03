@@ -99,4 +99,48 @@ public sealed class ManifestParserTests
 
         Assert.Contains(result.Issues, issue => issue.Code == IssueCodes.ManifestSemanticViolation);
     }
+
+    [Theory]
+    [InlineData("\"code\":2256", "\"code\":2147483648")]
+    [InlineData("\"code\":5703", "\"code\":2147483648")]
+    [InlineData("\"point_count\":4", "\"point_count\":9223372036854775808")]
+    [InlineData("\"face_count\":2", "\"face_count\":9223372036854775808")]
+    public void Schema_valid_oversized_integer_returns_semantic_issue(string oldValue, string newValue)
+    {
+        string json = TestManifests.KnownDatum.Replace(oldValue, newValue, StringComparison.Ordinal);
+
+        ManifestParseResult result = ManifestParser.Parse(Encoding.UTF8.GetBytes(json));
+
+        Assert.Null(result.Manifest);
+        Assert.Contains(result.Issues, issue => issue.Code == IssueCodes.ManifestSemanticViolation);
+    }
+
+    [Fact]
+    public void Whitespace_padded_producer_version_fails_semantics()
+    {
+        string json = TestManifests.KnownDatum.Replace(
+            "\"version\":\"1.0.0\"",
+            "\"version\":\" 1.0.0 \"",
+            StringComparison.Ordinal);
+
+        ManifestParseResult result = ManifestParser.Parse(Encoding.UTF8.GetBytes(json));
+
+        Assert.Null(result.Manifest);
+        Assert.Contains(result.Issues, issue => issue.Code == IssueCodes.ManifestSemanticViolation);
+    }
+
+    [Fact]
+    public void Whitespace_padded_surface_name_is_normalized_without_an_issue()
+    {
+        string json = TestManifests.KnownDatum.Replace(
+            "\"name\":\"Existing Ground\"",
+            "\"name\":\" Existing Ground \"",
+            StringComparison.Ordinal);
+
+        ManifestParseResult result = ManifestParser.Parse(Encoding.UTF8.GetBytes(json));
+
+        Assert.NotNull(result.Manifest);
+        Assert.Empty(result.Issues);
+        Assert.Equal("Existing Ground", result.Manifest.Surface.Name);
+    }
 }
