@@ -1,0 +1,5 @@
+**/bin/
+**/obj/
+bundle/AutoGIS.Civil3D.Diagnostics.bundle/Contents/2025/*.dll
+bundle/AutoGIS.Civil3D.Diagnostics.bundle/Contents/2025/*.pdb
+
