@@ -30,5 +30,12 @@ public static class IssueCodes
     public const string ManifestInvalidJson = "MAN001";
     public const string ManifestSchemaViolation = "MAN002";
     public const string ManifestSemanticViolation = "MAN003";
+    public const string ChecksumMismatch = "INT001";
+    public const string SurfaceNameMismatch = "XCK001";
+    public const string PointCountMismatch = "XCK002";
+    public const string FaceCountMismatch = "XCK003";
+    public const string EpsgMismatch = "XCK004";
+    public const string HorizontalUnitMismatch = "XCK005";
+    public const string VerticalUnitFamilyMismatch = "XCK006";
     public const string UnknownVerticalDatum = "WRN001";
 }

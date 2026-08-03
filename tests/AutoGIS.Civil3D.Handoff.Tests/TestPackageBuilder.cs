@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text;
+using AutoGIS.Civil3D.Handoff.Manifest;
 
 namespace AutoGIS.Civil3D.Handoff.Tests;
 
@@ -110,6 +112,48 @@ internal static class TestPackageBuilder
         CreateArchive(path, entries);
         ApplyFault(path, fault);
         return path;
+    }
+
+    internal static string CreateValid(VerticalDatumStatus datumStatus) =>
+        CreateBundle(CreateManifest(TestLandXml.Valid, datumStatus), TestLandXml.Valid);
+
+    internal static string CreateBundle(string manifest, string landXml)
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "AutoGIS.Civil3D.Handoff.Tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        string path = Path.Combine(directory, "package.zip");
+        CreateArchive(
+            path,
+            [
+                new EntrySpec("handoff.json", Encoding.UTF8.GetBytes(manifest)),
+                new EntrySpec("surface.landxml", Encoding.UTF8.GetBytes(landXml))
+            ]);
+        return path;
+    }
+
+    internal static string CreateManifest(
+        string landXml,
+        VerticalDatumStatus datumStatus = VerticalDatumStatus.Known)
+    {
+        string sha256 = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(landXml))).ToLowerInvariant();
+        string source = datumStatus == VerticalDatumStatus.Known
+            ? TestManifests.KnownDatum
+            : TestManifests.UnknownDatum;
+
+        return source
+            .Replace(
+                "eecb977d69ff86eec34d02d881991edd5533eee77e8b854e68cbfcab69ea0af9",
+                sha256,
+                StringComparison.Ordinal)
+            .Replace("\"point_count\":4", "\"point_count\":3", StringComparison.Ordinal)
+            .Replace("\"face_count\":2", "\"face_count\":1", StringComparison.Ordinal)
+            .Replace("\"code\":2256", "\"code\":26913", StringComparison.Ordinal)
+            .Replace("\"unit\":\"us_survey_foot\"", "\"unit\":\"metre\"", StringComparison.Ordinal);
     }
 
     internal static void Delete(string packagePath)
