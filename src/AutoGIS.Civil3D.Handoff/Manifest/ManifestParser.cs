@@ -69,7 +69,7 @@ internal static class ManifestParser
                 new ValidationIssue(
                     IssueCodes.UnknownVerticalDatum,
                     IssueSeverity.Warning,
-                    "Vertical datum is unknown and requires review.",
+                    "Vertical datum is unknown and requires review; confirm elevation alignment before use.",
                     "coordinate_reference.vertical.datum"));
         }
 
@@ -201,10 +201,10 @@ internal static class ManifestParser
     }
 
     private static bool IsPathShaped(string value) =>
-        value.StartsWith("/", StringComparison.Ordinal) ||
-        value.StartsWith("\\", StringComparison.Ordinal) ||
-        (value.Length >= 3 && char.IsAsciiLetter(value[0]) && value[1] == ':' &&
-            (value[2] == '/' || value[2] == '\\'));
+        value.Contains('/') ||
+        value.Contains('\\') ||
+        value is "." or ".." ||
+        (value.Length >= 2 && char.IsAsciiLetter(value[0]) && value[1] == ':');
 
     private static LinearUnit ParseLinearUnit(string value) => value switch
     {

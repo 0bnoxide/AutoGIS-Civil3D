@@ -10,6 +10,9 @@ internal static class LandXmlSurfaceParser
 {
     private const string LandXmlNamespace = "http://www.landxml.org/schema/LandXML-1.2";
     private const string SupportedVersion = "1.2";
+    private const int MaximumLeafTokenCount = 4;
+    private const int MaximumScalarTokenLength = 128;
+    private const int ValueChunkLength = 1024;
 
     internal static LandXmlParseResult Parse(Stream xml)
     {
@@ -148,7 +151,7 @@ internal static class LandXmlSurfaceParser
                     }
                     else
                     {
-                        ParsePoint(idText, pointContent.Text, points, issues, ref pointCount);
+                        ParsePoint(idText, pointContent, points, issues, ref pointCount);
                     }
 
                     continue;
@@ -171,7 +174,7 @@ internal static class LandXmlSurfaceParser
                     }
                     else
                     {
-                        ParseFace(faceContent.Text, points, issues);
+                        ParseFace(faceContent, points, issues);
                     }
 
                     continue;
@@ -281,18 +284,24 @@ internal static class LandXmlSurfaceParser
         if (reader.IsEmptyElement)
         {
             reader.Read();
-            return new LeafContent(string.Empty, false, 0);
+            return new LeafContent([], false, false, 0);
         }
 
-        StringBuilder text = new();
+        LeafTokenCollector tokens = new();
+        char[] valueBuffer = new char[ValueChunkLength];
         bool hasChildElement = false;
         long sameNamespaceSurfaceCount = 0;
         while (reader.Read())
         {
             if (reader.NodeType == XmlNodeType.EndElement && reader.Depth == elementDepth)
             {
+                tokens.CompleteToken();
                 reader.Read();
-                return new LeafContent(text.ToString(), hasChildElement, sameNamespaceSurfaceCount);
+                return new LeafContent(
+                    tokens.Tokens,
+                    tokens.Invalid,
+                    hasChildElement,
+                    sameNamespaceSurfaceCount);
             }
 
             if (reader.NodeType == XmlNodeType.Element)
@@ -309,7 +318,7 @@ internal static class LandXmlSurfaceParser
                     XmlNodeType.Whitespace or
                     XmlNodeType.SignificantWhitespace)
             {
-                text.Append(reader.Value);
+                ReadValueChunks(reader, valueBuffer, tokens);
             }
         }
 
@@ -318,17 +327,18 @@ internal static class LandXmlSurfaceParser
 
     private static void ParsePoint(
         string? idText,
-        string pointText,
+        LeafContent pointContent,
         IDictionary<long, Point3> points,
         ICollection<ValidationIssue> issues,
         ref long pointCount)
     {
-        string[] tokens = SplitTokens(pointText);
+        IReadOnlyList<string> tokens = pointContent.Tokens;
         if (!TryParsePositiveInt64(idText, out long pointId) ||
-            tokens.Length != 3 ||
-            !TryParseDouble(tokens.ElementAtOrDefault(0), out double northing) ||
-            !TryParseDouble(tokens.ElementAtOrDefault(1), out double easting) ||
-            !TryParseDouble(tokens.ElementAtOrDefault(2), out double elevation))
+            pointContent.InvalidText ||
+            tokens.Count != 3 ||
+            !TryParseDouble(tokens[0], out double northing) ||
+            !TryParseDouble(tokens[1], out double easting) ||
+            !TryParseDouble(tokens[2], out double elevation))
         {
             AddIssueOnce(issues, IssueCodes.LandXmlInvalidPoint, "A TIN point is malformed.");
             return;
@@ -351,15 +361,16 @@ internal static class LandXmlSurfaceParser
     }
 
     private static void ParseFace(
-        string faceText,
+        LeafContent faceContent,
         IReadOnlyDictionary<long, Point3> points,
         ICollection<ValidationIssue> issues)
     {
-        string[] tokens = SplitTokens(faceText);
-        if (tokens.Length != 3 ||
-            !TryParsePositiveInt64(tokens.ElementAtOrDefault(0), out long firstId) ||
-            !TryParsePositiveInt64(tokens.ElementAtOrDefault(1), out long secondId) ||
-            !TryParsePositiveInt64(tokens.ElementAtOrDefault(2), out long thirdId))
+        IReadOnlyList<string> tokens = faceContent.Tokens;
+        if (faceContent.InvalidText ||
+            tokens.Count != 3 ||
+            !TryParsePositiveInt64(tokens[0], out long firstId) ||
+            !TryParsePositiveInt64(tokens[1], out long secondId) ||
+            !TryParsePositiveInt64(tokens[2], out long thirdId))
         {
             AddIssueOnce(issues, IssueCodes.LandXmlInvalidFace, "A TIN face is malformed.");
             return;
@@ -386,13 +397,20 @@ internal static class LandXmlSurfaceParser
             return;
         }
 
-        double cross =
-            (second.Easting - first.Easting) * (third.Northing - first.Northing) -
-            (second.Northing - first.Northing) * (third.Easting - first.Easting);
+        double scale = GeometryScale(first, second, third);
+        double secondEasting = ScaledDifference(second.Easting, first.Easting, scale);
+        double secondNorthing = ScaledDifference(second.Northing, first.Northing, scale);
+        double thirdEasting = ScaledDifference(third.Easting, first.Easting, scale);
+        double thirdNorthing = ScaledDifference(third.Northing, first.Northing, scale);
+        double cross = secondEasting * thirdNorthing - secondNorthing * thirdEasting;
         double maxSquaredEdge = Math.Max(
-            SquaredDistance(first, second),
-            Math.Max(SquaredDistance(second, third), SquaredDistance(third, first)));
-        bool degenerate = maxSquaredEdge == 0d ||
+            ScaledSquaredDistance(first, second, scale),
+            Math.Max(
+                ScaledSquaredDistance(second, third, scale),
+                ScaledSquaredDistance(third, first, scale)));
+        bool degenerate = !double.IsFinite(cross) ||
+            !double.IsFinite(maxSquaredEdge) ||
+            maxSquaredEdge == 0d ||
             Math.Abs(cross) <= 1e-12 * maxSquaredEdge;
         if (degenerate)
         {
@@ -400,15 +418,45 @@ internal static class LandXmlSurfaceParser
         }
     }
 
-    private static double SquaredDistance(Point3 first, Point3 second)
+    private static double GeometryScale(Point3 first, Point3 second, Point3 third)
     {
-        double northing = second.Northing - first.Northing;
-        double easting = second.Easting - first.Easting;
+        double maximumCoordinate = Math.Max(
+            Math.Max(Math.Abs(first.Northing), Math.Abs(first.Easting)),
+            Math.Max(
+                Math.Max(Math.Abs(second.Northing), Math.Abs(second.Easting)),
+                Math.Max(Math.Abs(third.Northing), Math.Abs(third.Easting))));
+        return maximumCoordinate == 0d
+            ? 1d
+            : Math.ScaleB(1d, Math.ILogB(maximumCoordinate));
+    }
+
+    private static double ScaledSquaredDistance(Point3 first, Point3 second, double scale)
+    {
+        double northing = ScaledDifference(second.Northing, first.Northing, scale);
+        double easting = ScaledDifference(second.Easting, first.Easting, scale);
         return northing * northing + easting * easting;
     }
 
-    private static string[] SplitTokens(string value) =>
-        value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    private static double ScaledDifference(double left, double right, double scale) =>
+        (left / scale) - (right / scale);
+
+    private static void ReadValueChunks(
+        XmlReader reader,
+        char[] valueBuffer,
+        LeafTokenCollector tokens)
+    {
+        if (!reader.CanReadValueChunk)
+        {
+            tokens.Append(reader.Value.AsSpan());
+            return;
+        }
+
+        int countRead;
+        while ((countRead = reader.ReadValueChunk(valueBuffer, 0, valueBuffer.Length)) > 0)
+        {
+            tokens.Append(valueBuffer.AsSpan(0, countRead));
+        }
+    }
 
     private static bool TryParseDouble(string? value, out double parsed) =>
         double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed);
@@ -459,7 +507,61 @@ internal static class LandXmlSurfaceParser
     private readonly record struct ElementFrame(string LocalName, string NamespaceUri);
 
     private readonly record struct LeafContent(
-        string Text,
+        IReadOnlyList<string> Tokens,
+        bool InvalidText,
         bool HasChildElement,
         long SameNamespaceSurfaceCount);
+
+    private sealed class LeafTokenCollector
+    {
+        private readonly List<string> tokens = [];
+        private readonly StringBuilder currentToken = new(MaximumScalarTokenLength);
+        private bool tokenStarted;
+
+        internal IReadOnlyList<string> Tokens => tokens;
+
+        internal bool Invalid { get; private set; }
+
+        internal void Append(ReadOnlySpan<char> value)
+        {
+            foreach (char character in value)
+            {
+                if (char.IsWhiteSpace(character))
+                {
+                    CompleteToken();
+                    continue;
+                }
+
+                tokenStarted = true;
+                if (currentToken.Length < MaximumScalarTokenLength)
+                {
+                    currentToken.Append(character);
+                }
+                else
+                {
+                    Invalid = true;
+                }
+            }
+        }
+
+        internal void CompleteToken()
+        {
+            if (!tokenStarted)
+            {
+                return;
+            }
+
+            if (tokens.Count < MaximumLeafTokenCount)
+            {
+                tokens.Add(currentToken.ToString());
+            }
+            else
+            {
+                Invalid = true;
+            }
+
+            currentToken.Clear();
+            tokenStarted = false;
+        }
+    }
 }

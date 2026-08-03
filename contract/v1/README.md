@@ -28,6 +28,13 @@ a maximum 100:1 per-entry compression ratio.
 
 ## Semantic rules
 
+`package_id` uses the canonical hyphenated UUID form. `created_utc` is a valid
+date-time normalized to UTC with a trailing `Z`. Producer name and version are
+nonblank, trimmed, control-character-free values and must not contain rooted or
+relative filesystem paths, path separators, traversal segments, or drive-relative
+syntax. When present, `producer.source_commit` is 7-64 lowercase hexadecimal
+characters.
+
 The validator requires matching manifest and LandXML surface name, point count,
 face count, horizontal EPSG code, and units. Horizontal and vertical manifest
 units are exactly `metre`, `international_foot`, or `us_survey_foot`.
@@ -36,10 +43,17 @@ LandXML horizontal units map `meter` to `metre`, `foot` to
 accepts either foot definition, with the manifest as the authoritative choice.
 Vertical direction is `positive_up`.
 
+LandXML parsing prohibits document type declarations and external resource
+resolution. Every TIN point has one unique positive integer identifier and exactly
+three finite coordinates in northing, easting, elevation order. Every face resolves
+to three existing, distinct point identifiers. A face is invalid when its projected
+horizontal vertices coincide or its absolute 2D cross product is at most `1e-12`
+times its largest squared edge length.
+
 The raw `surface.landxml` SHA-256 must match the manifest. A known vertical
 datum supplies authority, positive code, and name. An unknown datum is valid
-only when declared as unknown; it produces a review warning and must be resolved
-before import.
+only when declared as unknown; it produces a review warning, and elevation
+alignment must be confirmed before use.
 
 ## Versioning
 

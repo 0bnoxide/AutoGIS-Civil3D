@@ -58,6 +58,8 @@ public sealed class BundleArchiveTests
     [InlineData(PackageFault.DirectoryEntry)]
     [InlineData(PackageFault.SymlinkEntry)]
     [InlineData(PackageFault.NonUnixHostSymlink)]
+    [InlineData(PackageFault.DosReparseEntry)]
+    [InlineData(PackageFault.DosDeviceEntry)]
     public void Non_regular_entry_returns_zip007(PackageFault fault)
     {
         string path = TestPackageBuilder.Create(fault);

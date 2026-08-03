@@ -29,6 +29,11 @@ public sealed class BundleValidator
             issues.Add(StreamLimitIssue());
             return BuildReport(issues);
         }
+        catch (BundleEntryDataException exception)
+        {
+            issues.Add(EntryDataIssue(exception));
+            return BuildReport(issues);
+        }
 
         issues.AddRange(manifestResult.Issues);
         if (HasErrors(issues))
@@ -47,6 +52,11 @@ public sealed class BundleValidator
         catch (BundleLimitExceededException)
         {
             issues.Add(StreamLimitIssue());
+            return BuildReport(issues);
+        }
+        catch (BundleEntryDataException exception)
+        {
+            issues.Add(EntryDataIssue(exception));
             return BuildReport(issues);
         }
 
@@ -69,6 +79,11 @@ public sealed class BundleValidator
         catch (BundleLimitExceededException)
         {
             issues.Add(StreamLimitIssue());
+            return BuildReport(issues);
+        }
+        catch (BundleEntryDataException exception)
+        {
+            issues.Add(EntryDataIssue(exception));
             return BuildReport(issues);
         }
 
@@ -170,6 +185,9 @@ public sealed class BundleValidator
         Error(
             IssueCodes.StreamLimitExceeded,
             "A ZIP entry exceeded its runtime streaming limit.");
+
+    private static ValidationIssue EntryDataIssue(BundleEntryDataException exception) =>
+        Error(exception.Code, exception.Message);
 
     private static ValidationIssue Error(string code, string message, string? location = null) =>
         new(code, IssueSeverity.Error, message, location);

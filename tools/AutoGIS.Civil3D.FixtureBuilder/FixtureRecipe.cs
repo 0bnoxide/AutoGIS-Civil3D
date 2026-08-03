@@ -164,6 +164,12 @@ internal static class FixtureCatalog
                 CompressionMethod.Stored,
                 bytes => ZipHeaderMutator.SetUnixMode(bytes, "surface.landxml", 0xA1FF)),
             new(
+                "invalid/dos-reparse-entry.zip",
+                knownManifest,
+                ValidSurface,
+                CompressionMethod.Stored,
+                bytes => ZipHeaderMutator.SetDosAttributes(bytes, "surface.landxml", 0x0400)),
+            new(
                 "invalid/encrypted-entry.zip",
                 knownManifest,
                 ValidSurface,
@@ -219,6 +225,15 @@ internal static class FixtureCatalog
                 knownManifest.Replace(
                     "\"contract_version\":\"1.0\"",
                     "\"contract_version\":\"2.0\"",
+                    StringComparison.Ordinal),
+                ValidSurface,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/manifest-wrong-filename.zip",
+                knownManifest.Replace(
+                    "\"filename\":\"surface.landxml\"",
+                    "\"filename\":\"unexpected.landxml\"",
                     StringComparison.Ordinal),
                 ValidSurface,
                 CompressionMethod.Stored,
@@ -394,8 +409,13 @@ internal static class FixtureCatalog
     private static string RemoveXmlElement(string source, string startTag, string endTag)
     {
         int start = source.IndexOf(startTag, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            throw new InvalidOperationException("The fixture source does not contain the requested XML element.");
+        }
+
         int end = source.IndexOf(endTag, start, StringComparison.Ordinal);
-        if (start < 0 || end < 0)
+        if (end < 0)
         {
             throw new InvalidOperationException("The fixture source does not contain the requested XML element.");
         }

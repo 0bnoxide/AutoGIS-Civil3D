@@ -45,6 +45,20 @@ internal static class TestLandXml
         return new ChunkedNonSeekableReadStream(bytes, maximumReadSize);
     }
 
+    internal static Stream Utf32Stream(
+        string xml,
+        bool bigEndian,
+        int maximumReadSize = 1)
+    {
+        Encoding encoding = new UTF32Encoding(bigEndian, byteOrderMark: true, throwOnInvalidCharacters: true);
+        byte[] preamble = encoding.GetPreamble();
+        byte[] content = encoding.GetBytes(xml);
+        byte[] bytes = new byte[preamble.Length + content.Length];
+        preamble.CopyTo(bytes, 0);
+        content.CopyTo(bytes, preamble.Length);
+        return new ChunkedNonSeekableReadStream(bytes, maximumReadSize);
+    }
+
     private sealed class ChunkedNonSeekableReadStream : Stream
     {
         private readonly MemoryStream inner;

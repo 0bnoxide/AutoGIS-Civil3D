@@ -7,6 +7,7 @@ internal static class ZipHeaderMutator
 {
     private const uint CentralDirectoryHeaderSignature = 0x02014B50;
     private const uint LocalFileHeaderSignature = 0x04034B50;
+    private const ushort MsdosMadeBy = 0x0014;
 
     internal static void SetEncrypted(byte[] archive, string entryName) =>
         MutateEntry(archive, entryName, (centralOffset, localOffset) =>
@@ -34,6 +35,17 @@ internal static class ZipHeaderMutator
             BinaryPrimitives.WriteUInt32LittleEndian(
                 archive.AsSpan(centralOffset + 38),
                 (uint)mode << 16));
+
+    internal static void SetDosAttributes(byte[] archive, string entryName, ushort attributes) =>
+        MutateEntry(archive, entryName, (centralOffset, _) =>
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(
+                archive.AsSpan(centralOffset + 4),
+                MsdosMadeBy);
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                archive.AsSpan(centralOffset + 38),
+                attributes);
+        });
 
     private static void SetFlag(byte[] archive, int offset, ushort flag)
     {

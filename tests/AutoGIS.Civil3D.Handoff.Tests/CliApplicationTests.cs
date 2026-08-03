@@ -133,4 +133,25 @@ public sealed class CliApplicationTests
             TestPackageBuilder.Delete(path);
         }
     }
+
+    [Fact]
+    public void Corrupt_deflated_entry_exits_one_as_invalid_package()
+    {
+        string path = TestPackageBuilder.Create(PackageFault.CorruptDeflatedSurface);
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+
+        try
+        {
+            int exitCode = CliApplication.Run([path], stdout, stderr);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("[ZIP001] Error:", stdout.ToString());
+            Assert.Equal(string.Empty, stderr.ToString());
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
 }

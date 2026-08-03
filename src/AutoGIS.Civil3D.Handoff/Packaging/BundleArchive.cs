@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using AutoGIS.Civil3D.Handoff.Validation;
+using ICSharpCode.SharpZipLib;
 using ICSharpCode.SharpZipLib.Zip;
 
 namespace AutoGIS.Civil3D.Handoff.Packaging;
@@ -15,8 +16,18 @@ internal sealed class BundleArchive : IDisposable
     private const string SurfaceEntryName = "surface.landxml";
     private const int UnixFileTypeMask = 0xf000;
     private const int UnixRegularFileType = 0x8000;
+    private const int MsdosHostSystem = 0;
+    private const int DosNonRegularAttributeMask = 0x0458;
     private const uint LocalFileHeaderSignature = 0x04034b50;
+    private const uint CentralDirectoryHeaderSignature = 0x02014b50;
+    private const uint EndOfCentralDirectorySignature = 0x06054b50;
+    private const uint Zip64EndOfCentralDirectorySignature = 0x06064b50;
+    private const uint Zip64EndOfCentralDirectoryLocatorSignature = 0x07064b50;
     private const int LocalFileHeaderLength = 30;
+    private const int EndOfCentralDirectoryLength = 22;
+    private const int MaximumZipCommentLength = ushort.MaxValue;
+    private const int Zip64EndOfCentralDirectoryLocatorLength = 20;
+    private const int MinimumZip64EndOfCentralDirectoryLength = 56;
     private const ushort DataDescriptorFlag = 0x0008;
 
     private readonly ZipFile zipFile;
@@ -219,13 +230,16 @@ internal sealed class BundleArchive : IDisposable
         StringCodec stringCodec,
         IEnumerable<ZipEntry> entries)
     {
+        List<LocalEntryLayout> layouts = [];
         foreach (ZipEntry entry in entries)
         {
-            ValidateLocalHeader(archiveStream, stringCodec, entry);
+            layouts.Add(ValidateLocalHeader(archiveStream, stringCodec, entry));
         }
+
+        ValidateCompressedSpans(archiveStream, layouts);
     }
 
-    private static void ValidateLocalHeader(
+    private static LocalEntryLayout ValidateLocalHeader(
         FileStream archiveStream,
         StringCodec stringCodec,
         ZipEntry entry)
@@ -271,7 +285,7 @@ internal sealed class BundleArchive : IDisposable
 
         if ((flags & DataDescriptorFlag) != 0)
         {
-            return;
+            return new LocalEntryLayout(entry, entry.Offset, archiveStream.Position, HasDataDescriptor: true);
         }
 
         uint crc = BinaryPrimitives.ReadUInt32LittleEndian(header[14..]);
@@ -283,6 +297,202 @@ internal sealed class BundleArchive : IDisposable
             || !MatchesLocalSize(size, entry.Size))
         {
             throw new ZipException("The ZIP entry local-header size does not match the central directory.");
+        }
+
+        return new LocalEntryLayout(entry, entry.Offset, archiveStream.Position, HasDataDescriptor: false);
+    }
+
+    private static void ValidateCompressedSpans(
+        FileStream archiveStream,
+        IReadOnlyList<LocalEntryLayout> layouts)
+    {
+        long centralDirectoryStart = FindCentralDirectoryStart(archiveStream);
+        LocalEntryLayout[] orderedLayouts = layouts
+            .OrderBy(layout => layout.HeaderOffset)
+            .ToArray();
+
+        for (int index = 0; index < orderedLayouts.Length; index++)
+        {
+            LocalEntryLayout layout = orderedLayouts[index];
+            long boundary = index + 1 < orderedLayouts.Length
+                ? orderedLayouts[index + 1].HeaderOffset
+                : centralDirectoryStart;
+            if (boundary <= layout.DataOffset)
+            {
+                throw new ZipException("The ZIP entry has an invalid physical data span.");
+            }
+
+            long actualCompressedSpan = layout.HasDataDescriptor
+                ? ValidateDataDescriptor(archiveStream, layout, boundary)
+                : boundary - layout.DataOffset;
+            if (actualCompressedSpan != layout.Entry.CompressedSize)
+            {
+                throw new ZipException("The ZIP entry compressed size does not match its physical data span.");
+            }
+        }
+    }
+
+    private static long ValidateDataDescriptor(
+        FileStream archiveStream,
+        LocalEntryLayout layout,
+        long boundary)
+    {
+        bool isZip64 = layout.Entry.LocalHeaderRequiresZip64;
+        int[] descriptorLengths = isZip64 ? [24, 20] : [16, 12];
+        foreach (int descriptorLength in descriptorLengths)
+        {
+            long descriptorOffset = boundary - descriptorLength;
+            long compressedSpan = descriptorOffset - layout.DataOffset;
+            if (compressedSpan < 0)
+            {
+                continue;
+            }
+
+            byte[] descriptor = new byte[descriptorLength];
+            archiveStream.Position = descriptorOffset;
+            ReadExactly(archiveStream, descriptor);
+
+            int valueOffset = descriptorLength is 16 or 24 ? 4 : 0;
+            if (valueOffset != 0 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(descriptor) != 0x08074b50)
+            {
+                continue;
+            }
+
+            uint crc = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(valueOffset));
+            valueOffset += sizeof(uint);
+            ulong compressedSize = isZip64
+                ? BinaryPrimitives.ReadUInt64LittleEndian(descriptor.AsSpan(valueOffset))
+                : BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(valueOffset));
+            valueOffset += isZip64 ? sizeof(ulong) : sizeof(uint);
+            ulong size = isZip64
+                ? BinaryPrimitives.ReadUInt64LittleEndian(descriptor.AsSpan(valueOffset))
+                : BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(valueOffset));
+
+            if (layout.Entry.Crc is >= 0 and <= uint.MaxValue &&
+                crc == (uint)layout.Entry.Crc &&
+                compressedSize == (ulong)layout.Entry.CompressedSize &&
+                size == (ulong)layout.Entry.Size &&
+                compressedSize == (ulong)compressedSpan)
+            {
+                return compressedSpan;
+            }
+        }
+
+        throw new ZipException("The ZIP entry data descriptor does not match its physical data span.");
+    }
+
+    private static long FindCentralDirectoryStart(FileStream archiveStream)
+    {
+        int tailLength = checked((int)Math.Min(
+            archiveStream.Length,
+            EndOfCentralDirectoryLength + (long)MaximumZipCommentLength));
+        if (tailLength < EndOfCentralDirectoryLength)
+        {
+            throw new ZipException("The ZIP end-of-central-directory record is missing.");
+        }
+
+        byte[] tail = new byte[tailLength];
+        long tailOffset = archiveStream.Length - tailLength;
+        archiveStream.Position = tailOffset;
+        ReadExactly(archiveStream, tail);
+
+        for (int index = tail.Length - EndOfCentralDirectoryLength; index >= 0; index--)
+        {
+            ReadOnlySpan<byte> candidate = tail.AsSpan(index);
+            if (BinaryPrimitives.ReadUInt32LittleEndian(candidate) != EndOfCentralDirectorySignature)
+            {
+                continue;
+            }
+
+            ushort commentLength = BinaryPrimitives.ReadUInt16LittleEndian(candidate[20..]);
+            if (index + EndOfCentralDirectoryLength + commentLength != tail.Length)
+            {
+                continue;
+            }
+
+            uint centralDirectoryOffset = BinaryPrimitives.ReadUInt32LittleEndian(candidate[16..]);
+            long result = centralDirectoryOffset == uint.MaxValue
+                ? ReadZip64CentralDirectoryStart(archiveStream, tailOffset + index)
+                : centralDirectoryOffset;
+            ValidateCentralDirectoryStart(archiveStream, result, tailOffset + index);
+            return result;
+        }
+
+        throw new ZipException("The ZIP end-of-central-directory record is invalid.");
+    }
+
+    private static long ReadZip64CentralDirectoryStart(
+        FileStream archiveStream,
+        long endOfCentralDirectoryOffset)
+    {
+        long locatorOffset = endOfCentralDirectoryOffset - Zip64EndOfCentralDirectoryLocatorLength;
+        if (locatorOffset < 0)
+        {
+            throw new ZipException("The ZIP64 end-of-central-directory locator is missing.");
+        }
+
+        Span<byte> locator = stackalloc byte[Zip64EndOfCentralDirectoryLocatorLength];
+        archiveStream.Position = locatorOffset;
+        ReadExactly(archiveStream, locator);
+        if (BinaryPrimitives.ReadUInt32LittleEndian(locator) !=
+            Zip64EndOfCentralDirectoryLocatorSignature)
+        {
+            throw new ZipException("The ZIP64 end-of-central-directory locator is invalid.");
+        }
+
+        ulong recordOffsetValue = BinaryPrimitives.ReadUInt64LittleEndian(locator[8..]);
+        if (recordOffsetValue > long.MaxValue)
+        {
+            throw new ZipException("The ZIP64 end-of-central-directory offset is invalid.");
+        }
+
+        long recordOffset = (long)recordOffsetValue;
+        if (recordOffset < 0 || recordOffset > archiveStream.Length - MinimumZip64EndOfCentralDirectoryLength)
+        {
+            throw new ZipException("The ZIP64 end-of-central-directory record is truncated.");
+        }
+
+        Span<byte> record = stackalloc byte[MinimumZip64EndOfCentralDirectoryLength];
+        archiveStream.Position = recordOffset;
+        ReadExactly(archiveStream, record);
+        if (BinaryPrimitives.ReadUInt32LittleEndian(record) != Zip64EndOfCentralDirectorySignature)
+        {
+            throw new ZipException("The ZIP64 end-of-central-directory record is invalid.");
+        }
+
+        ulong recordSize = BinaryPrimitives.ReadUInt64LittleEndian(record[4..]);
+        if (recordSize > long.MaxValue - 12 || recordOffset + 12 + (long)recordSize != locatorOffset)
+        {
+            throw new ZipException("The ZIP64 end-of-central-directory length is invalid.");
+        }
+
+        ulong centralDirectoryOffset = BinaryPrimitives.ReadUInt64LittleEndian(record[48..]);
+        if (centralDirectoryOffset > long.MaxValue)
+        {
+            throw new ZipException("The ZIP64 central-directory offset is invalid.");
+        }
+
+        return (long)centralDirectoryOffset;
+    }
+
+    private static void ValidateCentralDirectoryStart(
+        FileStream archiveStream,
+        long centralDirectoryStart,
+        long endOfCentralDirectoryOffset)
+    {
+        if (centralDirectoryStart < 0 ||
+            centralDirectoryStart > endOfCentralDirectoryOffset - sizeof(uint))
+        {
+            throw new ZipException("The ZIP central-directory offset is invalid.");
+        }
+
+        Span<byte> signature = stackalloc byte[sizeof(uint)];
+        archiveStream.Position = centralDirectoryStart;
+        ReadExactly(archiveStream, signature);
+        if (BinaryPrimitives.ReadUInt32LittleEndian(signature) != CentralDirectoryHeaderSignature)
+        {
+            throw new ZipException("The ZIP central-directory signature is invalid.");
         }
     }
 
@@ -347,6 +557,12 @@ internal sealed class BundleArchive : IDisposable
             return false;
         }
 
+        if (entry.HostSystem == MsdosHostSystem &&
+            (entry.ExternalFileAttributes & DosNonRegularAttributeMask) != 0)
+        {
+            return false;
+        }
+
         int fileType = (entry.ExternalFileAttributes >> 16) & UnixFileTypeMask;
         if (fileType != 0)
         {
@@ -359,11 +575,42 @@ internal sealed class BundleArchive : IDisposable
     private static bool ExceedsCompressionRatio(ZipEntry entry) =>
         entry.Size > BundleLimits.MaximumCompressionRatio * entry.CompressedSize;
 
-    private Stream OpenEntryStream(ZipEntry entry, long limit) =>
-        new BoundedReadStream(zipFile.GetInputStream(entry), entry.Name, limit);
+    private Stream OpenEntryStream(ZipEntry entry, long limit)
+    {
+        try
+        {
+            return new BoundedReadStream(
+                zipFile.GetInputStream(entry),
+                entry.Name,
+                limit,
+                entry.Size,
+                entry.Crc,
+                entry.CompressedSize);
+        }
+        catch (SharpZipBaseException exception)
+        {
+            throw new BundleEntryDataException(
+                IssueCodes.InvalidArchive,
+                $"The ZIP entry data for {entry.Name} is corrupt.",
+                exception);
+        }
+        catch (EndOfStreamException exception)
+        {
+            throw new BundleEntryDataException(
+                IssueCodes.InvalidArchive,
+                $"The ZIP entry data for {entry.Name} is truncated.",
+                exception);
+        }
+    }
 
     private void ThrowIfDisposed()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
     }
+
+    private sealed record LocalEntryLayout(
+        ZipEntry Entry,
+        long HeaderOffset,
+        long DataOffset,
+        bool HasDataDescriptor);
 }

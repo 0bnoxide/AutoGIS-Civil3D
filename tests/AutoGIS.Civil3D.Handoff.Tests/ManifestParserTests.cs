@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using AutoGIS.Civil3D.Handoff.Manifest;
 using AutoGIS.Civil3D.Handoff.Validation;
 using Xunit;
@@ -28,6 +29,10 @@ public sealed class ManifestParserTests
         ValidationIssue warning = Assert.Single(result.Issues);
         Assert.Equal(IssueCodes.UnknownVerticalDatum, warning.Code);
         Assert.Equal(IssueSeverity.Warning, warning.Severity);
+        Assert.Contains(
+            "confirm elevation alignment before use",
+            warning.Message,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -97,6 +102,25 @@ public sealed class ManifestParserTests
 
         ManifestParseResult result = ManifestParser.Parse(Encoding.UTF8.GetBytes(json));
 
+        Assert.Contains(result.Issues, issue => issue.Code == IssueCodes.ManifestSemanticViolation);
+    }
+
+    [Theory]
+    [InlineData("..\\Users\\alice")]
+    [InlineData("folder/file")]
+    [InlineData("C:relative")]
+    [InlineData(".")]
+    [InlineData("..")]
+    public void Relative_path_shaped_producer_name_fails_semantics(string producerName)
+    {
+        string json = TestManifests.KnownDatum.Replace(
+            "\"AutoGIS\"",
+            JsonSerializer.Serialize(producerName),
+            StringComparison.Ordinal);
+
+        ManifestParseResult result = ManifestParser.Parse(Encoding.UTF8.GetBytes(json));
+
+        Assert.Null(result.Manifest);
         Assert.Contains(result.Issues, issue => issue.Code == IssueCodes.ManifestSemanticViolation);
     }
 

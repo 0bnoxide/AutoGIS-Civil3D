@@ -68,6 +68,29 @@ public sealed class LandXmlSurfaceParserTests
         Assert.Equal(IssueCodes.LandXmlForbiddenDtd, issue.Code);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Utf32_dtd_token_split_across_read_chunks_returns_xml002(bool bigEndian)
+    {
+        string invalid = TestLandXml.Valid
+            .Replace(
+                "encoding=\"utf-8\"",
+                bigEndian ? "encoding=\"utf-32BE\"" : "encoding=\"utf-32LE\"",
+                StringComparison.Ordinal)
+            .Replace(
+                "<LandXML ",
+                "<!DOCTYPE LandXML [<!ENTITY x \"unsafe\">]>\n<LandXML ",
+                StringComparison.Ordinal);
+        using Stream xml = TestLandXml.Utf32Stream(invalid, bigEndian);
+
+        LandXmlParseResult result = LandXmlSurfaceParser.Parse(xml);
+
+        Assert.Null(result.Summary);
+        ValidationIssue issue = Assert.Single(result.Issues);
+        Assert.Equal(IssueCodes.LandXmlForbiddenDtd, issue.Code);
+    }
+
     [Fact]
     public void Forbidden_sequence_stream_detects_dtd_token_split_across_read_chunks()
     {
@@ -318,6 +341,29 @@ public sealed class LandXmlSurfaceParserTests
 
         Assert.Empty(result.Issues);
         Assert.NotNull(result.Summary);
+    }
+
+    [Fact]
+    public void Finite_extreme_collinear_triangle_returns_xml012()
+    {
+        string invalid = TestLandXml.Valid
+            .Replace(">0 0 100</P>", ">-1e308 -1e308 100</P>", StringComparison.Ordinal)
+            .Replace(">0 10 101</P>", ">0 0 101</P>", StringComparison.Ordinal)
+            .Replace(">10 0 102</P>", ">1e308 1e308 102</P>", StringComparison.Ordinal);
+
+        AssertPrimaryCode(invalid, IssueCodes.LandXmlDegenerateFace);
+    }
+
+    [Fact]
+    public void Oversized_point_scalar_returns_xml006_without_buffering_the_leaf()
+    {
+        string oversizedScalar = new string('0', 100_000) + "1";
+        string invalid = TestLandXml.Valid.Replace(
+            ">0 0 100</P>",
+            $">{oversizedScalar} 0 100</P>",
+            StringComparison.Ordinal);
+
+        AssertPrimaryCode(invalid, IssueCodes.LandXmlInvalidPoint);
     }
 
     [Theory]

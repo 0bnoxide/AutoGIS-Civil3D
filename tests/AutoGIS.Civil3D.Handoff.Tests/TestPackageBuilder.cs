@@ -17,6 +17,8 @@ public enum PackageFault
     DirectoryEntry,
     SymlinkEntry,
     NonUnixHostSymlink,
+    DosReparseEntry,
+    DosDeviceEntry,
     EncryptedSurface,
     UnsupportedCompression,
     ManifestTooLarge,
@@ -30,6 +32,11 @@ public enum PackageFault
     LocalHeaderSizeMismatch,
     LocalHeaderMismatchBeforeUnsafeName,
     LegacyEncodedUnexpectedEntry,
+    UnderreportedManifestSize,
+    MatchingBadManifestCrc,
+    OverreportedCompressedSize,
+    CompressionRatioBypass,
+    CorruptDeflatedSurface,
     Malformed
 }
 
@@ -66,6 +73,30 @@ internal static class TestPackageBuilder
             new("handoff.json", "{}"u8.ToArray()),
             new("surface.landxml", "<LandXML/>"u8.ToArray())
         ];
+        CompressionLevel compressionLevel = CompressionLevel.NoCompression;
+
+        if (fault is PackageFault.OverreportedCompressedSize or PackageFault.CompressionRatioBypass)
+        {
+            string ratioSurface = TestLandXml.Valid.Replace(
+                "<LandXML ",
+                $"<!--{new string('A', 2_000_000)}-->\n<LandXML ",
+                StringComparison.Ordinal);
+            entries =
+            [
+                new("handoff.json", Encoding.UTF8.GetBytes(CreateManifest(ratioSurface))),
+                new("surface.landxml", Encoding.UTF8.GetBytes(ratioSurface))
+            ];
+            compressionLevel = CompressionLevel.SmallestSize;
+        }
+        else if (fault == PackageFault.CorruptDeflatedSurface)
+        {
+            entries =
+            [
+                new("handoff.json", Encoding.UTF8.GetBytes(CreateManifest(TestLandXml.Valid))),
+                new("surface.landxml", Encoding.UTF8.GetBytes(TestLandXml.Valid))
+            ];
+            compressionLevel = CompressionLevel.SmallestSize;
+        }
 
         switch (fault)
         {
@@ -90,6 +121,8 @@ internal static class TestPackageBuilder
             case PackageFault.DirectoryEntry:
             case PackageFault.SymlinkEntry:
             case PackageFault.NonUnixHostSymlink:
+            case PackageFault.DosReparseEntry:
+            case PackageFault.DosDeviceEntry:
             case PackageFault.EncryptedSurface:
             case PackageFault.UnsupportedCompression:
             case PackageFault.ManifestTooLarge:
@@ -101,6 +134,11 @@ internal static class TestPackageBuilder
             case PackageFault.LocalHeaderVersionMismatch:
             case PackageFault.LocalHeaderCrcMismatch:
             case PackageFault.LocalHeaderSizeMismatch:
+            case PackageFault.UnderreportedManifestSize:
+            case PackageFault.MatchingBadManifestCrc:
+            case PackageFault.OverreportedCompressedSize:
+            case PackageFault.CompressionRatioBypass:
+            case PackageFault.CorruptDeflatedSurface:
                 break;
             case PackageFault.LocalHeaderMismatchBeforeUnsafeName:
                 entries[1] = new EntrySpec("../surface.landxml", "<LandXML/>"u8.ToArray());
@@ -109,7 +147,7 @@ internal static class TestPackageBuilder
                 throw new ArgumentOutOfRangeException(nameof(fault), fault, null);
         }
 
-        CreateArchive(path, entries);
+        CreateArchive(path, entries, compressionLevel);
         ApplyFault(path, fault);
         return path;
     }
@@ -163,14 +201,17 @@ internal static class TestPackageBuilder
         Directory.Delete(directory, recursive: true);
     }
 
-    private static void CreateArchive(string path, IReadOnlyList<EntrySpec> entries)
+    private static void CreateArchive(
+        string path,
+        IReadOnlyList<EntrySpec> entries,
+        CompressionLevel compressionLevel = CompressionLevel.NoCompression)
     {
         using FileStream file = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         using ZipArchive archive = new(file, ZipArchiveMode.Create, leaveOpen: false, Encoding.UTF8);
 
         foreach (EntrySpec spec in entries)
         {
-            ZipArchiveEntry entry = archive.CreateEntry(spec.Name, CompressionLevel.NoCompression);
+            ZipArchiveEntry entry = archive.CreateEntry(spec.Name, compressionLevel);
             entry.LastWriteTime = new DateTimeOffset(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
             using Stream entryStream = entry.Open();
             entryStream.Write(spec.Contents);
@@ -228,6 +269,12 @@ internal static class TestPackageBuilder
                         bytes.AsSpan(centralHeaderOffset + 38),
                         SymbolicLinkAttributes);
                 });
+                break;
+            case PackageFault.DosReparseEntry:
+                SetDosAttributes(bytes, "surface.landxml", (uint)FileAttributes.ReparsePoint);
+                break;
+            case PackageFault.DosDeviceEntry:
+                SetDosAttributes(bytes, "surface.landxml", (uint)FileAttributes.Device);
                 break;
             case PackageFault.EncryptedSurface:
                 PatchEntry(bytes, "surface.landxml", (centralHeaderOffset, localHeaderOffset) =>
@@ -342,11 +389,75 @@ internal static class TestPackageBuilder
                     ReplaceEntryNames(bytes, centralHeaderOffset, localHeaderOffset, legacyName);
                 });
                 break;
+            case PackageFault.UnderreportedManifestSize:
+                PatchDeclaredSize(bytes, "handoff.json", 1);
+                break;
+            case PackageFault.MatchingBadManifestCrc:
+                PatchEntry(bytes, "handoff.json", (centralHeaderOffset, localHeaderOffset) =>
+                {
+                    uint crc = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(centralHeaderOffset + 16));
+                    uint badCrc = crc ^ 0x00000001;
+                    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(centralHeaderOffset + 16), badCrc);
+                    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(localHeaderOffset + 14), badCrc);
+                });
+                break;
+            case PackageFault.OverreportedCompressedSize:
+                PatchEntry(bytes, "surface.landxml", (centralHeaderOffset, localHeaderOffset) =>
+                {
+                    uint compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(
+                        bytes.AsSpan(centralHeaderOffset + 20));
+                    uint overreportedSize = checked(compressedSize + 32_768);
+                    BinaryPrimitives.WriteUInt32LittleEndian(
+                        bytes.AsSpan(centralHeaderOffset + 20),
+                        overreportedSize);
+                    BinaryPrimitives.WriteUInt32LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 18),
+                        overreportedSize);
+                });
+                break;
+            case PackageFault.CompressionRatioBypass:
+                PatchEntry(bytes, "surface.landxml", (centralHeaderOffset, localHeaderOffset) =>
+                {
+                    uint compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(
+                        bytes.AsSpan(centralHeaderOffset + 20));
+                    uint underreportedSize = checked(compressedSize * 100);
+                    BinaryPrimitives.WriteUInt32LittleEndian(
+                        bytes.AsSpan(centralHeaderOffset + 24),
+                        underreportedSize);
+                    BinaryPrimitives.WriteUInt32LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 22),
+                        underreportedSize);
+                });
+                break;
+            case PackageFault.CorruptDeflatedSurface:
+                PatchEntry(bytes, "surface.landxml", (_, localHeaderOffset) =>
+                {
+                    ushort nameLength = BinaryPrimitives.ReadUInt16LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 26));
+                    ushort extraLength = BinaryPrimitives.ReadUInt16LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 28));
+                    int dataOffset = checked(localHeaderOffset + 30 + nameLength + extraLength);
+                    bytes[dataOffset] = (byte)((bytes[dataOffset] & 0xf8) | 0x07);
+                });
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(fault), fault, null);
         }
 
         File.WriteAllBytes(path, bytes);
+    }
+
+    private static void SetDosAttributes(byte[] bytes, string entryName, uint attributes)
+    {
+        PatchEntry(bytes, entryName, (centralHeaderOffset, _) =>
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(
+                bytes.AsSpan(centralHeaderOffset + 4),
+                MsdosMadeBy);
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(centralHeaderOffset + 38),
+                attributes);
+        });
     }
 
     private static void CopyCentralMetadataToLocalHeader(

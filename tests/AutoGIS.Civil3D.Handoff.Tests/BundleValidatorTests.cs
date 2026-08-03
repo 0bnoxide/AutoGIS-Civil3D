@@ -174,6 +174,63 @@ public sealed class BundleValidatorTests
         }
     }
 
+    [Theory]
+    [InlineData(PackageFault.UnderreportedManifestSize)]
+    [InlineData(PackageFault.MatchingBadManifestCrc)]
+    [InlineData(PackageFault.OverreportedCompressedSize)]
+    public void Inconsistent_entry_data_returns_zip001(PackageFault fault)
+    {
+        string path = TestPackageBuilder.Create(fault);
+        try
+        {
+            ValidationReport report = new BundleValidator().ValidateBundle(path);
+
+            Assert.Equal(ValidationStatus.Invalid, report.Status);
+            Assert.Equal(IssueCodes.InvalidArchive, Assert.Single(report.Issues).Code);
+            Assert.Null(report.Metadata);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Actual_expansion_ratio_cannot_be_bypassed_by_underreported_size_metadata()
+    {
+        string path = TestPackageBuilder.Create(PackageFault.CompressionRatioBypass);
+        try
+        {
+            ValidationReport report = new BundleValidator().ValidateBundle(path);
+
+            Assert.Equal(ValidationStatus.Invalid, report.Status);
+            Assert.Equal(IssueCodes.CompressionRatioExceeded, Assert.Single(report.Issues).Code);
+            Assert.Null(report.Metadata);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Corrupt_deflated_entry_data_returns_zip001()
+    {
+        string path = TestPackageBuilder.Create(PackageFault.CorruptDeflatedSurface);
+        try
+        {
+            ValidationReport report = new BundleValidator().ValidateBundle(path);
+
+            Assert.Equal(ValidationStatus.Invalid, report.Status);
+            Assert.Equal(IssueCodes.InvalidArchive, Assert.Single(report.Issues).Code);
+            Assert.Null(report.Metadata);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
     [Fact]
     public void Manifest_error_stops_before_checksum_and_xml_processing()
     {

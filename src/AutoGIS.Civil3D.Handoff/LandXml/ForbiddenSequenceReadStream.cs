@@ -18,7 +18,9 @@ internal sealed class ForbiddenSequenceReadStream : Stream
     [
         Encoding.ASCII.GetBytes(ForbiddenText),
         Encoding.Unicode.GetBytes(ForbiddenText),
-        Encoding.BigEndianUnicode.GetBytes(ForbiddenText)
+        Encoding.BigEndianUnicode.GetBytes(ForbiddenText),
+        Encoding.UTF32.GetBytes(ForbiddenText),
+        new UTF32Encoding(bigEndian: true, byteOrderMark: false).GetBytes(ForbiddenText)
     ];
 
     private readonly Stream source;

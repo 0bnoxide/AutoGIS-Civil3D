@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Reflection;
 using AutoGIS.Civil3D.FixtureBuilder;
 using AutoGIS.Civil3D.Handoff.Validation;
 using Xunit;
@@ -16,6 +17,7 @@ public sealed class GoldenFixtureConformanceTests
     [InlineData("invalid/unsafe-path.zip", ValidationStatus.Invalid, "ZIP005")]
     [InlineData("invalid/case-collision.zip", ValidationStatus.Invalid, "ZIP006")]
     [InlineData("invalid/symlink-entry.zip", ValidationStatus.Invalid, "ZIP007")]
+    [InlineData("invalid/dos-reparse-entry.zip", ValidationStatus.Invalid, "ZIP007")]
     [InlineData("invalid/encrypted-entry.zip", ValidationStatus.Invalid, "ZIP008")]
     [InlineData("invalid/unsupported-compression.zip", ValidationStatus.Invalid, "ZIP009")]
     [InlineData("invalid/manifest-too-large.zip", ValidationStatus.Invalid, "ZIP010")]
@@ -25,6 +27,7 @@ public sealed class GoldenFixtureConformanceTests
     [InlineData("invalid/manifest-missing-field.zip", ValidationStatus.Invalid, "MAN002")]
     [InlineData("invalid/manifest-unknown-property.zip", ValidationStatus.Invalid, "MAN002")]
     [InlineData("invalid/manifest-version.zip", ValidationStatus.Invalid, "MAN002")]
+    [InlineData("invalid/manifest-wrong-filename.zip", ValidationStatus.Invalid, "MAN002")]
     [InlineData("invalid/manifest-timestamp.zip", ValidationStatus.Invalid, "MAN003")]
     [InlineData("invalid/checksum.zip", ValidationStatus.Invalid, "INT001")]
     [InlineData("invalid/xml-malformed.zip", ValidationStatus.Invalid, "XML001")]
@@ -169,6 +172,19 @@ public sealed class GoldenFixtureConformanceTests
                 Directory.Delete(testRoot, recursive: true);
             }
         }
+    }
+
+    [Fact]
+    public void Remove_xml_element_reports_a_missing_opening_tag_descriptively()
+    {
+        MethodInfo method = typeof(FixtureCatalog).GetMethod(
+            "RemoveXmlElement",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        TargetInvocationException exception = Assert.Throws<TargetInvocationException>(
+            () => method.Invoke(null, ["<Root />", "<Missing>", "</Missing>"]));
+
+        Assert.IsType<InvalidOperationException>(exception.InnerException);
     }
 
     private static string[] RelativeZipPaths(string root) =>
