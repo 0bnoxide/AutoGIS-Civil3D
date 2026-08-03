@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-02
 
-**Status:** Approved in design discussion; awaiting written-spec and pull-request review
+**Status:** Review discussion consensus reached on PR #1; amendment awaiting exact-head re-review and owner acceptance — Phase 0 implementation is gated on a separately approved plan
 
 **Scope:** Repository governance, phased roadmap structure, Claude/Codex collaboration, local-first `main` protection, shared agent tooling, and bootstrap publication
 
@@ -10,7 +10,7 @@
 
 `AutoGIS-Civil3D` is beginning as a contract-first .NET repository that will later host an Autodesk/Civil 3D adapter. The existing LandXML design correctly keeps the handoff contract and validator independent of ArcGIS and Autodesk assemblies. Before implementing that roadmap, the repository needs a durable structure that lets Claude and Codex work together without direct writes to `main`, branch collisions, duplicated policy, or ephemeral decisions.
 
-The repository currently has local commits for the approved LandXML design, its implementation plan, and the `.worktrees/` ignore rule. GitHub is still empty, while the diagnostic ZIPs, audit, and repaired source remain untracked. Those artifacts are evidence and must not be silently staged, moved, or deleted during the governance bootstrap.
+At initial drafting, the repository had local commits for the approved LandXML design, its implementation plan, and the `.worktrees/` ignore rule, while GitHub was empty. The diagnostic ZIPs, audit, and repaired source remain untracked. Those artifacts are evidence and must not be silently staged, moved, or deleted during the governance bootstrap.
 
 AutoGIS already demonstrates useful patterns: isolated worktrees, a read-only primary branch, shared claims, cross-harness hooks, repo-local skills, ADRs, phase gates, independent PR review, graph-assisted navigation, and a low-volume Mnemoverse channel. This design selectively ports those behaviors behind neutral interfaces. It does not copy AutoGIS-specific ArcPy, envmon, site, path, or historical machinery.
 
@@ -41,7 +41,7 @@ This design does not:
 
 The repository will use a **selective neutral port** of the proven AutoGIS collaboration behavior.
 
-The coordination implementation is one deep module under `tools/agent-coordination/`. Its small interface hides registry locking, Git-common-directory resolution, claim expiry, branch detection, hook payload parsing, worktree ownership, and diagnostics. Claude, Codex, and Git hooks are adapters at this seam; they do not reimplement policy.
+The coordination implementation is one deep module under `tools/agent-coordination/`. Its small interface hides registry locking, Git-common-directory resolution, claim conflicts, branch detection, hook payload parsing, worktree ownership, and diagnostics. Claude, Codex, and Git hooks are adapters at this seam; they do not reimplement policy.
 
 Repository guidance is neutral and canonical under `docs/agent-guide.md`. `AGENTS.md` and `CLAUDE.md` are thin harness entrypoints. Pinned skill and agent sources are maintained under `tools/agent-assets/` and deterministically rendered into the harness discovery paths.
 
@@ -73,6 +73,7 @@ CLAUDE.md
 
 docs/
   architecture.md
+  architecture-handoff.md
   roadmap.md
   agent-guide.md
   collaboration.md
@@ -107,6 +108,7 @@ tools/
   skills/
 .codex/
   agents/
+  hooks.json
   hooks/
 .githooks/
 .github/workflows/
@@ -116,6 +118,8 @@ tools/
 ```
 
 Generated skill copies remain checked in so a fresh or remote checkout has the required instructions. Machine credentials, absolute executable paths, generated graph databases, live claims, worktrees, caches, SDK binaries, and secrets are never committed.
+
+`docs/architecture.md` is the repository-level dependency and module map. It links to `docs/architecture-handoff.md`, which remains the LandXML contract-seam deep-dive and owns its detailed producer, contract, validator, and future-adapter rules without duplicating them in the overview.
 
 ## Two-level roadmap
 
@@ -177,8 +181,8 @@ The reviewer inspects the exact pushed head independently, publishes findings on
    ```
 
 5. Claim the branch, worktree, and intended file globs.
-6. Run `resync` after entering or changing worktrees so old branch/worktree claims are released and the new context is claimed.
-7. Work and validate only within the approved, claimed scope. Heartbeats keep live claims current.
+6. Run `check` after entering the worktree and before each write-producing operation to confirm the current branch, worktree, and target remain inside the approved claim.
+7. Work and validate only within the approved, claimed scope. Phase 0 claims remain live until explicitly released.
 8. Use Mnemoverse only for a necessary pre-artifact status, blocker, or decision pointer.
 9. Push and open a draft PR. GitHub becomes authoritative for status and review.
 10. After merge or abandonment, release claims and remove the worktree through a validated cleanup procedure.
@@ -194,12 +198,12 @@ init
 doctor
 status
 claim
-resync
-heartbeat
 release
 check
 sync-main
 ```
+
+That is the complete Phase 0 command interface. The blocking core is stateless `main` protection, the worktree lifecycle, explicit-release claims with integrity controls, `init` and `doctor`, deterministic agent-asset sync, and the focused proofs described below. Deferred hardening includes temporal claims, `resync`, a general coded break-glass flow, broad corruption-repair automation, exhaustive adapter parity, and broader CI matrices. Deferred commands are not stubbed.
 
 The initial implementation is Python 3 using the standard library only. It is repository-development tooling, not a product dependency; no .NET project or shipped Civil 3D bundle references it. PowerShell, Claude, Codex, and Git integrations remain thin adapters over the same Python rule engine.
 
@@ -207,7 +211,7 @@ Its implementation owns:
 
 - Repository and Git-common-directory discovery.
 - Branch, worktree, and target-file resolution.
-- Claim conflict and expiry rules.
+- Claim conflict and stale-suspect rules.
 - Atomic registry writes and an OS-level writer lock.
 - Claude, Codex, patch, shell, and Git-hook payload normalization.
 - Human-readable diagnostics and machine-stable exit behavior.
@@ -216,7 +220,9 @@ Its implementation owns:
 
 `.agent-state/claims.json` lives at the primary working tree resolved through `git rev-parse --git-common-dir`, not inside each linked worktree. Every worktree therefore observes the same registry.
 
-Claims record session identity, harness, process and host where available, claim kind, branch, worktree, file glob, start time, heartbeat time, and expiry. Registry mutation takes a local lock, rereads after locking, writes a temporary sibling, and atomically replaces the registry. A contested live resource is rejected. Expired claims are ignored and reaped.
+Claims record session identity, harness, process and host where available, claim kind, branch, worktree, file glob, and start time. Registry mutation takes a local lock, rereads after locking, writes a temporary sibling, and atomically replaces the registry. A contested live resource is rejected. Phase 0 never expires or reaps a claim automatically: `doctor` marks old claims as stale-suspect, and only an owner-authorized `release --force <id> --reason ...` can clear an orphaned claim.
+
+Heartbeat, time-to-live, automatic expiry and reaping, and `resync` automation join the interface only after a demonstrated lifecycle failure shows that explicit release plus `doctor` is insufficient.
 
 ### Main protection
 
@@ -234,10 +240,10 @@ The stateless main rule is evaluated independently of dynamic claims. A registry
 
 - Read operations remain available.
 - Corrupt or inaccessible claim state blocks new claims and claim-dependent writes with a clear repair instruction.
-- `doctor` detects missing or untrusted hooks, wrong worktree placement, stale claims, skill drift, branch/upstream errors, and unavailable optional tools.
+- `doctor` detects missing hook files, wrong worktree placement, stale-suspect claims, skill drift, branch/upstream errors, and unavailable optional tools. It reports Codex project-hook trust as unverified until the documented `/hooks` inspection and harmless activation probe succeed; it never infers trust from file presence alone.
 - Repair preserves damaged state before explicit registry recreation; it never silently deletes it.
 - A missing optional graph or Mnemoverse integration is advisory and provides a fallback.
-- A documented break-glass override is user-invoked, requires a reason, is scoped to the current local session, and appends a local audit entry. It is recovery tooling, not a normal workflow.
+- Phase 0 has no general coded break-glass override or private audit log. Its only coded orphan-claim recovery is the owner-authorized `release --force` behavior described above. Hook or corrupt-registry recovery requires explicit owner authorization and is manual: it preserves or quarantines damaged claim state instead of deleting it, applies only the narrow required repair, restores and verifies protection immediately, and records the reason on the PR or in a Mnemoverse `[DECISION]` pointer. A general coded flow is added only after repeated use demonstrates need.
 
 The coordination module is a guardrail rather than a security boundary. Repository permissions and GitHub remain the external authority.
 
@@ -262,7 +268,9 @@ The initial skill set is:
 
 AutoGIS-specific ArcPy, envmon, site, and run skills are excluded. Ponytail governs code and review work; it never replaces understanding, testing, security, or explicit roadmap gates.
 
-Initial agent behavior contracts are `graph-codebase-navigator` and `pr-reviewer`. Shared behavior lives under `tools/agent-assets/agents/`, while Claude Markdown and Codex TOML definitions are thin adapters validated for parity. Contract-specific or Autodesk-specific agents are deferred until repeated work demonstrates leverage.
+Initial agent behavior contracts are `graph-codebase-navigator` and `pr-reviewer`. Shared behavior lives under `tools/agent-assets/agents/`, while Claude Markdown and Codex TOML definitions are thin adapters validated for equivalent blocking behavior. Contract-specific or Autodesk-specific agents are deferred until repeated work demonstrates leverage.
+
+Codex discovers repository skills under `.agents/skills/` and project-scoped custom-agent TOML files under `.codex/agents/`. Codex project hooks are discovered from `.codex/hooks.json` or inline `[hooks]` tables in `.codex/config.toml`; Phase 0 chooses checked-in `.codex/hooks.json` as its canonical project source. `.codex/hooks/` contains only referenced thin handler scripts and is not itself a discovery surface. Project `.codex/` layers and non-managed hook definitions require trust. Phase 0 verifies discovery with a harmless activation probe and documents `/hooks` inspection in `docs/agent-tools.md`.
 
 Agent-asset updates are pinned and reviewed. No script silently pulls an upstream `latest` into a working branch.
 
@@ -294,16 +302,15 @@ Mnemoverse is also registered at user scope for each local harness. No project `
 
 ## CI and verification
 
-Ordinary CI runs on Windows without Autodesk, Civil 3D, or ArcGIS installations. Phase 0 adds:
+Ordinary CI runs on Windows without Autodesk, Civil 3D, or ArcGIS installations. Phase 0 blocks on the smallest set that proves its guarantees:
 
-- Coordination registry and decision-matrix unit tests.
-- Disposable-repository integration tests for worktrees and Git hooks.
-- Claude and Codex payload-adapter parity tests.
-- Main edit, commit, and direct-push denial probes.
-- Contested claim, resync, heartbeat, stale-expiry, and corrupt-registry probes.
-- Skill and agent-asset sync checks.
-- Configuration, documentation-link, and ADR-index checks.
-- Agent-tool preflight tests that verify fallbacks without requiring credentials.
+- Registry decision-matrix unit tests for claim, conflict, and release behavior.
+- Main edit-denial probes through both Claude and Codex adapters.
+- One compact disposable-repository path that installs the Git hooks and proves actual commit and direct-push denial on `main`.
+- One focused contested-claim path in the disposable repository that proves the writer lock, atomic replacement, and conflict rejection work together.
+- Skill and agent-asset sync `--check`.
+
+Broader worktree integration, exhaustive payload-adapter parity, temporal-claim, corrupt-registry-repair, documentation-link, ADR-index, and agent-tool preflight matrices are added to blocking CI only after demonstrated need. Until the document set stabilizes, documentation and tool-availability checks remain visible but non-blocking.
 
 As product phases land, CI also performs .NET 8 locked restore, Release build, tests, formatting, contract-fixture conformance, and diagnostic static validation. Live Civil 3D qualification is a separate evidence gate and is never inferred from ordinary CI.
 
@@ -335,11 +342,11 @@ Phase 0 is complete only when:
 - The two-level roadmap includes explicit authorization and gate-change rules.
 - ADR-0001 and ADR-0002 record the contract and collaboration decisions.
 - Claude and Codex load equivalent pinned skills and agent behavior.
-- Coordination registry, worktree, hook, and failure-mode tests pass.
+- Registry decision-matrix tests and the focused contested-claim integration path pass.
 - Live probes deny edits on `main`, commits on `main`, and direct pushes to remote `main`.
-- The normal claim, resync, heartbeat, release, and safe cleanup lifecycle passes in a disposable repository.
+- The normal claim, conflict, and explicit-release flow passes; `doctor` reports stale-suspect claims without expiring them, and cleanup remains a documented validation-first procedure.
 - Graph and Mnemoverse preflights work or produce documented fallbacks.
-- Windows CI validates collaboration tooling and the current .NET solution state.
+- Windows CI passes the focused main-protection, registry, and agent-asset checks without Autodesk dependencies.
 - Claude independently reviews the exact final foundation head.
 - Diagnostic evidence is preserved and only organized in its authorized implementation slice.
 
@@ -378,4 +385,4 @@ Rejected because advisory branch naming and worktree prose do not prevent the di
 
 ## Review and implementation gate
 
-This specification is the complete approved architecture proposal. It does not authorize Phase 0 implementation until the written spec is reviewed on its PR, Claude's input is resolved, and the owner approves the final head. After approval, a separate detailed implementation plan will decompose Phase 0 into small, independently verifiable commits.
+This specification is the complete architecture proposal produced by review discussion consensus. It does not authorize Phase 0 implementation until the amended spec is re-reviewed on its exact PR head and the owner accepts that head. After acceptance, a separate detailed implementation plan will decompose Phase 0 into small, independently verifiable commits.
