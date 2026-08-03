@@ -309,7 +309,7 @@ As product phases land, CI also performs .NET 8 locked restore, Release build, t
 
 ## Bootstrap and publication sequence
 
-At written-spec time, local `main` contains four commits and the GitHub repository is empty. The branch `feat/landxml-handoff-contract` points at the same head, and a separate linked worktree already uses it. Those refs and files are preserved.
+At initial written-spec time, local `main` contained four commits and the GitHub repository was empty. Commit `2e12135` is the immutable bootstrap seed. A separate linked worktree uses `feat/landxml-handoff-contract` for LandXML handoff foundation work descended from that seed. Its branch, commits, worktree, and files are preserved and remain outside this PR.
 
 The bootstrap sequence is:
 
