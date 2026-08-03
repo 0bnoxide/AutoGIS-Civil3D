@@ -283,6 +283,13 @@ internal sealed class BundleArchive : IDisposable
             throw new ZipException("The ZIP entry local-header name does not match the central directory.");
         }
 
+        if (extraLength > archiveStream.Length - archiveStream.Position)
+        {
+            throw new ZipException("The ZIP entry local extra field is truncated.");
+        }
+
+        archiveStream.Position += extraLength;
+
         if ((flags & DataDescriptorFlag) != 0)
         {
             return new LocalEntryLayout(entry, entry.Offset, archiveStream.Position, HasDataDescriptor: true);

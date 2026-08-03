@@ -119,7 +119,7 @@ internal sealed class BoundedReadStream : Stream
             throw CorruptEntry(exception);
         }
 
-        RecordRead(buffer.AsSpan(offset, countRead));
+        RecordRead(buffer.AsSpan(offset, countRead), count);
         return countRead;
     }
 
@@ -136,7 +136,7 @@ internal sealed class BoundedReadStream : Stream
             throw CorruptEntry(exception);
         }
 
-        RecordRead(buffer[..countRead]);
+        RecordRead(buffer[..countRead], buffer.Length);
         return countRead;
     }
 
@@ -158,7 +158,7 @@ internal sealed class BoundedReadStream : Stream
             throw CorruptEntry(exception);
         }
 
-        RecordRead(buffer.AsSpan(offset, countRead));
+        RecordRead(buffer.AsSpan(offset, countRead), count);
         return countRead;
     }
 
@@ -178,7 +178,7 @@ internal sealed class BoundedReadStream : Stream
             throw CorruptEntry(exception);
         }
 
-        RecordRead(buffer.Span[..countRead]);
+        RecordRead(buffer.Span[..countRead], buffer.Length);
         return countRead;
     }
 
@@ -214,11 +214,15 @@ internal sealed class BoundedReadStream : Stream
         base.Dispose(disposing);
     }
 
-    private void RecordRead(ReadOnlySpan<byte> bytes)
+    private void RecordRead(ReadOnlySpan<byte> bytes, int requestedCount)
     {
         if (bytes.Length == 0)
         {
-            ValidateIntegrity();
+            if (requestedCount > 0)
+            {
+                ValidateIntegrity();
+            }
+
             return;
         }
 

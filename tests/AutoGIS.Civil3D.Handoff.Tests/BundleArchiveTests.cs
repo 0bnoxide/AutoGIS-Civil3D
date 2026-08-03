@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text;
 using AutoGIS.Civil3D.Handoff.Packaging;
 using Xunit;
@@ -21,6 +22,41 @@ public sealed class BundleArchiveTests
             using Stream surfaceStream = archive.OpenSurfaceStream();
             using StreamReader reader = new(surfaceStream, Encoding.UTF8);
             Assert.Equal("<LandXML/>", reader.ReadToEnd());
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Valid_archive_with_a_standard_local_extra_field_is_accepted()
+    {
+        string path = TestPackageBuilder.Create(PackageFault.ValidLocalExtraField);
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            Assert.Equal(0x04034b50U, BinaryPrimitives.ReadUInt32LittleEndian(bytes));
+            ushort nameLength = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(26));
+            ushort extraLength = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(28));
+            int extraOffset = 30 + nameLength;
+            Assert.True(extraLength >= 9);
+            Assert.Equal(0x5455, BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(extraOffset)));
+
+            using (System.IO.Compression.ZipArchive standardArchive =
+                System.IO.Compression.ZipFile.OpenRead(path))
+            {
+                Assert.Equal(2, standardArchive.Entries.Count);
+                using Stream standardManifest = standardArchive.GetEntry("handoff.json")!.Open();
+                using StreamReader standardReader = new(standardManifest, Encoding.UTF8);
+                Assert.Equal("{}", standardReader.ReadToEnd());
+            }
+
+            BundleOpenResult result = BundleArchive.Open(path);
+
+            Assert.Empty(result.Issues);
+            using BundleArchive archive = Assert.IsType<BundleArchive>(result.Archive);
+            Assert.Equal("{}", Encoding.UTF8.GetString(archive.ReadManifestBytes()));
         }
         finally
         {
@@ -225,6 +261,44 @@ public sealed class BundleArchiveTests
 
         Assert.Equal("surface.landxml", exception.EntryName);
         Assert.Equal(4, exception.Limit);
+    }
+
+    [Fact]
+    public void Caller_requested_zero_length_synchronous_reads_do_not_finalize_integrity()
+    {
+        using BoundedReadStream stream = new(
+            new MemoryStream([1, 2, 3]),
+            "handoff.json",
+            3,
+            3,
+            0x55bc801dL,
+            3);
+        byte[] buffer = new byte[3];
+
+        Assert.Equal(0, stream.Read(buffer, 0, 0));
+        Assert.Equal(0, stream.Read(Span<byte>.Empty));
+        Assert.Equal(3, stream.Read(buffer.AsSpan()));
+        Assert.Equal([1, 2, 3], buffer);
+        Assert.Equal(0, stream.Read(buffer.AsSpan(0, 1)));
+    }
+
+    [Fact]
+    public async Task Caller_requested_zero_length_asynchronous_reads_do_not_finalize_integrity()
+    {
+        using BoundedReadStream stream = new(
+            new MemoryStream([1, 2, 3]),
+            "handoff.json",
+            3,
+            3,
+            0x55bc801dL,
+            3);
+        byte[] buffer = new byte[3];
+
+        Assert.Equal(0, await stream.ReadAsync(buffer, 0, 0, CancellationToken.None));
+        Assert.Equal(0, await stream.ReadAsync(Memory<byte>.Empty));
+        Assert.Equal(3, await stream.ReadAsync(buffer, 0, buffer.Length, CancellationToken.None));
+        Assert.Equal([1, 2, 3], buffer);
+        Assert.Equal(0, await stream.ReadAsync(buffer.AsMemory(0, 1)));
     }
 
     [Fact]

@@ -3,12 +3,14 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using AutoGIS.Civil3D.Handoff.Manifest;
+using ICSharpCode.SharpZipLib.Zip;
 
 namespace AutoGIS.Civil3D.Handoff.Tests;
 
 public enum PackageFault
 {
     Valid,
+    ValidLocalExtraField,
     MissingSurface,
     ExtraEntry,
     UnsafePath,
@@ -65,6 +67,12 @@ internal static class TestPackageBuilder
         if (fault == PackageFault.Malformed)
         {
             File.WriteAllBytes(path, Encoding.UTF8.GetBytes("not a ZIP archive"));
+            return path;
+        }
+
+        if (fault == PackageFault.ValidLocalExtraField)
+        {
+            CreateArchiveWithLocalExtraField(path);
             return path;
         }
 
@@ -234,6 +242,42 @@ internal static class TestPackageBuilder
         }
 
         File.WriteAllBytes(path, bytes);
+    }
+
+    private static void CreateArchiveWithLocalExtraField(string path)
+    {
+        ReadOnlySpan<byte> extendedTimestampExtraField =
+        [
+            0x55, 0x54,
+            0x05, 0x00,
+            0x01,
+            0x00, 0x00, 0x00, 0x00
+        ];
+        EntrySpec[] entries =
+        [
+            new("handoff.json", "{}"u8.ToArray()),
+            new("surface.landxml", "<LandXML/>"u8.ToArray())
+        ];
+
+        using FileStream file = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        using ZipOutputStream archive = new(file);
+        archive.UseZip64 = UseZip64.Off;
+        archive.SetLevel(0);
+        foreach (EntrySpec spec in entries)
+        {
+            ZipEntry entry = new(spec.Name)
+            {
+                DateTime = new DateTime(2026, 8, 2, 0, 0, 0, DateTimeKind.Utc),
+                ExtraData = spec.Name == "handoff.json"
+                    ? extendedTimestampExtraField.ToArray()
+                    : []
+            };
+            archive.PutNextEntry(entry);
+            archive.Write(spec.Contents);
+            archive.CloseEntry();
+        }
+
+        archive.Finish();
     }
 
     private static void ApplyFault(string path, PackageFault fault)
