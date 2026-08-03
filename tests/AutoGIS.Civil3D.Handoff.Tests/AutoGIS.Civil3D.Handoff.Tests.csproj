@@ -11,5 +11,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/AutoGIS.Civil3D.Handoff/AutoGIS.Civil3D.Handoff.csproj" />
     <ProjectReference Include="../../src/AutoGIS.Civil3D.Handoff.Cli/AutoGIS.Civil3D.Handoff.Cli.csproj" />
+    <ProjectReference Include="../../tools/AutoGIS.Civil3D.FixtureBuilder/AutoGIS.Civil3D.FixtureBuilder.csproj" />
   </ItemGroup>
 </Project>

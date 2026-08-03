@@ -128,6 +128,12 @@
           "AutoGIS.Civil3D.Handoff": "[1.0.0, )"
         }
       },
+      "autogis.civil3d.fixturebuilder": {
+        "type": "Project",
+        "dependencies": {
+          "SharpZipLib": "[1.4.2, )"
+        }
+      },
       "autogis.civil3d.handoff": {
         "type": "Project",
         "dependencies": {
