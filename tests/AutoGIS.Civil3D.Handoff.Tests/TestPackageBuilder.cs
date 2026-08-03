@@ -10,6 +10,7 @@ public enum PackageFault
     MissingSurface,
     ExtraEntry,
     UnsafePath,
+    WindowsRootedPath,
     CaseCollision,
     DirectoryEntry,
     SymlinkEntry,
@@ -66,6 +67,9 @@ internal static class TestPackageBuilder
                 break;
             case PackageFault.UnsafePath:
                 entries[1] = new EntrySpec("../surface.landxml", "<LandXML/>"u8.ToArray());
+                break;
+            case PackageFault.WindowsRootedPath:
+                entries[1] = new EntrySpec("C:/surface.landxml", "<LandXML/>"u8.ToArray());
                 break;
             case PackageFault.CaseCollision:
                 entries.Add(new EntrySpec("HANDOFF.JSON", "{}"u8.ToArray()));
@@ -129,7 +133,7 @@ internal static class TestPackageBuilder
     private static void ApplyFault(string path, PackageFault fault)
     {
         if (fault is PackageFault.Valid or PackageFault.MissingSurface or PackageFault.ExtraEntry
-            or PackageFault.UnsafePath or PackageFault.CaseCollision)
+            or PackageFault.UnsafePath or PackageFault.WindowsRootedPath or PackageFault.CaseCollision)
         {
             return;
         }

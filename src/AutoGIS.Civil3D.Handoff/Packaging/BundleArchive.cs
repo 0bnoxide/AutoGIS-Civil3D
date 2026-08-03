@@ -190,9 +190,7 @@ internal sealed class BundleArchive : IDisposable
     private static bool IsSafeEntryName(string? name)
     {
         if (string.IsNullOrEmpty(name)
-            || Path.IsPathRooted(name)
-            || name.StartsWith('\\')
-            || name.StartsWith('/'))
+            || IsRootedZipName(name))
         {
             return false;
         }
@@ -204,6 +202,14 @@ internal sealed class BundleArchive : IDisposable
 
         return !name.Split('/').Any(segment => segment is "." or "..");
     }
+
+    private static bool IsRootedZipName(string name) =>
+        name.StartsWith('\\')
+        || name.StartsWith('/')
+        || (name.Length >= 2 && name[1] == ':' && IsAsciiLetter(name[0]));
+
+    private static bool IsAsciiLetter(char value) =>
+        (value is >= 'A' and <= 'Z') || (value is >= 'a' and <= 'z');
 
     private static bool IsExpectedEntryName(string name) =>
         string.Equals(name, ManifestEntryName, StringComparison.Ordinal)

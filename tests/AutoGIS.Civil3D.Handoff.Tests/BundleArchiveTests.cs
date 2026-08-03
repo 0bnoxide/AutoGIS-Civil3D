@@ -32,6 +32,7 @@ public sealed class BundleArchiveTests
     [InlineData(PackageFault.MissingSurface, "ZIP003")]
     [InlineData(PackageFault.ExtraEntry, "ZIP004")]
     [InlineData(PackageFault.UnsafePath, "ZIP005")]
+    [InlineData(PackageFault.WindowsRootedPath, "ZIP005")]
     [InlineData(PackageFault.CaseCollision, "ZIP006")]
     [InlineData(PackageFault.EncryptedSurface, "ZIP008")]
     [InlineData(PackageFault.UnsupportedCompression, "ZIP009")]
