@@ -57,6 +57,7 @@ public sealed class BundleArchiveTests
     [Theory]
     [InlineData(PackageFault.DirectoryEntry)]
     [InlineData(PackageFault.SymlinkEntry)]
+    [InlineData(PackageFault.NonUnixHostSymlink)]
     public void Non_regular_entry_returns_zip007(PackageFault fault)
     {
         string path = TestPackageBuilder.Create(fault);
@@ -64,6 +65,7 @@ public sealed class BundleArchiveTests
         {
             BundleOpenResult result = BundleArchive.Open(path);
 
+            result.Archive?.Dispose();
             Assert.Null(result.Archive);
             Assert.Equal("ZIP007", Assert.Single(result.Issues).Code);
         }
@@ -119,6 +121,47 @@ public sealed class BundleArchiveTests
         {
             BundleOpenResult result = BundleArchive.Open(path);
 
+            result.Archive?.Dispose();
+            Assert.Null(result.Archive);
+            Assert.Equal("ZIP001", Assert.Single(result.Issues).Code);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(PackageFault.LocalHeaderFlagsMismatch)]
+    [InlineData(PackageFault.LocalHeaderCompressionMismatch)]
+    [InlineData(PackageFault.LocalHeaderNameMismatch)]
+    [InlineData(PackageFault.LocalHeaderSizeMismatch)]
+    public void Central_and_local_header_mismatch_returns_zip001(PackageFault fault)
+    {
+        string path = TestPackageBuilder.Create(fault);
+        try
+        {
+            BundleOpenResult result = BundleArchive.Open(path);
+
+            result.Archive?.Dispose();
+            Assert.Null(result.Archive);
+            Assert.Equal("ZIP001", Assert.Single(result.Issues).Code);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Local_header_mismatch_precedes_unsafe_entry_name()
+    {
+        string path = TestPackageBuilder.Create(PackageFault.LocalHeaderMismatchBeforeUnsafeName);
+        try
+        {
+            BundleOpenResult result = BundleArchive.Open(path);
+
+            result.Archive?.Dispose();
             Assert.Null(result.Archive);
             Assert.Equal("ZIP001", Assert.Single(result.Issues).Code);
         }
@@ -163,6 +206,36 @@ public sealed class BundleArchiveTests
     }
 
     [Fact]
+    public void Bounded_stream_caps_oversized_synchronous_first_read_and_faults_retries()
+    {
+        using RecordingMemoryStream source = new([1, 2, 3, 4, 5, 6, 7]);
+        using BoundedReadStream stream = new(source, "surface.landxml", 4);
+
+        Assert.Throws<BundleLimitExceededException>(() => stream.Read(new byte[12], 0, 12));
+        Assert.Equal(5, source.MaximumSynchronousRequest);
+        int readAttempts = source.SynchronousReadAttempts;
+
+        Assert.Throws<BundleLimitExceededException>(() => stream.Read(new byte[1], 0, 1));
+        Assert.Equal(readAttempts, source.SynchronousReadAttempts);
+    }
+
+    [Fact]
+    public async Task Bounded_stream_caps_oversized_asynchronous_first_read_and_faults_retries()
+    {
+        using RecordingMemoryStream source = new([1, 2, 3, 4, 5, 6, 7]);
+        using BoundedReadStream stream = new(source, "surface.landxml", 4);
+
+        await Assert.ThrowsAsync<BundleLimitExceededException>(
+            async () => await stream.ReadAsync(new byte[12].AsMemory()));
+        Assert.Equal(5, source.MaximumAsynchronousRequest);
+        int readAttempts = source.AsynchronousReadAttempts;
+
+        await Assert.ThrowsAsync<BundleLimitExceededException>(
+            async () => await stream.ReadAsync(new byte[1].AsMemory()));
+        Assert.Equal(readAttempts, source.AsynchronousReadAttempts);
+    }
+
+    [Fact]
     public void Bounded_stream_delegates_seek_state_and_rejects_writes()
     {
         using BoundedReadStream stream = new(
@@ -176,5 +249,37 @@ public sealed class BundleArchiveTests
         Assert.Equal(2, stream.Seek(2, SeekOrigin.Begin));
         Assert.Equal(2, stream.Position);
         Assert.Throws<NotSupportedException>(() => stream.Write([4], 0, 1));
+    }
+
+    private sealed class RecordingMemoryStream : MemoryStream
+    {
+        internal RecordingMemoryStream(byte[] buffer)
+            : base(buffer, writable: false)
+        {
+        }
+
+        internal int SynchronousReadAttempts { get; private set; }
+
+        internal int MaximumSynchronousRequest { get; private set; }
+
+        internal int AsynchronousReadAttempts { get; private set; }
+
+        internal int MaximumAsynchronousRequest { get; private set; }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            SynchronousReadAttempts++;
+            MaximumSynchronousRequest = Math.Max(MaximumSynchronousRequest, count);
+            return base.Read(buffer, offset, count);
+        }
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            AsynchronousReadAttempts++;
+            MaximumAsynchronousRequest = Math.Max(MaximumAsynchronousRequest, buffer.Length);
+            return base.ReadAsync(buffer, cancellationToken);
+        }
     }
 }

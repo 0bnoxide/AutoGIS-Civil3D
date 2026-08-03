@@ -20,6 +20,7 @@ internal sealed class BoundedReadStream : Stream
     private readonly string entryName;
     private readonly long limit;
     private long bytesRead;
+    private bool limitExceeded;
 
     internal BoundedReadStream(Stream source, string entryName, long limit)
     {
@@ -56,14 +57,16 @@ internal sealed class BoundedReadStream : Stream
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-        int countRead = source.Read(buffer, offset, count);
+        ThrowIfLimitExceeded();
+        int countRead = source.Read(buffer, offset, CapReadCount(count));
         RecordRead(countRead);
         return countRead;
     }
 
     public override int Read(Span<byte> buffer)
     {
-        int countRead = source.Read(buffer);
+        ThrowIfLimitExceeded();
+        int countRead = source.Read(buffer[..CapReadCount(buffer.Length)]);
         RecordRead(countRead);
         return countRead;
     }
@@ -74,7 +77,9 @@ internal sealed class BoundedReadStream : Stream
         int count,
         CancellationToken cancellationToken)
     {
-        int countRead = await source.ReadAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
+        ThrowIfLimitExceeded();
+        int countRead = await source.ReadAsync(buffer, offset, CapReadCount(count), cancellationToken)
+            .ConfigureAwait(false);
         RecordRead(countRead);
         return countRead;
     }
@@ -83,7 +88,9 @@ internal sealed class BoundedReadStream : Stream
         Memory<byte> buffer,
         CancellationToken cancellationToken = default)
     {
-        int countRead = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+        ThrowIfLimitExceeded();
+        int countRead = await source.ReadAsync(buffer[..CapReadCount(buffer.Length)], cancellationToken)
+            .ConfigureAwait(false);
         RecordRead(countRead);
         return countRead;
     }
@@ -129,9 +136,26 @@ internal sealed class BoundedReadStream : Stream
 
         if (bytesRead > limit - countRead)
         {
+            bytesRead = limit;
+            limitExceeded = true;
             throw new BundleLimitExceededException(entryName, limit);
         }
 
         bytesRead += countRead;
+    }
+
+    private int CapReadCount(int requestedCount)
+    {
+        long remaining = limit - bytesRead;
+        long maximumCount = remaining == long.MaxValue ? long.MaxValue : remaining + 1;
+        return (int)Math.Min((long)requestedCount, maximumCount);
+    }
+
+    private void ThrowIfLimitExceeded()
+    {
+        if (limitExceeded)
+        {
+            throw new BundleLimitExceededException(entryName, limit);
+        }
     }
 }

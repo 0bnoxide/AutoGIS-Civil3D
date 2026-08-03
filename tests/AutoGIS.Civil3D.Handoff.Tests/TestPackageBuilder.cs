@@ -14,11 +14,17 @@ public enum PackageFault
     CaseCollision,
     DirectoryEntry,
     SymlinkEntry,
+    NonUnixHostSymlink,
     EncryptedSurface,
     UnsupportedCompression,
     ManifestTooLarge,
     SurfaceTooLarge,
     CompressionRatioExceeded,
+    LocalHeaderFlagsMismatch,
+    LocalHeaderCompressionMismatch,
+    LocalHeaderNameMismatch,
+    LocalHeaderSizeMismatch,
+    LocalHeaderMismatchBeforeUnsafeName,
     Malformed
 }
 
@@ -27,6 +33,7 @@ internal static class TestPackageBuilder
     private const uint CentralDirectoryHeaderSignature = 0x02014b50;
     private const uint LocalFileHeaderSignature = 0x04034b50;
     private const ushort UnixMadeBy = 0x0314;
+    private const ushort MsdosMadeBy = 0x0014;
     private const uint RegularFileAttributes = 0x81a40000;
     private const uint DirectoryAttributes = 0x41ed0000;
     private const uint SymbolicLinkAttributes = 0xa1ff0000;
@@ -76,11 +83,19 @@ internal static class TestPackageBuilder
                 break;
             case PackageFault.DirectoryEntry:
             case PackageFault.SymlinkEntry:
+            case PackageFault.NonUnixHostSymlink:
             case PackageFault.EncryptedSurface:
             case PackageFault.UnsupportedCompression:
             case PackageFault.ManifestTooLarge:
             case PackageFault.SurfaceTooLarge:
             case PackageFault.CompressionRatioExceeded:
+            case PackageFault.LocalHeaderFlagsMismatch:
+            case PackageFault.LocalHeaderCompressionMismatch:
+            case PackageFault.LocalHeaderNameMismatch:
+            case PackageFault.LocalHeaderSizeMismatch:
+                break;
+            case PackageFault.LocalHeaderMismatchBeforeUnsafeName:
+                entries[1] = new EntrySpec("../surface.landxml", "<LandXML/>"u8.ToArray());
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(fault), fault, null);
@@ -153,6 +168,17 @@ internal static class TestPackageBuilder
                         bytes.AsSpan(centralHeaderOffset + 38),
                         SymbolicLinkAttributes));
                 break;
+            case PackageFault.NonUnixHostSymlink:
+                PatchEntry(bytes, "surface.landxml", (centralHeaderOffset, _) =>
+                {
+                    BinaryPrimitives.WriteUInt16LittleEndian(
+                        bytes.AsSpan(centralHeaderOffset + 4),
+                        MsdosMadeBy);
+                    BinaryPrimitives.WriteUInt32LittleEndian(
+                        bytes.AsSpan(centralHeaderOffset + 38),
+                        SymbolicLinkAttributes);
+                });
+                break;
             case PackageFault.EncryptedSurface:
                 PatchEntry(bytes, "surface.landxml", (centralHeaderOffset, localHeaderOffset) =>
                 {
@@ -179,6 +205,65 @@ internal static class TestPackageBuilder
                 break;
             case PackageFault.CompressionRatioExceeded:
                 PatchCompressionRatio(bytes, "surface.landxml");
+                break;
+            case PackageFault.LocalHeaderFlagsMismatch:
+                PatchEntry(bytes, "surface.landxml", (_, localHeaderOffset) =>
+                {
+                    ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 6));
+                    BinaryPrimitives.WriteUInt16LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 6),
+                        (ushort)(flags ^ 0x0001));
+                });
+                break;
+            case PackageFault.LocalHeaderCompressionMismatch:
+                PatchEntry(bytes, "surface.landxml", (_, localHeaderOffset) =>
+                    BinaryPrimitives.WriteUInt16LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 8),
+                        BZip2CompressionMethod));
+                break;
+            case PackageFault.LocalHeaderNameMismatch:
+                PatchEntry(bytes, "surface.landxml", (_, localHeaderOffset) =>
+                {
+                    byte[] replacement = "syrface.landxml"u8.ToArray();
+                    ushort nameLength = BinaryPrimitives.ReadUInt16LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 26));
+                    if (replacement.Length != nameLength)
+                    {
+                        throw new InvalidDataException("The replacement local entry name must preserve its length.");
+                    }
+
+                    replacement.CopyTo(bytes, localHeaderOffset + 30);
+                });
+                break;
+            case PackageFault.LocalHeaderSizeMismatch:
+                PatchEntry(bytes, "surface.landxml", (centralHeaderOffset, localHeaderOffset) =>
+                {
+                    ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(
+                        bytes.AsSpan(centralHeaderOffset + 8));
+                    flags = (ushort)(flags & ~0x0008);
+                    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(centralHeaderOffset + 8), flags);
+                    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(localHeaderOffset + 6), flags);
+
+                    uint crc = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(centralHeaderOffset + 16));
+                    uint compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(centralHeaderOffset + 20));
+                    uint uncompressedSize = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(centralHeaderOffset + 24));
+                    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(localHeaderOffset + 14), crc);
+                    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(localHeaderOffset + 18), compressedSize);
+                    BinaryPrimitives.WriteUInt32LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 22),
+                        checked(uncompressedSize + 1));
+                });
+                break;
+            case PackageFault.LocalHeaderMismatchBeforeUnsafeName:
+                PatchEntry(bytes, "../surface.landxml", (_, localHeaderOffset) =>
+                {
+                    ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 6));
+                    BinaryPrimitives.WriteUInt16LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 6),
+                        (ushort)(flags ^ 0x0001));
+                });
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(fault), fault, null);

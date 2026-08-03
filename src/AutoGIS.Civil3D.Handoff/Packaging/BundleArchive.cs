@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Text;
 using AutoGIS.Civil3D.Handoff.Validation;
 using ICSharpCode.SharpZipLib.Zip;
 
@@ -13,52 +15,69 @@ internal sealed class BundleArchive : IDisposable
     private const string SurfaceEntryName = "surface.landxml";
     private const int UnixFileTypeMask = 0xf000;
     private const int UnixRegularFileType = 0x8000;
+    private const uint LocalFileHeaderSignature = 0x04034b50;
+    private const int LocalFileHeaderLength = 30;
+    private const ushort DataDescriptorFlag = 0x0008;
 
     private readonly ZipFile zipFile;
+    private readonly FileStream archiveStream;
     private readonly ZipEntry manifestEntry;
     private readonly ZipEntry surfaceEntry;
     private bool disposed;
 
-    private BundleArchive(ZipFile zipFile, ZipEntry manifestEntry, ZipEntry surfaceEntry)
+    private BundleArchive(
+        ZipFile zipFile,
+        FileStream archiveStream,
+        ZipEntry manifestEntry,
+        ZipEntry surfaceEntry)
     {
         this.zipFile = zipFile;
+        this.archiveStream = archiveStream;
         this.manifestEntry = manifestEntry;
         this.surfaceEntry = surfaceEntry;
     }
 
     internal static BundleOpenResult Open(string path)
     {
+        FileStream? archiveStream = null;
         ZipFile? zipFile = null;
         try
         {
-            zipFile = new ZipFile(path);
+            archiveStream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            zipFile = new ZipFile(archiveStream, leaveOpen: true);
             List<ZipEntry> entries = [];
             foreach (ZipEntry entry in zipFile)
             {
                 entries.Add(entry);
             }
 
+            PreflightLocalHeaders(archiveStream, entries);
+
             ValidationIssue? issue = ValidateEntries(entries);
             if (issue is not null)
             {
                 zipFile.Close();
+                archiveStream.Dispose();
                 return Invalid(issue);
             }
 
             ZipEntry manifestEntry = FindEntry(entries, ManifestEntryName);
             ZipEntry surfaceEntry = FindEntry(entries, SurfaceEntryName);
-            BundleArchive archive = new(zipFile, manifestEntry, surfaceEntry);
+            BundleArchive archive = new(zipFile, archiveStream, manifestEntry, surfaceEntry);
             zipFile = null;
+            archiveStream = null;
             return new BundleOpenResult(archive, Array.Empty<ValidationIssue>());
         }
         catch (ZipException)
         {
             zipFile?.Close();
+            archiveStream?.Dispose();
             return Invalid(IssueCodes.InvalidArchive, "The ZIP archive cannot be read.");
         }
         catch
         {
             zipFile?.Close();
+            archiveStream?.Dispose();
             throw;
         }
     }
@@ -85,8 +104,15 @@ internal sealed class BundleArchive : IDisposable
             return;
         }
 
-        zipFile.Close();
-        disposed = true;
+        try
+        {
+            zipFile.Close();
+        }
+        finally
+        {
+            archiveStream.Dispose();
+            disposed = true;
+        }
     }
 
     private static BundleOpenResult Invalid(ValidationIssue issue) =>
@@ -187,6 +213,87 @@ internal sealed class BundleArchive : IDisposable
     private static ValidationIssue Error(string code, string message) =>
         new(code, IssueSeverity.Error, message);
 
+    private static void PreflightLocalHeaders(FileStream archiveStream, IEnumerable<ZipEntry> entries)
+    {
+        foreach (ZipEntry entry in entries)
+        {
+            ValidateLocalHeader(archiveStream, entry);
+        }
+    }
+
+    private static void ValidateLocalHeader(FileStream archiveStream, ZipEntry entry)
+    {
+        if (entry.Offset < 0 || entry.Offset > archiveStream.Length - LocalFileHeaderLength)
+        {
+            throw new ZipException("The ZIP entry has an invalid local-header offset.");
+        }
+
+        archiveStream.Position = entry.Offset;
+        Span<byte> header = stackalloc byte[LocalFileHeaderLength];
+        ReadExactly(archiveStream, header);
+
+        if (BinaryPrimitives.ReadUInt32LittleEndian(header) != LocalFileHeaderSignature)
+        {
+            throw new ZipException("The ZIP entry local-header signature is invalid.");
+        }
+
+        ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(header[6..]);
+        ushort compressionMethod = BinaryPrimitives.ReadUInt16LittleEndian(header[8..]);
+        if (flags != (ushort)entry.Flags || compressionMethod != (ushort)entry.CompressionMethod)
+        {
+            throw new ZipException("The ZIP entry local header does not match the central directory.");
+        }
+
+        ushort nameLength = BinaryPrimitives.ReadUInt16LittleEndian(header[26..]);
+        ushort extraLength = BinaryPrimitives.ReadUInt16LittleEndian(header[28..]);
+        byte[] expectedName = Encoding.UTF8.GetBytes(entry.Name);
+        if (nameLength != expectedName.Length
+            || archiveStream.Position > archiveStream.Length - nameLength - extraLength)
+        {
+            throw new ZipException("The ZIP entry local-header name is invalid.");
+        }
+
+        byte[] localName = new byte[nameLength];
+        ReadExactly(archiveStream, localName);
+        if (!localName.AsSpan().SequenceEqual(expectedName))
+        {
+            throw new ZipException("The ZIP entry local-header name does not match the central directory.");
+        }
+
+        if ((flags & DataDescriptorFlag) != 0)
+        {
+            return;
+        }
+
+        uint compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(header[18..]);
+        uint size = BinaryPrimitives.ReadUInt32LittleEndian(header[22..]);
+        if (!MatchesLocalSize(compressedSize, entry.CompressedSize)
+            || !MatchesLocalSize(size, entry.Size))
+        {
+            throw new ZipException("The ZIP entry local-header size does not match the central directory.");
+        }
+    }
+
+    private static bool MatchesLocalSize(uint localSize, long centralSize) =>
+        centralSize is >= 0 and <= uint.MaxValue
+            ? localSize == (uint)centralSize
+            : localSize == uint.MaxValue;
+
+    private static void ReadExactly(Stream stream, Span<byte> buffer)
+    {
+        int offset = 0;
+        while (offset < buffer.Length)
+        {
+            int countRead = stream.Read(buffer[offset..]);
+            if (countRead == 0)
+            {
+                throw new ZipException("The ZIP local header is truncated.");
+            }
+
+            offset += countRead;
+        }
+    }
+
     private static bool IsSafeEntryName(string? name)
     {
         if (string.IsNullOrEmpty(name)
@@ -228,9 +335,9 @@ internal sealed class BundleArchive : IDisposable
             return false;
         }
 
-        if (entry.HostSystem == (int)HostSystemID.Unix)
+        int fileType = (entry.ExternalFileAttributes >> 16) & UnixFileTypeMask;
+        if (fileType != 0)
         {
-            int fileType = (entry.ExternalFileAttributes >> 16) & UnixFileTypeMask;
             return fileType == UnixRegularFileType;
         }
 
