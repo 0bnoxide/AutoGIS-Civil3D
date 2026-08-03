@@ -222,7 +222,7 @@ Its implementation owns:
 
 Claims record session identity, harness, process and host where available, claim kind, branch, worktree, file glob, and start time. Registry mutation takes a local lock, rereads after locking, writes a temporary sibling, and atomically replaces the registry. A contested live resource is rejected. Phase 0 never expires or reaps a claim automatically: `doctor` marks old claims as stale-suspect, and only an owner-authorized `release --force <id> --reason ...` can clear an orphaned claim.
 
-Heartbeat, time-to-live, automatic expiry and reaping, and `resync` automation join the interface only after a demonstrated lifecycle failure shows that explicit release plus `doctor` is insufficient.
+Heartbeat, time-to-live, automatic expiry and reaping, and `resync` automation join the interface only after a demonstrated lifecycle failure shows that explicit release plus `doctor` is insufficient. Any future temporal-claim design must not release or ignore a claim solely because a heartbeat was missed or a TTL elapsed; takeover requires explicit release or positive owner-liveness confirmation plus a recorded takeover handshake.
 
 ### Main protection
 
@@ -305,12 +305,14 @@ Mnemoverse is also registered at user scope for each local harness. No project `
 Ordinary CI runs on Windows without Autodesk, Civil 3D, or ArcGIS installations. Phase 0 blocks on the smallest set that proves its guarantees:
 
 - Registry decision-matrix unit tests for claim, conflict, and release behavior.
-- Main edit-denial probes through both Claude and Codex adapters.
+- Synthetic main-targeting payload denial through both Claude and Codex adapters.
 - One compact disposable-repository path that installs the Git hooks and proves actual commit and direct-push denial on `main`.
 - One focused contested-claim path in the disposable repository that proves the writer lock, atomic replacement, and conflict rejection work together.
 - Skill and agent-asset sync `--check`.
 
 Broader worktree integration, exhaustive payload-adapter parity, temporal-claim, corrupt-registry-repair, documentation-link, ADR-index, and agent-tool preflight matrices are added to blocking CI only after demonstrated need. Until the document set stabilizes, documentation and tool-availability checks remain visible but non-blocking.
+
+CI proves policy and adapter behavior, but it cannot prove that either harness actually discovers and invokes its project hook before an edit. Phase 0 completion therefore also requires a harness-interception smoke test outside CI: each real harness loads the checked-in project configuration and attempts a harmless sentinel edit targeting `main` in a disposable repository. The probe passes only when the harness denies the action before filesystem mutation. Its evidence is recorded on the Phase 0 PR, includes Codex `/hooks` trust inspection, and is repeated after any hook-configuration change. The real primary worktree is never used as the mutation target for this probe.
 
 As product phases land, CI also performs .NET 8 locked restore, Release build, tests, formatting, contract-fixture conformance, and diagnostic static validation. Live Civil 3D qualification is a separate evidence gate and is never inferred from ordinary CI.
 
@@ -343,7 +345,8 @@ Phase 0 is complete only when:
 - ADR-0001 and ADR-0002 record the contract and collaboration decisions.
 - Claude and Codex load equivalent pinned skills and agent behavior.
 - Registry decision-matrix tests and the focused contested-claim integration path pass.
-- Live probes deny edits on `main`, commits on `main`, and direct pushes to remote `main`.
+- Blocking CI proves synthetic main-targeting payload denial through both adapters and real Git-hook denial of commits and direct pushes to remote `main` in a disposable repository.
+- Each real harness passes the separately recorded interception smoke test, including Codex project-hook trust activation, before Phase 0 is accepted and after hook-configuration changes.
 - The normal claim, conflict, and explicit-release flow passes; `doctor` reports stale-suspect claims without expiring them, and cleanup remains a documented validation-first procedure.
 - Graph and Mnemoverse preflights work or produce documented fallbacks.
 - Windows CI passes the focused main-protection, registry, and agent-asset checks without Autodesk dependencies.
