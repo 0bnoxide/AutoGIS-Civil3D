@@ -110,7 +110,7 @@ The limits are library policy constants in version 1. Changing them is a deliber
   "producer": {
     "name": "AutoGIS",
     "version": "1.0.0",
-    "source_commit": "optional-revision"
+    "source_commit": "0123456789abcdef"
   },
   "surface": {
     "filename": "surface.landxml",
@@ -146,19 +146,22 @@ Rules not fully expressible in JSON Schema are normative semantic rules in the v
 - `contract_version` is exactly `1.0`.
 - `package_id` is an RFC 4122 UUID string.
 - `created_utc` is an ISO 8601 timestamp normalized to UTC with a trailing `Z`.
-- Producer name and version are required. `source_commit` is optional. Producer data must not contain usernames or absolute machine paths.
+- Producer name and version are required, trimmed, control-character-free strings of at most 100 and 64 characters respectively. `source_commit` is optional and, when present, contains 7-64 lowercase hexadecimal characters. These bounded fields are not general-purpose notes and cannot carry paths, usernames, or workstation metadata.
 - `surface.filename` is exactly `surface.landxml`.
 - `surface.sha256` is the lowercase SHA-256 digest of the raw uncompressed `surface.landxml` bytes.
 - Version 1 supports LandXML 1.2 only.
 - Surface name is nonempty after trimming; point and face counts are positive integers.
-- Horizontal CRS kind is exactly `projected`, authority is exactly `EPSG`, and code is a positive integer. The same declaration must appear in the LandXML metadata.
-- Horizontal and vertical units are one of `metre`, `international_foot`, or `us_survey_foot` and must agree with the LandXML metadata.
+- Horizontal CRS kind is exactly `projected`, authority is exactly `EPSG`, and code is a positive integer. The EPSG code must equal `CoordinateSystem/@epsgCode` in LandXML. The pure v1 validator checks this explicit declaration and consistency; authoritative EPSG registry resolution remains a producer and future Civil 3D adapter responsibility.
+- Horizontal and vertical units are one of `metre`, `international_foot`, or `us_survey_foot`. LandXML horizontal units map `meter` to `metre`, `foot` to `international_foot`, and `USSurveyFoot` to `us_survey_foot` and must match exactly.
+- LandXML `elevationUnit="meter"` must pair with manifest vertical unit `metre`. LandXML `elevationUnit="feet"` confirms only the foot family and may pair with `international_foot` or `us_survey_foot`; the manifest is the authoritative declaration of which foot definition applies.
 - Vertical direction is exactly `positive_up`.
 
 Vertical datum uses one of two shapes:
 
-- `known`: authority, positive integer code, and nonempty name are required and must agree with LandXML metadata.
-- `unknown`: authority and code are prohibited; an optional nonempty note may explain the uncertainty. The package is structurally valid but receives a human-review warning. LandXML must not assert a conflicting known datum.
+- `known`: authority, positive integer code, and nonempty name are required.
+- `unknown`: authority and code are prohibited; an optional nonempty note may explain the uncertainty. The package is structurally valid but receives a human-review warning.
+
+LandXML 1.2 files produced by the current AutoGIS path do not encode vertical direction or a machine-readable vertical-datum identifier. Those two values are therefore authoritative manifest assertions in version 1, not XML cross-checks. A later producer or adapter may independently verify them against ArcGIS or Autodesk CRS metadata without changing the package shape.
 
 The manifest deliberately carries no source dataset path, Windows username, workstation name, or customer identifier.
 
@@ -167,7 +170,7 @@ The manifest deliberately carries no source dataset path, Windows username, work
 `AutoGIS.Civil3D.Handoff` is a deep module with a small public entry point conceptually equivalent to:
 
 ```text
-ValidateBundle(path, optional policy) -> ValidationReport
+ValidateBundle(path) -> ValidationReport
 ```
 
 Callers receive a report rather than needing to understand ZIP entries, JSON Schema, XML namespaces, hashes, or triangle topology. `ValidationReport` contains:
@@ -200,17 +203,17 @@ Validation is deterministic, read-only, and stops expensive downstream work when
 4. Compare the calculated digest with the manifest before accepting XML semantics.
 5. Parse LandXML with DTD processing prohibited and external resource resolution disabled.
 6. Enforce exactly one LandXML 1.2 `Surface` with one TIN definition, points, and faces.
-7. Validate every point has a unique identifier and exactly three finite numeric coordinates.
+7. Validate every point has a unique identifier and exactly three finite numeric coordinates in the LandXML 1.2 default order: northing, easting, elevation.
 8. Validate every face has exactly three distinct point references and every reference resolves.
 9. Reject triangles with coincident vertices or zero/near-zero projected horizontal area. Near-zero means the absolute 2D cross product is at most `1e-12` times the largest squared edge length.
-10. Cross-check surface name, LandXML version, point count, face count, EPSG declaration, units, vertical direction, and vertical-datum declaration against the manifest.
+10. Cross-check surface name, LandXML version, point count, face count, EPSG declaration, horizontal unit, and vertical-unit family against the manifest. Enforce vertical direction and vertical-datum rules from the manifest itself.
 11. Return an ordered report. Errors determine `Invalid`; no errors plus one or more warnings determine `ValidWithWarnings`; otherwise the result is `Valid`.
 
 Unknown vertical datum emits a prominent warning explaining that elevation alignment must be confirmed before use. The validator does not transform or guess the datum.
 
 ## CLI behavior
 
-The CLI is a thin renderer over the library. It accepts one ZIP path and produces a concise text report. Machine-readable JSON rendering may be included only as a direct representation of `ValidationReport`; it must not implement separate validation logic.
+The version-1 CLI is a thin text renderer over the library. It accepts exactly one ZIP path and produces a concise text report. Machine-readable CLI output is deferred; in-process consumers use the structured `ValidationReport` directly.
 
 Exit codes are stable:
 
@@ -238,7 +241,7 @@ Each invalid fixture changes one condition from a valid baseline and asserts one
 - Bad checksum and wrong filename.
 - Malformed XML, forbidden DTD, wrong LandXML version, no surface, and multiple surfaces.
 - Duplicate point IDs, nonfinite coordinates, unresolved face references, repeated vertices, and degenerate triangles.
-- Surface name, point count, face count, EPSG, unit, direction, and vertical-datum mismatches.
+- Surface name, point count, face count, EPSG, and unit mismatches, plus invalid vertical-direction and vertical-datum manifest declarations.
 
 ## Test strategy
 
