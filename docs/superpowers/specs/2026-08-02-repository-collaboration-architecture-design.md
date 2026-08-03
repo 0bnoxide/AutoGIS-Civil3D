@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-02
 
-**Status:** Review discussion consensus reached on PR #1; amendment awaiting exact-head re-review and owner acceptance — Phase 0 implementation is gated on a separately approved plan
+**Status:** Accepted by owner on PR #1 (2026-08-02) — Phase 0 implementation is gated on a separately approved plan
 
 **Scope:** Repository governance, phased roadmap structure, Claude/Codex collaboration, local-first `main` protection, shared agent tooling, and bootstrap publication
 
