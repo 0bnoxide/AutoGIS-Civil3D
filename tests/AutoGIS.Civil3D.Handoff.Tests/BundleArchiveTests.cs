@@ -135,6 +135,8 @@ public sealed class BundleArchiveTests
     [InlineData(PackageFault.LocalHeaderFlagsMismatch)]
     [InlineData(PackageFault.LocalHeaderCompressionMismatch)]
     [InlineData(PackageFault.LocalHeaderNameMismatch)]
+    [InlineData(PackageFault.LocalHeaderVersionMismatch)]
+    [InlineData(PackageFault.LocalHeaderCrcMismatch)]
     [InlineData(PackageFault.LocalHeaderSizeMismatch)]
     public void Central_and_local_header_mismatch_returns_zip001(PackageFault fault)
     {
@@ -146,6 +148,24 @@ public sealed class BundleArchiveTests
             result.Archive?.Dispose();
             Assert.Null(result.Archive);
             Assert.Equal("ZIP001", Assert.Single(result.Issues).Code);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Legacy_encoded_unexpected_entry_returns_zip004()
+    {
+        string path = TestPackageBuilder.Create(PackageFault.LegacyEncodedUnexpectedEntry);
+        try
+        {
+            BundleOpenResult result = BundleArchive.Open(path);
+
+            result.Archive?.Dispose();
+            Assert.Null(result.Archive);
+            Assert.Equal("ZIP004", Assert.Single(result.Issues).Code);
         }
         finally
         {

@@ -23,8 +23,11 @@ public enum PackageFault
     LocalHeaderFlagsMismatch,
     LocalHeaderCompressionMismatch,
     LocalHeaderNameMismatch,
+    LocalHeaderVersionMismatch,
+    LocalHeaderCrcMismatch,
     LocalHeaderSizeMismatch,
     LocalHeaderMismatchBeforeUnsafeName,
+    LegacyEncodedUnexpectedEntry,
     Malformed
 }
 
@@ -70,6 +73,7 @@ internal static class TestPackageBuilder
                 entries.RemoveAt(1);
                 break;
             case PackageFault.ExtraEntry:
+            case PackageFault.LegacyEncodedUnexpectedEntry:
                 entries.Add(new EntrySpec("unexpected.txt", "unexpected"u8.ToArray()));
                 break;
             case PackageFault.UnsafePath:
@@ -92,6 +96,8 @@ internal static class TestPackageBuilder
             case PackageFault.LocalHeaderFlagsMismatch:
             case PackageFault.LocalHeaderCompressionMismatch:
             case PackageFault.LocalHeaderNameMismatch:
+            case PackageFault.LocalHeaderVersionMismatch:
+            case PackageFault.LocalHeaderCrcMismatch:
             case PackageFault.LocalHeaderSizeMismatch:
                 break;
             case PackageFault.LocalHeaderMismatchBeforeUnsafeName:
@@ -236,20 +242,32 @@ internal static class TestPackageBuilder
                     replacement.CopyTo(bytes, localHeaderOffset + 30);
                 });
                 break;
+            case PackageFault.LocalHeaderVersionMismatch:
+                PatchEntry(bytes, "surface.landxml", (centralHeaderOffset, localHeaderOffset) =>
+                {
+                    ushort version = BinaryPrimitives.ReadUInt16LittleEndian(
+                        bytes.AsSpan(centralHeaderOffset + 6));
+                    BinaryPrimitives.WriteUInt16LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 4),
+                        checked((ushort)(version + 1)));
+                });
+                break;
+            case PackageFault.LocalHeaderCrcMismatch:
+                PatchEntry(bytes, "surface.landxml", (centralHeaderOffset, localHeaderOffset) =>
+                {
+                    CopyCentralMetadataToLocalHeader(bytes, centralHeaderOffset, localHeaderOffset);
+                    uint crc = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(localHeaderOffset + 14));
+                    BinaryPrimitives.WriteUInt32LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 14),
+                        crc ^ 0x00000001);
+                });
+                break;
             case PackageFault.LocalHeaderSizeMismatch:
                 PatchEntry(bytes, "surface.landxml", (centralHeaderOffset, localHeaderOffset) =>
                 {
-                    ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(
-                        bytes.AsSpan(centralHeaderOffset + 8));
-                    flags = (ushort)(flags & ~0x0008);
-                    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(centralHeaderOffset + 8), flags);
-                    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(localHeaderOffset + 6), flags);
-
-                    uint crc = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(centralHeaderOffset + 16));
-                    uint compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(centralHeaderOffset + 20));
-                    uint uncompressedSize = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(centralHeaderOffset + 24));
-                    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(localHeaderOffset + 14), crc);
-                    BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(localHeaderOffset + 18), compressedSize);
+                    CopyCentralMetadataToLocalHeader(bytes, centralHeaderOffset, localHeaderOffset);
+                    uint uncompressedSize = BinaryPrimitives.ReadUInt32LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 22));
                     BinaryPrimitives.WriteUInt32LittleEndian(
                         bytes.AsSpan(localHeaderOffset + 22),
                         checked(uncompressedSize + 1));
@@ -265,11 +283,44 @@ internal static class TestPackageBuilder
                         (ushort)(flags ^ 0x0001));
                 });
                 break;
+            case PackageFault.LegacyEncodedUnexpectedEntry:
+                PatchEntry(bytes, "unexpected.txt", (centralHeaderOffset, localHeaderOffset) =>
+                {
+                    ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(
+                        bytes.AsSpan(centralHeaderOffset + 8));
+                    flags = (ushort)(flags & ~0x0800);
+                    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(centralHeaderOffset + 8), flags);
+                    BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(localHeaderOffset + 6), flags);
+
+                    byte[] legacyName = new byte[14];
+                    "legacy-entry-"u8.CopyTo(legacyName);
+                    legacyName[^1] = 0x82;
+                    ReplaceEntryNames(bytes, centralHeaderOffset, localHeaderOffset, legacyName);
+                });
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(fault), fault, null);
         }
 
         File.WriteAllBytes(path, bytes);
+    }
+
+    private static void CopyCentralMetadataToLocalHeader(
+        byte[] bytes,
+        int centralHeaderOffset,
+        int localHeaderOffset)
+    {
+        ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(centralHeaderOffset + 8));
+        flags = (ushort)(flags & ~0x0008);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(centralHeaderOffset + 8), flags);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(localHeaderOffset + 6), flags);
+
+        uint crc = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(centralHeaderOffset + 16));
+        uint compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(centralHeaderOffset + 20));
+        uint uncompressedSize = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(centralHeaderOffset + 24));
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(localHeaderOffset + 14), crc);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(localHeaderOffset + 18), compressedSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(localHeaderOffset + 22), uncompressedSize);
     }
 
     private static void PatchDeclaredSize(byte[] bytes, string entryName, uint uncompressedSize)
@@ -306,6 +357,25 @@ internal static class TestPackageBuilder
     {
         ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset));
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(offset), (ushort)(flags | 1));
+    }
+
+    private static void ReplaceEntryNames(
+        byte[] bytes,
+        int centralHeaderOffset,
+        int localHeaderOffset,
+        byte[] replacement)
+    {
+        ushort centralNameLength = BinaryPrimitives.ReadUInt16LittleEndian(
+            bytes.AsSpan(centralHeaderOffset + 28));
+        ushort localNameLength = BinaryPrimitives.ReadUInt16LittleEndian(
+            bytes.AsSpan(localHeaderOffset + 26));
+        if (replacement.Length != centralNameLength || replacement.Length != localNameLength)
+        {
+            throw new InvalidDataException("The replacement entry name must preserve both header name lengths.");
+        }
+
+        replacement.CopyTo(bytes, centralHeaderOffset + 46);
+        replacement.CopyTo(bytes, localHeaderOffset + 30);
     }
 
     private static void PatchEntry(

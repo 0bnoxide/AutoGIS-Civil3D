@@ -44,14 +44,15 @@ internal sealed class BundleArchive : IDisposable
         try
         {
             archiveStream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            zipFile = new ZipFile(archiveStream, leaveOpen: true);
+            StringCodec stringCodec = StringCodec.Default;
+            zipFile = new ZipFile(archiveStream, leaveOpen: true, stringCodec);
             List<ZipEntry> entries = [];
             foreach (ZipEntry entry in zipFile)
             {
                 entries.Add(entry);
             }
 
-            PreflightLocalHeaders(archiveStream, entries);
+            PreflightLocalHeaders(archiveStream, stringCodec, entries);
 
             ValidationIssue? issue = ValidateEntries(entries);
             if (issue is not null)
@@ -213,15 +214,21 @@ internal sealed class BundleArchive : IDisposable
     private static ValidationIssue Error(string code, string message) =>
         new(code, IssueSeverity.Error, message);
 
-    private static void PreflightLocalHeaders(FileStream archiveStream, IEnumerable<ZipEntry> entries)
+    private static void PreflightLocalHeaders(
+        FileStream archiveStream,
+        StringCodec stringCodec,
+        IEnumerable<ZipEntry> entries)
     {
         foreach (ZipEntry entry in entries)
         {
-            ValidateLocalHeader(archiveStream, entry);
+            ValidateLocalHeader(archiveStream, stringCodec, entry);
         }
     }
 
-    private static void ValidateLocalHeader(FileStream archiveStream, ZipEntry entry)
+    private static void ValidateLocalHeader(
+        FileStream archiveStream,
+        StringCodec stringCodec,
+        ZipEntry entry)
     {
         if (entry.Offset < 0 || entry.Offset > archiveStream.Length - LocalFileHeaderLength)
         {
@@ -237,25 +244,27 @@ internal sealed class BundleArchive : IDisposable
             throw new ZipException("The ZIP entry local-header signature is invalid.");
         }
 
+        ushort version = BinaryPrimitives.ReadUInt16LittleEndian(header[4..]);
         ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(header[6..]);
         ushort compressionMethod = BinaryPrimitives.ReadUInt16LittleEndian(header[8..]);
-        if (flags != (ushort)entry.Flags || compressionMethod != (ushort)entry.CompressionMethod)
+        if (version != entry.Version
+            || flags != (ushort)entry.Flags
+            || compressionMethod != (ushort)entry.CompressionMethod)
         {
             throw new ZipException("The ZIP entry local header does not match the central directory.");
         }
 
         ushort nameLength = BinaryPrimitives.ReadUInt16LittleEndian(header[26..]);
         ushort extraLength = BinaryPrimitives.ReadUInt16LittleEndian(header[28..]);
-        byte[] expectedName = Encoding.UTF8.GetBytes(entry.Name);
-        if (nameLength != expectedName.Length
-            || archiveStream.Position > archiveStream.Length - nameLength - extraLength)
+        if (archiveStream.Position > archiveStream.Length - nameLength - extraLength)
         {
             throw new ZipException("The ZIP entry local-header name is invalid.");
         }
 
         byte[] localName = new byte[nameLength];
         ReadExactly(archiveStream, localName);
-        if (!localName.AsSpan().SequenceEqual(expectedName))
+        string decodedLocalName = stringCodec.ZipInputEncoding(entry.Flags).GetString(localName);
+        if (!string.Equals(decodedLocalName, entry.Name, StringComparison.Ordinal))
         {
             throw new ZipException("The ZIP entry local-header name does not match the central directory.");
         }
@@ -265,9 +274,12 @@ internal sealed class BundleArchive : IDisposable
             return;
         }
 
+        uint crc = BinaryPrimitives.ReadUInt32LittleEndian(header[14..]);
         uint compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(header[18..]);
         uint size = BinaryPrimitives.ReadUInt32LittleEndian(header[22..]);
-        if (!MatchesLocalSize(compressedSize, entry.CompressedSize)
+        if (entry.Crc is < 0 or > uint.MaxValue
+            || crc != (uint)entry.Crc
+            || !MatchesLocalSize(compressedSize, entry.CompressedSize)
             || !MatchesLocalSize(size, entry.Size))
         {
             throw new ZipException("The ZIP entry local-header size does not match the central directory.");
