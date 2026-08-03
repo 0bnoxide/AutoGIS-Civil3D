@@ -5,4 +5,5 @@ public static class IssueCodes
     public const string ManifestInvalidJson = "MAN001";
     public const string ManifestSchemaViolation = "MAN002";
     public const string ManifestSemanticViolation = "MAN003";
+    public const string UnknownVerticalDatum = "WRN001";
 }
