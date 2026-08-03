@@ -1,0 +1,179 @@
+using System.Text;
+using AutoGIS.Civil3D.Handoff.Packaging;
+using Xunit;
+
+namespace AutoGIS.Civil3D.Handoff.Tests;
+
+public sealed class BundleArchiveTests
+{
+    [Fact]
+    public void Valid_two_entry_archive_exposes_bounded_manifest_and_surface_streams()
+    {
+        string path = TestPackageBuilder.Create(PackageFault.Valid);
+        try
+        {
+            BundleOpenResult result = BundleArchive.Open(path);
+
+            Assert.Empty(result.Issues);
+            using BundleArchive archive = Assert.IsType<BundleArchive>(result.Archive);
+            Assert.Equal("{}", Encoding.UTF8.GetString(archive.ReadManifestBytes()));
+
+            using Stream surfaceStream = archive.OpenSurfaceStream();
+            using StreamReader reader = new(surfaceStream, Encoding.UTF8);
+            Assert.Equal("<LandXML/>", reader.ReadToEnd());
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(PackageFault.MissingSurface, "ZIP003")]
+    [InlineData(PackageFault.ExtraEntry, "ZIP004")]
+    [InlineData(PackageFault.UnsafePath, "ZIP005")]
+    [InlineData(PackageFault.CaseCollision, "ZIP006")]
+    [InlineData(PackageFault.EncryptedSurface, "ZIP008")]
+    [InlineData(PackageFault.UnsupportedCompression, "ZIP009")]
+    public void Invalid_container_returns_stable_primary_code(
+        PackageFault fault,
+        string expectedCode)
+    {
+        string path = TestPackageBuilder.Create(fault);
+        try
+        {
+            BundleOpenResult result = BundleArchive.Open(path);
+
+            Assert.Null(result.Archive);
+            Assert.Equal(expectedCode, Assert.Single(result.Issues).Code);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(PackageFault.DirectoryEntry)]
+    [InlineData(PackageFault.SymlinkEntry)]
+    public void Non_regular_entry_returns_zip007(PackageFault fault)
+    {
+        string path = TestPackageBuilder.Create(fault);
+        try
+        {
+            BundleOpenResult result = BundleArchive.Open(path);
+
+            Assert.Null(result.Archive);
+            Assert.Equal("ZIP007", Assert.Single(result.Issues).Code);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(PackageFault.ManifestTooLarge, "ZIP010")]
+    [InlineData(PackageFault.SurfaceTooLarge, "ZIP011")]
+    public void Entry_with_declared_size_over_limit_returns_stable_code(
+        PackageFault fault,
+        string expectedCode)
+    {
+        string path = TestPackageBuilder.Create(fault);
+        try
+        {
+            BundleOpenResult result = BundleArchive.Open(path);
+
+            Assert.Null(result.Archive);
+            Assert.Equal(expectedCode, Assert.Single(result.Issues).Code);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Entry_with_excessive_declared_compression_ratio_returns_zip012()
+    {
+        string path = TestPackageBuilder.Create(PackageFault.CompressionRatioExceeded);
+        try
+        {
+            BundleOpenResult result = BundleArchive.Open(path);
+
+            Assert.Null(result.Archive);
+            Assert.Equal("ZIP012", Assert.Single(result.Issues).Code);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Malformed_archive_returns_zip001()
+    {
+        string path = TestPackageBuilder.Create(PackageFault.Malformed);
+        try
+        {
+            BundleOpenResult result = BundleArchive.Open(path);
+
+            Assert.Null(result.Archive);
+            Assert.Equal("ZIP001", Assert.Single(result.Issues).Code);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Bounded_stream_rejects_synchronous_read_past_runtime_limit()
+    {
+        using BoundedReadStream stream = new(
+            new MemoryStream([1, 2, 3, 4, 5]),
+            "surface.landxml",
+            4);
+        byte[] buffer = new byte[4];
+
+        Assert.Equal(4, stream.Read(buffer, 0, buffer.Length));
+        BundleLimitExceededException exception = Assert.Throws<BundleLimitExceededException>(
+            () => stream.Read(new byte[1], 0, 1));
+
+        Assert.Equal("surface.landxml", exception.EntryName);
+        Assert.Equal(4, exception.Limit);
+    }
+
+    [Fact]
+    public async Task Bounded_stream_rejects_asynchronous_read_past_runtime_limit()
+    {
+        using BoundedReadStream stream = new(
+            new MemoryStream([1, 2, 3, 4, 5]),
+            "surface.landxml",
+            4);
+        byte[] buffer = new byte[4];
+
+        Assert.Equal(4, await stream.ReadAsync(buffer.AsMemory()));
+        BundleLimitExceededException exception = await Assert.ThrowsAsync<BundleLimitExceededException>(
+            async () => await stream.ReadAsync(new byte[1].AsMemory()));
+
+        Assert.Equal("surface.landxml", exception.EntryName);
+        Assert.Equal(4, exception.Limit);
+    }
+
+    [Fact]
+    public void Bounded_stream_delegates_seek_state_and_rejects_writes()
+    {
+        using BoundedReadStream stream = new(
+            new MemoryStream([1, 2, 3]),
+            "handoff.json",
+            10);
+
+        Assert.True(stream.CanRead);
+        Assert.True(stream.CanSeek);
+        Assert.False(stream.CanWrite);
+        Assert.Equal(2, stream.Seek(2, SeekOrigin.Begin));
+        Assert.Equal(2, stream.Position);
+        Assert.Throws<NotSupportedException>(() => stream.Write([4], 0, 1));
+    }
+}
