@@ -95,6 +95,58 @@ internal static class FixtureCatalog
             "<LandXML ",
             $"<!--{new string('A', 2_000_000)}-->\n<LandXML ",
             StringComparison.Ordinal);
+        string malformedSurface = ValidSurface.Replace(
+            "</LandXML>",
+            string.Empty,
+            StringComparison.Ordinal);
+        string dtdSurface = ValidSurface.Replace(
+            "<LandXML ",
+            "<!DOCTYPE LandXML [<!ENTITY x \"unsafe\">]>\n<LandXML ",
+            StringComparison.Ordinal);
+        string wrongVersionSurface = ValidSurface.Replace(
+            "version=\"1.2\"",
+            "version=\"1.1\"",
+            StringComparison.Ordinal);
+        string noSurface = RemoveXmlElement(
+            ValidSurface,
+            "<Surface name=\"Existing Ground\">",
+            "</Surface>");
+        string multipleSurfaces = ValidSurface.Replace(
+            "</Surfaces>",
+            "<Surface name=\"Second\" />\n  </Surfaces>",
+            StringComparison.Ordinal);
+        string multipleDefinitions = ValidSurface.Replace(
+            "</Surface>",
+            "<Definition surfType=\"TIN\" />\n    </Surface>",
+            StringComparison.Ordinal);
+        string invalidPoint = ValidSurface.Replace(
+            ">0 0 100</P>",
+            ">0 100</P>",
+            StringComparison.Ordinal);
+        string duplicatePointId = ValidSurface.Replace(
+            "<P id=\"2\">",
+            "<P id=\"1\">",
+            StringComparison.Ordinal);
+        string nonfiniteCoordinate = ValidSurface.Replace(
+            ">0 10 101</P>",
+            ">NaN 10 101</P>",
+            StringComparison.Ordinal);
+        string invalidFace = ValidSurface.Replace(
+            "<F>1 2 3</F>",
+            "<F>1 2</F>",
+            StringComparison.Ordinal);
+        string unknownPointReference = ValidSurface.Replace(
+            "<F>1 2 3</F>",
+            "<F>1 2 4</F>",
+            StringComparison.Ordinal);
+        string repeatedFaceVertex = ValidSurface.Replace(
+            "<F>1 2 3</F>",
+            "<F>1 2 2</F>",
+            StringComparison.Ordinal);
+        string degenerateFace = ValidSurface.Replace(
+            ">10 0 102</P>",
+            ">0 20 102</P>",
+            StringComparison.Ordinal);
 
         return
         [
@@ -185,8 +237,170 @@ internal static class FixtureCatalog
                 WithWrongChecksum(knownManifest),
                 ValidSurface,
                 CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-malformed.zip",
+                CreateManifest(malformedSurface, knownDatum: true),
+                malformedSurface,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-dtd.zip",
+                CreateManifest(dtdSurface, knownDatum: true),
+                dtdSurface,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-version.zip",
+                CreateManifest(wrongVersionSurface, knownDatum: true),
+                wrongVersionSurface,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-no-surface.zip",
+                CreateManifest(noSurface, knownDatum: true),
+                noSurface,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-multiple-surfaces.zip",
+                CreateManifest(multipleSurfaces, knownDatum: true),
+                multipleSurfaces,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-multiple-definitions.zip",
+                CreateManifest(multipleDefinitions, knownDatum: true),
+                multipleDefinitions,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-invalid-point.zip",
+                CreateManifest(invalidPoint, knownDatum: true),
+                invalidPoint,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-duplicate-point-id.zip",
+                CreateManifest(duplicatePointId, knownDatum: true),
+                duplicatePointId,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-nonfinite-coordinate.zip",
+                CreateManifest(nonfiniteCoordinate, knownDatum: true),
+                nonfiniteCoordinate,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-invalid-face.zip",
+                CreateManifest(invalidFace, knownDatum: true),
+                invalidFace,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-unknown-point-reference.zip",
+                CreateManifest(unknownPointReference, knownDatum: true),
+                unknownPointReference,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-repeated-face-vertex.zip",
+                CreateManifest(repeatedFaceVertex, knownDatum: true),
+                repeatedFaceVertex,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/xml-degenerate-face.zip",
+                CreateManifest(degenerateFace, knownDatum: true),
+                degenerateFace,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/surface-name-mismatch.zip",
+                knownManifest.Replace(
+                    "\"name\":\"Existing Ground\"",
+                    "\"name\":\"Design Ground\"",
+                    StringComparison.Ordinal),
+                ValidSurface,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/point-count-mismatch.zip",
+                knownManifest.Replace(
+                    "\"point_count\":3",
+                    "\"point_count\":4",
+                    StringComparison.Ordinal),
+                ValidSurface,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/face-count-mismatch.zip",
+                knownManifest.Replace(
+                    "\"face_count\":1",
+                    "\"face_count\":2",
+                    StringComparison.Ordinal),
+                ValidSurface,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/epsg-mismatch.zip",
+                knownManifest.Replace(
+                    "\"code\":26913",
+                    "\"code\":26914",
+                    StringComparison.Ordinal),
+                ValidSurface,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/horizontal-unit-mismatch.zip",
+                knownManifest.Replace(
+                    "\"horizontal\":{\"kind\":\"projected\",\"authority\":\"EPSG\",\"code\":26913,\"unit\":\"metre\"}",
+                    "\"horizontal\":{\"kind\":\"projected\",\"authority\":\"EPSG\",\"code\":26913,\"unit\":\"international_foot\"}",
+                    StringComparison.Ordinal),
+                ValidSurface,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/vertical-unit-family-mismatch.zip",
+                knownManifest.Replace(
+                    "\"vertical\":{\"unit\":\"metre\"",
+                    "\"vertical\":{\"unit\":\"international_foot\"",
+                    StringComparison.Ordinal),
+                ValidSurface,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/vertical-direction-invalid.zip",
+                knownManifest.Replace(
+                    "\"direction\":\"positive_up\"",
+                    "\"direction\":\"positive_down\"",
+                    StringComparison.Ordinal),
+                ValidSurface,
+                CompressionMethod.Stored,
+                null),
+            new(
+                "invalid/vertical-datum-invalid.zip",
+                knownManifest.Replace(
+                    "\"status\":\"known\"",
+                    "\"status\":\"invalid\"",
+                    StringComparison.Ordinal),
+                ValidSurface,
+                CompressionMethod.Stored,
                 null)
         ];
+    }
+
+    private static string RemoveXmlElement(string source, string startTag, string endTag)
+    {
+        int start = source.IndexOf(startTag, StringComparison.Ordinal);
+        int end = source.IndexOf(endTag, start, StringComparison.Ordinal);
+        if (start < 0 || end < 0)
+        {
+            throw new InvalidOperationException("The fixture source does not contain the requested XML element.");
+        }
+
+        return source.Remove(start, checked(end + endTag.Length - start));
     }
 
     private static string CreateManifest(string surface, bool knownDatum)
