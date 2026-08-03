@@ -48,6 +48,26 @@ public sealed class LandXmlSurfaceParserTests
         Assert.Equal(IssueCodes.LandXmlForbiddenDtd, issue.Code);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Utf16_dtd_token_split_across_read_chunks_returns_xml002(bool bigEndian)
+    {
+        string invalid = TestLandXml.Valid
+            .Replace("encoding=\"utf-8\"", "encoding=\"utf-16\"", StringComparison.Ordinal)
+            .Replace(
+                "<LandXML ",
+                "<!DOCTYPE LandXML [<!ENTITY x \"unsafe\">]>\n<LandXML ",
+                StringComparison.Ordinal);
+        using Stream xml = TestLandXml.Utf16Stream(invalid, bigEndian);
+
+        LandXmlParseResult result = LandXmlSurfaceParser.Parse(xml);
+
+        Assert.Null(result.Summary);
+        ValidationIssue issue = Assert.Single(result.Issues);
+        Assert.Equal(IssueCodes.LandXmlForbiddenDtd, issue.Code);
+    }
+
     [Fact]
     public void Forbidden_sequence_stream_detects_dtd_token_split_across_read_chunks()
     {
@@ -133,6 +153,17 @@ public sealed class LandXmlSurfaceParserTests
     }
 
     [Fact]
+    public void Misplaced_same_namespace_surface_returns_xml004()
+    {
+        string invalid = TestLandXml.Valid.Replace(
+            "</LandXML>",
+            "<Surface name=\"Misplaced\" />\n</LandXML>",
+            StringComparison.Ordinal);
+
+        AssertPrimaryCode(invalid, IssueCodes.LandXmlInvalidSurfaceCount);
+    }
+
+    [Fact]
     public void Two_definitions_return_xml005()
     {
         const string secondDefinition = """
@@ -155,6 +186,28 @@ public sealed class LandXmlSurfaceParserTests
         string invalid = TestLandXml.Valid.Replace(">0 0 100</P>", ">0 100</P>", StringComparison.Ordinal);
 
         AssertPrimaryCode(invalid, IssueCodes.LandXmlInvalidPoint);
+    }
+
+    [Fact]
+    public void Nested_point_markup_returns_xml006()
+    {
+        string invalid = TestLandXml.Valid.Replace(
+            ">0 0 100</P>",
+            "><Value /></P>",
+            StringComparison.Ordinal);
+
+        AssertPrimaryCode(invalid, IssueCodes.LandXmlInvalidPoint);
+    }
+
+    [Fact]
+    public void Nested_same_namespace_surface_inside_a_point_returns_xml004()
+    {
+        string invalid = TestLandXml.Valid.Replace(
+            ">0 0 100</P>",
+            "><Surface name=\"Misplaced\" /></P>",
+            StringComparison.Ordinal);
+
+        AssertPrimaryCode(invalid, IssueCodes.LandXmlInvalidSurfaceCount);
     }
 
     [Fact]
@@ -187,6 +240,17 @@ public sealed class LandXmlSurfaceParserTests
     public void Malformed_face_returns_xml009()
     {
         string invalid = TestLandXml.Valid.Replace("<F>1 2 3</F>", "<F>1 2</F>", StringComparison.Ordinal);
+
+        AssertPrimaryCode(invalid, IssueCodes.LandXmlInvalidFace);
+    }
+
+    [Fact]
+    public void Nested_face_markup_returns_xml009()
+    {
+        string invalid = TestLandXml.Valid.Replace(
+            "<F>1 2 3</F>",
+            "<F><Vertex>1</Vertex></F>",
+            StringComparison.Ordinal);
 
         AssertPrimaryCode(invalid, IssueCodes.LandXmlInvalidFace);
     }

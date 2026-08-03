@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace AutoGIS.Civil3D.Handoff.LandXml;
 
 internal sealed class ForbiddenSequenceException : IOException
@@ -10,13 +12,19 @@ internal sealed class ForbiddenSequenceException : IOException
 
 internal sealed class ForbiddenSequenceReadStream : Stream
 {
-    private static ReadOnlySpan<byte> ForbiddenSequence => "<!DOCTYPE"u8;
+    private const string ForbiddenText = "<!DOCTYPE";
+
+    private static readonly byte[][] ForbiddenSequences =
+    [
+        Encoding.ASCII.GetBytes(ForbiddenText),
+        Encoding.Unicode.GetBytes(ForbiddenText),
+        Encoding.BigEndianUnicode.GetBytes(ForbiddenText)
+    ];
 
     private readonly Stream source;
     private readonly byte[] sourceBuffer = new byte[4096];
-    private readonly byte[] candidate = new byte[ForbiddenSequence.Length];
+    private readonly List<byte> candidate = [];
     private readonly Queue<byte> safeBytes = new();
-    private int matchedByteCount;
     private bool forbiddenSequenceFound;
     private bool sourceEnded;
 
@@ -95,44 +103,77 @@ internal sealed class ForbiddenSequenceReadStream : Stream
 
     private void Scan(ReadOnlySpan<byte> bytes)
     {
-        ReadOnlySpan<byte> forbiddenSequence = ForbiddenSequence;
         foreach (byte value in bytes)
         {
-            if (value == forbiddenSequence[matchedByteCount])
+            candidate.Add(value);
+            while (candidate.Count > 0)
             {
-                candidate[matchedByteCount] = value;
-                matchedByteCount++;
-            }
-            else
-            {
-                ReleaseCandidate();
-                if (value == forbiddenSequence[0])
+                if (MatchesForbiddenSequence())
                 {
-                    candidate[0] = value;
-                    matchedByteCount = 1;
+                    forbiddenSequenceFound = true;
+                    throw new ForbiddenSequenceException();
                 }
-                else
-                {
-                    safeBytes.Enqueue(value);
-                }
-            }
 
-            if (matchedByteCount == forbiddenSequence.Length)
-            {
-                forbiddenSequenceFound = true;
-                throw new ForbiddenSequenceException();
+                if (IsForbiddenSequencePrefix())
+                {
+                    break;
+                }
+
+                safeBytes.Enqueue(candidate[0]);
+                candidate.RemoveAt(0);
             }
         }
     }
 
     private void ReleaseCandidate()
     {
-        for (int index = 0; index < matchedByteCount; index++)
+        foreach (byte value in candidate)
         {
-            safeBytes.Enqueue(candidate[index]);
+            safeBytes.Enqueue(value);
         }
 
-        matchedByteCount = 0;
+        candidate.Clear();
+    }
+
+    private bool MatchesForbiddenSequence()
+    {
+        foreach (byte[] forbiddenSequence in ForbiddenSequences)
+        {
+            if (candidate.Count == forbiddenSequence.Length &&
+                CandidateMatches(forbiddenSequence))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsForbiddenSequencePrefix()
+    {
+        foreach (byte[] forbiddenSequence in ForbiddenSequences)
+        {
+            if (candidate.Count < forbiddenSequence.Length &&
+                CandidateMatches(forbiddenSequence))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool CandidateMatches(ReadOnlySpan<byte> forbiddenSequence)
+    {
+        for (int index = 0; index < candidate.Count; index++)
+        {
+            if (candidate[index] != forbiddenSequence[index])
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void ThrowIfForbiddenSequenceFound()

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Xml;
 using AutoGIS.Civil3D.Handoff.Manifest;
 using AutoGIS.Civil3D.Handoff.Validation;
@@ -69,6 +70,7 @@ internal static class LandXmlSurfaceParser
         LinearUnit? horizontalUnit = null;
         VerticalUnitFamily? verticalUnitFamily = null;
         long surfaceCount = 0;
+        long canonicalSurfaceCount = 0;
         long definitionCount = 0;
         long pointCount = 0;
         long faceCount = 0;
@@ -102,18 +104,21 @@ internal static class LandXmlSurfaceParser
                         }
                     }
                 }
-                else if (IsLandXmlElement(element, "Surface") &&
-                    HasLandXmlAncestorPath(ancestors, "LandXML", "Surfaces"))
+                else if (IsLandXmlElement(element, "Surface"))
                 {
                     surfaceCount++;
-                    string? candidateName = reader.GetAttribute("name")?.Trim();
-                    if (string.IsNullOrEmpty(candidateName))
+                    if (HasLandXmlAncestorPath(ancestors, "LandXML", "Surfaces"))
                     {
-                        surfaceInvalid = true;
-                    }
-                    else if (surfaceName is null)
-                    {
-                        surfaceName = candidateName;
+                        canonicalSurfaceCount++;
+                        string? candidateName = reader.GetAttribute("name")?.Trim();
+                        if (string.IsNullOrEmpty(candidateName))
+                        {
+                            surfaceInvalid = true;
+                        }
+                        else if (surfaceName is null)
+                        {
+                            surfaceName = candidateName;
+                        }
                     }
                 }
                 else if (IsLandXmlElement(element, "Definition") &&
@@ -135,8 +140,17 @@ internal static class LandXmlSurfaceParser
                         "Pnts"))
                 {
                     string? idText = reader.GetAttribute("id");
-                    string pointText = reader.ReadElementContentAsString();
-                    ParsePoint(idText, pointText, points, issues, ref pointCount);
+                    LeafContent pointContent = ReadLeafContent(reader);
+                    surfaceCount += pointContent.SameNamespaceSurfaceCount;
+                    if (pointContent.HasChildElement)
+                    {
+                        AddIssueOnce(issues, IssueCodes.LandXmlInvalidPoint, "A TIN point is malformed.");
+                    }
+                    else
+                    {
+                        ParsePoint(idText, pointContent.Text, points, issues, ref pointCount);
+                    }
+
                     continue;
                 }
                 else if (IsLandXmlElement(element, "F") &&
@@ -148,9 +162,18 @@ internal static class LandXmlSurfaceParser
                         "Definition",
                         "Faces"))
                 {
-                    string faceText = reader.ReadElementContentAsString();
+                    LeafContent faceContent = ReadLeafContent(reader);
+                    surfaceCount += faceContent.SameNamespaceSurfaceCount;
                     faceCount++;
-                    ParseFace(faceText, points, issues);
+                    if (faceContent.HasChildElement)
+                    {
+                        AddIssueOnce(issues, IssueCodes.LandXmlInvalidFace, "A TIN face is malformed.");
+                    }
+                    else
+                    {
+                        ParseFace(faceContent.Text, points, issues);
+                    }
+
                     continue;
                 }
 
@@ -185,7 +208,7 @@ internal static class LandXmlSurfaceParser
             AddIssueOnce(issues, IssueCodes.LandXmlUnsupportedVersion, "LandXML must use the supported 1.2 envelope, units, and EPSG declaration.");
         }
 
-        if (surfaceCount != 1 || surfaceInvalid || surfaceName is null)
+        if (surfaceCount != 1 || canonicalSurfaceCount != 1 || surfaceInvalid || surfaceName is null)
         {
             AddIssueOnce(issues, IssueCodes.LandXmlInvalidSurfaceCount, "LandXML must contain exactly one named surface.");
         }
@@ -250,6 +273,47 @@ internal static class LandXmlSurfaceParser
 
         horizontalUnit = parsedHorizontalUnit;
         verticalUnitFamily = parsedVerticalUnitFamily;
+    }
+
+    private static LeafContent ReadLeafContent(XmlReader reader)
+    {
+        int elementDepth = reader.Depth;
+        if (reader.IsEmptyElement)
+        {
+            reader.Read();
+            return new LeafContent(string.Empty, false, 0);
+        }
+
+        StringBuilder text = new();
+        bool hasChildElement = false;
+        long sameNamespaceSurfaceCount = 0;
+        while (reader.Read())
+        {
+            if (reader.NodeType == XmlNodeType.EndElement && reader.Depth == elementDepth)
+            {
+                reader.Read();
+                return new LeafContent(text.ToString(), hasChildElement, sameNamespaceSurfaceCount);
+            }
+
+            if (reader.NodeType == XmlNodeType.Element)
+            {
+                hasChildElement = true;
+                if (reader.LocalName == "Surface" && reader.NamespaceURI == LandXmlNamespace)
+                {
+                    sameNamespaceSurfaceCount++;
+                }
+            }
+            else if (reader.Depth == elementDepth + 1 &&
+                reader.NodeType is XmlNodeType.Text or
+                    XmlNodeType.CDATA or
+                    XmlNodeType.Whitespace or
+                    XmlNodeType.SignificantWhitespace)
+            {
+                text.Append(reader.Value);
+            }
+        }
+
+        throw new XmlException("A LandXML point or face element is not closed.");
     }
 
     private static void ParsePoint(
@@ -393,4 +457,9 @@ internal static class LandXmlSurfaceParser
         new(null, [new ValidationIssue(code, IssueSeverity.Error, message)]);
 
     private readonly record struct ElementFrame(string LocalName, string NamespaceUri);
+
+    private readonly record struct LeafContent(
+        string Text,
+        bool HasChildElement,
+        long SameNamespaceSurfaceCount);
 }
