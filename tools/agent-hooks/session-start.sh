@@ -28,6 +28,14 @@ note() {
 # worktree session refreshes the one registered project instead of registering
 # a separate project per worktree. AutoGIS hardcodes an absolute path here;
 # deriving it keeps the hook correct in any checkout, including CI and clones.
+#
+# Known trade-off, accepted deliberately: the index reflects the primary
+# checkout (main), not the session's worktree branch, so graph navigation is
+# blind to uncommitted branch work. The MCP derives project identity from
+# repo_path and offers no identity override, so indexing the worktree path
+# would register a throwaway project per worktree — the pollution visible in
+# AutoGIS's project list. Branches here are short-lived; main is the shared
+# structure worth navigating. Revisit if the MCP grows a project-name option.
 common_dir="$(git rev-parse --git-common-dir 2>/dev/null || true)"
 if [ -z "$common_dir" ]; then
   note "SKIPPED not a git repository"
