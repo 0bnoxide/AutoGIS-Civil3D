@@ -33,6 +33,10 @@ Every command below is run from the repository unless noted.
    A rejection names the holder. Pick another slice or coordinate through
    the owner; never force-release another session's claim yourself.
 
+   For `file_glob` claims, `*` spans directory separators — `src/*` claims
+   the entire `src/` subtree, not just its top level — and overlapping
+   globs are rejected. Claim the narrowest glob that covers your slice.
+
 ## While working
 
 7. `COORD check --session <id>` before write-producing operations confirms
