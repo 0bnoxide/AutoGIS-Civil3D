@@ -58,14 +58,14 @@ Seven PRs in ~9 hours, with cross-references into unmerged branches: the Phase 0
 
 ## Errata (by the audited author)
 
-The reproduced report contains two count errors of exactly the class it diagnoses, found by the connector review of this document. Both are preserved above to keep the reproduction verbatim and corrected here: the fan-out paragraph in section A enumerates nine agreement points but summarizes them as "6–8"; the duplication table's non-expiry invariant row lists five locations (two in the spec, one in the roadmap, two in the plan) but totals them as 4. Neither error weakens the argument — both understate the duplication the audit measures — but an audit of count drift that miscounts twice is its own best exhibit.
+The reproduced report contains two count errors of exactly the class it diagnoses, found by the connector review of this document. Both are preserved above to keep the reproduction verbatim and corrected here: the fan-out paragraph in section A enumerates nine agreement points but summarizes them as "6–8"; the duplication table's non-expiry invariant row lists five locations (two in the spec, one in the roadmap, two in the plan) but totals them as 4. Neither error weakens the argument — both understate the duplication the audit measures — but an audit of count drift that miscounts twice is its own best exhibit. One correction of substance rather than count: section C's status-vocabulary reduction omits `Identified`, which the roadmap uses to mean a phase has no implementation authority; the implementing issue retains it, dropping only `In Progress` and `Blocked`.
 
 ## Disposition (by the audited author)
 
 | Audit item | Action | Where |
 |---|---|---|
-| E1 + E4 — blocking docs CI and the gate check | Proposed as a new Step 0 of the Phase 0 plan, sequenced before further governance writing | PR #9 amendment; tracking issue |
-| E2 + E5 — roadmap refactoring and single-copy rule | Tracking issue; executes after the Phase 0 plan is approved, as its own light-tier change | tracking issue |
+| E1 + E4 — blocking docs CI and the gate check | Proposed as a new Step 0 of the Phase 0 plan, sequenced before further governance writing | PR #9 amendment; issue #14 |
+| E2 + E5 — roadmap refactoring and single-copy rule | Executes after the Phase 0 plan is approved, as its own light-tier change | issue #15 |
 | E3 — serialization enforcement | The one-governance-PR-at-a-time practice and the no-external-reference rule join the agent guide (plan step 10); the mechanical half joins the Step 0 checks | PR #9 amendment |
 | Still-live deixis defect ("108 nodes") on the open plan | Fixed in the same PR #9 amendment | PR #9 |
 | Critique of ADR-0004 as cutting detection | Accepted as fair. ADR-0004 is amended on its own PR to encode the dependency: the light tier is conditioned on the issue #14 checks, and until they run as blocking CI the single pass must verify those mechanical properties itself | ADR-0004 amendment, PR #8 |
