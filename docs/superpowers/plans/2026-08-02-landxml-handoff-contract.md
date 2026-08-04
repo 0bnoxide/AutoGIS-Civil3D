@@ -30,7 +30,8 @@
 ## Dependency Notes
 
 - JsonSchema.Net 9.4.0 targets .NET 8 and evaluates JSON Schema 2020-12. Build the schema once with `Dialect.Draft202012`; evaluate instances with `RequireFormatValidation = true`.
-- SharpZipLib 1.4.2 is used only for read-only ZIP metadata and streams. Its `ZipEntry` exposes encryption and compression method directly, avoiding a custom central-directory parser.
+- SharpZipLib 1.4.2 is used only for read-only ZIP metadata and streams. Its `ZipEntry` exposes encryption and compression method directly, avoiding a custom central-directory parser. The implementation additionally verifies local headers, data descriptors, and ZIP64 records against the central directory (see the design's "Physical container consistency" section); SharpZipLib remains the sole central-directory reader.
+- xunit.runner.visualstudio 3.1.5 is the VSTest adapter required by Microsoft.NET.Test.Sdk to discover and execute the xUnit suite.
 - Keep all package versions in `Directory.Packages.props` and commit generated lock files.
 
 ## File and Responsibility Map

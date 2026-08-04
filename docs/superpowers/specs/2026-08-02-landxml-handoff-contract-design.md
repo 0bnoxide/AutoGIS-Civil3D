@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-02
 
-**Status:** Approved for implementation planning
+**Status:** Approved for implementation planning; amended during PR #3 review to record the physical container-consistency layer
 
 **Scope:** Steps 1-4: repository baseline, versioned handoff contract, read-only validator, and sanitized golden fixtures
 
@@ -210,6 +210,12 @@ Validation is deterministic, read-only, and stops expensive downstream work when
 11. Return an ordered report. Errors determine `Invalid`; no errors plus one or more warnings determine `ValidWithWarnings`; otherwise the result is `Valid`.
 
 Unknown vertical datum emits a prominent warning explaining that elevation alignment must be confirmed before use. The validator does not transform or guess the datum.
+
+Within the LandXML stage, co-occurring structural issues reduce to the earliest validation-flow issue. XML issue codes are numbered in flow order, and later-stage issues triggered in the same document are suppressed as cascade consequences of the root defect, keeping reports and fixtures single-cause.
+
+### Physical container consistency
+
+ZIP central-directory metadata is not trusted alone. Different ZIP readers resolve a central-directory/local-header disagreement differently, so a crafted archive can present one payload to a central-directory consumer and another to a local-header consumer — a parser-differential attack that would let the checksummed bytes differ from what another tool extracts. Step 1 therefore also verifies, with read-only parsing of the raw archive: each entry's local header matches its central-directory record exactly (signature, version, flags, compression method, name, CRC-32, and sizes); data descriptors, where flagged, are present and consistent; compressed data spans leave no unaccounted bytes between entries; and ZIP64 end-of-central-directory records agree with their locator. While streaming, actual byte counts and CRC-32 values must match the declared metadata. Any physical inconsistency is `ZIP001`. These checks stay within the read-only, no-extraction rule; header-mutation fixtures prove them.
 
 ## CLI behavior
 
