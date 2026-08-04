@@ -17,7 +17,7 @@ Only an explicit owner decision may authorize, advance, reorder, or reopen a pha
 
 | Phase | Capability | Exit-gate outcome | Status |
 |---|---|---|---|
-| 0 | Repository and collaboration foundation | Governance, agent tooling, local protection, CI, diagnostics preservation plan, and GitHub workflow established | Authorized |
+| 0 | Repository and collaboration foundation | Governance, agent tooling, local protection, CI, diagnostics preservation plan, and GitHub workflow established | In Progress |
 | 1 | Language-neutral handoff contract v1 | ZIP shape, JSON Schema, LandXML rules, safety limits, issue-code policy, and contract fixtures approved | Accepted |
 | 2 | Pure .NET 8 validator and CLI | Restore, build, and tests pass without Autodesk; deterministic valid and invalid fixtures prove the contract | Accepted |
 | 3 | AutoGIS producer adoption | AutoGIS emits conforming packages and passes cross-repository compatibility checks | Identified |
@@ -31,7 +31,7 @@ Phases 1 and 2 ran ahead of Phase 0 by explicit owner decision (see gate-change 
 
 Acceptance of Phases 1 and 2 does not carry any Civil 3D claim: contract-valid is not equivalent to Civil 3D import-tested, and the live import gate belongs to Phase 5.
 
-Phase 0 is authorized by owner decision on 2026-08-04, so Phase 0 work may be claimed. The claimable work item is writing the implementation plan, which the governing design sequences as the step following design acceptance. Implementation of the phase itself is gated separately and may not be claimed until that plan is approved and recorded under `docs/superpowers/plans/`.
+Phase 0 and its implementation are authorized by owner decisions on 2026-08-04 (gate-change log). Delivery is governed by the approved [implementation plan](superpowers/plans/2026-08-04-phase-0-coordination-foundation.md); live work status belongs to GitHub.
 
 ## Delivery level
 
@@ -49,7 +49,7 @@ Exit-gate criteria are the conditions listed under "Phase 0 acceptance criteria"
 
 Scheduling weight: the 2026-08-04 duplicate-work collision on PR #3, where both agents implemented the same review fixes because no claims mechanism existed, is the first demonstrated need for this phase's core.
 
-Claimable now: writing the implementation plan, from an isolated worktree, per step 11 of the governing design's bootstrap sequence. Implementation of the phase remains unclaimable until that plan is approved.
+The approved [implementation plan](superpowers/plans/2026-08-04-phase-0-coordination-foundation.md) decomposes delivery into independently verifiable steps; the exit gate is the acceptance-criteria list in the governing design.
 
 ### Next: Phase 3 — AutoGIS producer adoption
 
@@ -68,3 +68,4 @@ Identified capabilities with no implementation authority and no sequence: alignm
 | 2026-08-04 | Roadmap document created; Phases 1–2 recorded as In Progress with Phase 1 sole integration-gate owner, all other phases Identified | PR #4, merged `134bc0f` |
 | 2026-08-04 | Owner accepted and merged the Phase 1–2 slice, meeting the stated gate criterion; both phases advance to Accepted. Accepted evidence: contract v1 schema and rules, safety limits, issue-code policy, the 42-package golden fixture corpus with byte-for-byte regeneration checks, diagnostics preservation with recorded hashes, and the validator and CLI with stable exit codes, building and testing with no Autodesk or ArcGIS dependency — verified on merged `main` at 0 warnings, 0 errors, 181/181 tests. Carried forward as non-blocking: issues #5 (ZIP64 agreement fixture gap; design spec lagging `contract/v1/README.md`) and #2 (trailing blank lines) | PR #3, merged `8820d7c` |
 | 2026-08-04 | Owner authorized Phase 0. The phase advances to Authorized and becomes the active integration gate; implementation remains blocked until a plan under `docs/superpowers/plans/` is approved. Authorizes no later phase | PR #7 |
+| 2026-08-04 | Owner approved the Phase 0 implementation plan and authorized implementation, directing the repository past its coordination crux for ready use by lower-tier agent sessions (owner goal directive, quoted in the PR #16 record). Phase 0 advances to In Progress. Authorizes no later phase | PR #9 (plan); PR #16 (implementation) |

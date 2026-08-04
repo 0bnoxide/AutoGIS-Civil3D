@@ -1,0 +1,6 @@
+#!/bin/sh
+# Thin adapter — refspec lines arrive on stdin and are checked by the rule
+# engine; any refspec targeting remote main is denied. Fails CLOSED, same
+# rationale as pre-commit.
+python "$(git rev-parse --show-toplevel)/tools/agent-coordination/coordination.py" hook pre-push
+exit $?
