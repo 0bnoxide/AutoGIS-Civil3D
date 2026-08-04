@@ -30,7 +30,7 @@ Each step is one commit or a small group, independently verifiable, and leaves t
 
 The 2026-08-04 process audit ([PR #13](https://github.com/0bnoxide/AutoGIS-Civil3D/pull/13), issue #14) demonstrated that the governance defect pattern tracks a checker gap: roughly half of the ~21 findings were mechanically catchable. The governing design deferred docs checks until demonstrated need; the demonstration has happened, so this lands first — before any further governance prose is written.
 
-One small Python check suite, run as a blocking CI job: relative links in `docs/` resolve within the PR's own merge-base plus diff; a transience lint rejects deixis and session-state in `docs/` ("This PR", "currently", working-tree assertions, actor assignments); a numeral summarizing a referenced list is rejected; the roadmap gate-change log only grows at the bottom; and while the roadmap states Phase 0 implementation is unclaimable, any PR whose diff leaves `docs/` fails with a pointer to the gate.
+One small Python check suite, run as a blocking CI job: relative links in `docs/` resolve within the PR's own merge-base plus diff; a transience lint rejects deixis and session-state ("This PR", "currently", working-tree assertions, actor assignments) in the living documents only — the durable-authoritative set (roadmap, agent guide, collaboration, README, CONTRIBUTING); dated records such as ADRs, specs, plans, and reviews legitimately speak from their date and are exempt, so the check lands green on the existing corpus; a numeral summarizing a referenced list is rejected; the roadmap gate-change log only grows at the bottom; and while the roadmap states Phase 0 implementation is unclaimable, any PR whose diff leaves `docs/` fails with a pointer to the gate.
 
 **Acceptance:** each check has a fixture that fails it and a clean case that passes; the job blocks merge. The gate check is retired by the PR that records implementation authorization.
 
@@ -64,7 +64,7 @@ Add `.githooks/pre-commit` and `.githooks/pre-push` as thin adapters that normal
 
 `.agent-state/claims.json` at the primary working tree resolved through `git rev-parse --git-common-dir`. A claim records session identity, harness, process and host where available, claim kind, branch, worktree, file glob, and start time.
 
-Registry mutation takes an OS-level writer lock, rereads after acquiring the lock, writes a temporary sibling, and atomically replaces the registry. A contested live resource is rejected with the conflicting claim identified.
+`.agent-state/` is gitignored in the same commit that first writes it — an untracked registry would dirty the primary tree and make `sync-main`'s clean-tree check refuse every synchronization. Registry mutation takes an OS-level writer lock, rereads after acquiring the lock, writes a temporary sibling, and atomically replaces the registry. A contested live resource is rejected with the conflicting claim identified.
 
 `release` releases by id. `release --force <id> --reason ...` is the only orphan recovery and records the reason. `status` prints live claims.
 
@@ -83,6 +83,8 @@ Allocating an ADR number is structurally a claim: parallel sessions must not tak
 Detect and report: missing or displaced Git hooks, wrong worktree placement, stale-suspect claims, agent-asset drift, branch and upstream errors, and unavailable optional tools. Codex project-hook trust is reported as unverified until the documented `/hooks` inspection and activation probe succeed; it is never inferred from file presence.
 
 `doctor` reports. It does not repair, and it does not expire claims.
+
+This step also delivers the agent-tool preflights the exit gate names: `docs/agent-tools.md` documents registration, restart, and fallbacks for the optional graph (codebase-memory) and Mnemoverse integrations, and `tools/agent-hooks/verify-agent-tools.ps1` performs read-only availability checks, reporting a documented fallback rather than failing when a tool is absent.
 
 **Acceptance:** each condition is provoked in a fixture and the corresponding report asserted. A stale-suspect claim is reported and still present afterward.
 
@@ -108,7 +110,7 @@ Pinned canonical sources under `tools/agent-assets/`, covering both asset kinds 
 
 `docs/agent-guide.md` is canonical; `AGENTS.md` and `CLAUDE.md` are thin entrypoints with startup details and links only. Add `CONTRIBUTING.md` and `docs/collaboration.md` for contribution and checkout procedure.
 
-The guide records the operating rules that currently live only in review history:
+The guide records the operating rules that, before it exists, live only in review history:
 
 - The checkout and worktree lifecycle, including `check` before each write-producing operation.
 - The merge bar and review tiers from ADR-0004, and the review triggers that actually reach a reviewer.
