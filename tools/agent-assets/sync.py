@@ -20,7 +20,7 @@ writing. Standard library only. Exit: 0 clean/synced, 1 drift (check mode),
 from __future__ import annotations
 
 import argparse
-import filecmp
+
 import os
 import re
 import shutil
@@ -74,12 +74,21 @@ def render_toml(name, md_text):
     )
 
 
+def _tree_manifest(root):
+    manifest = {}
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            path = os.path.join(dirpath, name)
+            with open(path, "rb") as fh:
+                manifest[os.path.relpath(path, root)] = fh.read()
+    return manifest
+
+
 def _trees_equal(a, b):
-    cmp = filecmp.dircmp(a, b)
-    if cmp.left_only or cmp.right_only or cmp.diff_files or cmp.funny_files:
-        return False
-    return all(_trees_equal(os.path.join(a, sub), os.path.join(b, sub))
-               for sub in cmp.common_dirs)
+    # Byte comparison, deliberately not filecmp's stat heuristic: on a fresh
+    # checkout mtimes are checkout-time accidents, and a size-equal CRLF/LF
+    # difference must count as drift.
+    return _tree_manifest(a) == _tree_manifest(b)
 
 
 def _files_equal(path, content):
