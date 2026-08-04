@@ -109,8 +109,19 @@ def branch_of_tree(tree_root):
 
 
 def tree_containing(path):
-    """Return the worktree root governing `path`, or None if outside a repo."""
+    """Return the worktree root governing `path`, or None if outside a repo.
+
+    Walks up to the nearest EXISTING ancestor first: a write that creates a
+    new directory under a governed tree must still resolve to that tree, or
+    `mkdir new && echo x > new/file` on main would escape the rule.
+    """
     probe = path if os.path.isdir(path) else os.path.dirname(path) or "."
+    probe = os.path.abspath(probe)
+    while probe and not os.path.isdir(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            return None
+        probe = parent
     rc, top, _ = _git(["rev-parse", "--show-toplevel"], cwd=probe)
     if rc != 0 or not top:
         return None
@@ -345,9 +356,16 @@ def claim(repo, session, kind, value, harness=""):
         if kind == "adr":
             return _allocate_adr(repo, data, session, harness)
         for existing in data["claims"]:
-            if existing["kind"] == kind \
-                    and _same_value(kind, existing["value"], value) \
-                    and existing["session"] != session:
+            if existing["kind"] != kind or existing["session"] == session:
+                continue
+            if _same_value(kind, existing["value"], value):
+                return {"rejected": existing}
+            # ponytail: overlap heuristic for globs — either pattern matching
+            # the other's literal text counts as a conflict ("src/*" vs
+            # "src/x/*"). Precise glob-intersection is deferred hardening.
+            if kind == "file_glob" and (
+                    fnmatch.fnmatch(value, existing["value"])
+                    or fnmatch.fnmatch(existing["value"], value)):
                 return {"rejected": existing}
         record = {
             "id": uuid.uuid4().hex[:12],
@@ -549,6 +567,17 @@ def cmd_check(repo, session, targets):
     except RegistryError as exc:
         print(f"operational: {exc}", file=sys.stderr)
         return OPFAIL
+    for target in targets:
+        rel = os.path.relpath(_norm(target), repo.primary_root)
+        rel = rel.replace(os.sep, "/")
+        for record in claims:
+            if record["kind"] == "file_glob" and record["session"] != session \
+                    and fnmatch.fnmatch(rel, record["value"]):
+                print(f"deny: '{rel}' is inside file_glob "
+                      f"'{record['value']}' claimed by session "
+                      f"{record['session']} (claim {record['id']}).",
+                      file=sys.stderr)
+                return DENY
     if session:
         mine = [c for c in claims if c["session"] == session]
         branch_ok = any(

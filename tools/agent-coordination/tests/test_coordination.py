@@ -84,6 +84,11 @@ class TestMainRule(TempRepoCase):
                 coordination.deny_reason_for_git_argv(argv, self.repo_path),
                 argv)
 
+    def test_new_directory_target_under_main_denied(self):
+        target = os.path.join(self.repo_path, "does", "not", "exist.txt")
+        reason = coordination.deny_reason_for_target(target, self.repo)
+        self.assertIsNotNone(reason)
+
     def test_force_push_shorthand_denied(self):
         self.assertIsNotNone(coordination.deny_reason_for_git_argv(
             ["git", "push", "origin", "+main"], self.repo_path))
@@ -151,6 +156,23 @@ class TestClaims(TempRepoCase):
             t.join()
         winners = [r for r in results if "claimed" in r]
         self.assertEqual(len(winners), 1)
+
+    def test_overlapping_file_glob_rejected(self):
+        coordination.claim(self.repo, "s1", "file_glob", "src/*")
+        overlap = coordination.claim(self.repo, "s2", "file_glob", "src/x/*")
+        self.assertIn("rejected", overlap)
+        disjoint = coordination.claim(self.repo, "s2", "file_glob", "docs/*")
+        self.assertIn("claimed", disjoint)
+
+    def test_check_denies_target_in_another_sessions_glob(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        self.repo = coordination.discover(self.repo_path)  # branch changed
+        coordination.claim(self.repo, "s1", "file_glob", "src/*")
+        target = os.path.join(self.repo_path, "src", "code.cs")
+        rc = coordination.cmd_check(self.repo, "s2", [target])
+        self.assertEqual(rc, coordination.DENY)
+        rc = coordination.cmd_check(self.repo, "s1", [target])
+        self.assertEqual(rc, coordination.ALLOW)
 
     def test_release_by_owner_and_contested_release(self):
         record = coordination.claim(
