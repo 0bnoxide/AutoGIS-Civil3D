@@ -31,7 +31,7 @@ Phases 1 and 2 ran ahead of Phase 0 by explicit owner decision (see gate-change 
 
 Acceptance of Phases 1 and 2 does not carry any Civil 3D claim: contract-valid is not equivalent to Civil 3D import-tested, and the live import gate belongs to Phase 5.
 
-Phase 0 is authorized by owner decision on 2026-08-04. Implementation is gated separately: no Phase 0 work may be claimed until an implementation plan is approved and recorded under `docs/superpowers/plans/`. Authorization opens the phase; it does not open the keyboard.
+Phase 0 is authorized by owner decision on 2026-08-04, so Phase 0 work may be claimed. The claimable work item is writing the implementation plan, which the governing design sequences as the step following design acceptance. Implementation of the phase itself is gated separately and may not be claimed until that plan is approved and recorded under `docs/superpowers/plans/`.
 
 ## Delivery level
 
@@ -49,7 +49,7 @@ Exit-gate criteria are the conditions listed under "Phase 0 acceptance criteria"
 
 Scheduling weight: the 2026-08-04 duplicate-work collision on PR #3, where both agents implemented the same review fixes because no claims mechanism existed, is the first demonstrated need for this phase's core.
 
-Implementation is blocked pending an approved plan under `docs/superpowers/plans/`; writing that plan is the next work item and needs a writer assignment.
+Claimable now: writing the implementation plan, from an isolated worktree, per step 11 of the governing design's bootstrap sequence. It needs a writer assignment. Implementation of the phase remains unclaimable until that plan is approved.
 
 ### Next: Phase 3 — AutoGIS producer adoption
 
