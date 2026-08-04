@@ -83,6 +83,11 @@ class TestSync(unittest.TestCase):
         self.assertIn('description = "A cold reviewer."', toml)
         self.assertIn("Body line one.", toml)
 
+    def test_toml_render_escapes_quotes_and_backslashes(self):
+        toml = sync.render_toml("x", (
+            '---\nname: x\ndescription: Says "hi" via C:\\path\n---\nBody\n'))
+        self.assertIn('description = "Says \\"hi\\" via C:\\\\path"', toml)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

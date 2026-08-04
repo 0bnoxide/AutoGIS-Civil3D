@@ -144,20 +144,42 @@ def deny_reason_for_target(target_path, repo_hint=None):
     return None
 
 
+# Git global options that consume a following argument. Without skipping
+# these, `git -C <path> reset` reads the path as the subcommand and the
+# mutator check silently allows it — and reset/rebase have no pre-commit
+# backstop.
+_GIT_GLOBAL_WITH_ARG = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                        "--exec-path", "--super-prefix"}
+
+
+def _git_subcommand(argv):
+    """Return (subcommand, index) skipping git's global options."""
+    i = 1
+    while i < len(argv):
+        tok = argv[i]
+        if tok in _GIT_GLOBAL_WITH_ARG:
+            i += 2
+            continue
+        if tok.startswith("--") and "=" in tok or tok.startswith("-"):
+            i += 1
+            continue
+        return tok, i
+    return "", len(argv)
+
+
 def deny_reason_for_git_argv(argv, cwd):
     """Deny git commands that mutate main or push to remote main."""
-    words = [w for w in argv if not w.startswith("-")]
-    if not words or words[0] != "git":
+    if not argv or argv[0] != "git":
         return None
-    # honor `git -C <path>`
     workdir = cwd
     for i, tok in enumerate(argv):
         if tok == "-C" and i + 1 < len(argv):
             workdir = os.path.join(cwd or ".", argv[i + 1])
-    sub = words[1] if len(words) > 1 else ""
+    sub, sub_index = _git_subcommand(argv)
     if sub == "push":
-        for tok in argv[2:]:
+        for tok in argv[sub_index + 1:]:
             ref = tok.split(":", 1)[1] if ":" in tok else tok
+            ref = ref.lstrip("+")  # force-push shorthand +main
             if ref in (MAIN_BRANCH, f"refs/heads/{MAIN_BRANCH}"):
                 return (f"push targets remote '{MAIN_BRANCH}'. Integration "
                         "goes through pull requests only.")

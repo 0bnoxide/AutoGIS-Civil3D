@@ -76,6 +76,20 @@ class TestMainRule(TempRepoCase):
         self.assertIsNone(coordination.deny_reason_for_git_argv(
             ["git", "push", "origin", "HEAD:feature"], self.repo_path))
 
+    def test_global_options_do_not_hide_mutators(self):
+        for argv in (["git", "-C", self.repo_path, "reset", "--hard"],
+                     ["git", "-c", "user.name=x", "rebase", "feature"],
+                     ["git", "--git-dir", ".git", "merge", "feature"]):
+            self.assertIsNotNone(
+                coordination.deny_reason_for_git_argv(argv, self.repo_path),
+                argv)
+
+    def test_force_push_shorthand_denied(self):
+        self.assertIsNotNone(coordination.deny_reason_for_git_argv(
+            ["git", "push", "origin", "+main"], self.repo_path))
+        self.assertIsNotNone(coordination.deny_reason_for_git_argv(
+            ["git", "push", "-f", "origin", "feature:main"], self.repo_path))
+
     def test_shell_redirect_onto_main_denied(self):
         reason = coordination.deny_reason_for_shell(
             "echo boom > seed.txt", self.repo_path, self.repo)

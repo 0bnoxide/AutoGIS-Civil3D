@@ -62,13 +62,19 @@ def parse_frontmatter(md_text):
     return fields, match.group(2)
 
 
+def _toml_basic(value):
+    """Escape for a TOML basic (double-quoted, single-line) string."""
+    value = value.replace("\\", "\\\\").replace('"', '\\"')
+    return value.replace("\n", " ").replace("\r", "")
+
+
 def render_toml(name, md_text):
     """Codex agent TOML from the canonical Claude-format definition."""
     fields, body = parse_frontmatter(md_text)
-    description = fields.get("description", "")
+    description = _toml_basic(fields.get("description", ""))
     instructions = body.strip().replace("'''", "\\'\\'\\'")
     return (
-        f'name = "{fields.get("name", name)}"\n'
+        f'name = "{_toml_basic(fields.get("name", name))}"\n'
         f'description = "{description}"\n'
         f"developer_instructions = '''\n{instructions}\n'''\n"
     )
