@@ -25,6 +25,27 @@ public sealed class LandXmlSurfaceParserTests
     }
 
     [Fact]
+    public void Co_occurring_defects_reduce_to_the_earliest_flow_stage_issue()
+    {
+        string invalid = TestLandXml.Valid
+            .Replace(
+                "<P id=\"3\">10 0 102</P>",
+                "<P id=\"3\">10 0 102</P>\n              <P id=\"1\">5 5 103</P>",
+                StringComparison.Ordinal)
+            .Replace(
+                "<F>1 2 3</F>",
+                "<F>1 2 3</F>\n              <F>1 2 2</F>",
+                StringComparison.Ordinal);
+        using Stream xml = TestLandXml.Stream(invalid);
+
+        LandXmlParseResult result = LandXmlSurfaceParser.Parse(xml);
+
+        Assert.Null(result.Summary);
+        ValidationIssue issue = Assert.Single(result.Issues);
+        Assert.Equal(IssueCodes.LandXmlDuplicatePointId, issue.Code);
+    }
+
+    [Fact]
     public void Malformed_xml_returns_xml001()
     {
         string invalid = TestLandXml.Valid.Replace("</LandXML>", string.Empty, StringComparison.Ordinal);

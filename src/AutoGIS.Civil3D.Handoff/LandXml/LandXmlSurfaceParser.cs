@@ -233,7 +233,10 @@ internal static class LandXmlSurfaceParser
 
         if (issues.Count > 0)
         {
-            ValidationIssue primaryIssue = issues.OrderBy(issue => issue.Code, StringComparer.Ordinal).First();
+            // XML issue codes are numbered in validation-flow order, so the minimum
+            // code is the root-cause defect; later codes co-occurring in the same
+            // document are downstream consequences and are suppressed.
+            ValidationIssue primaryIssue = issues.MinBy(issue => issue.Code, StringComparer.Ordinal)!;
             return new LandXmlParseResult(null, [primaryIssue]);
         }
 
