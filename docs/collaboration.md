@@ -53,7 +53,7 @@ Every command below is run from the repository unless noted.
    [CONTRIBUTING.md](../CONTRIBUTING.md). GitHub is authoritative for status
    from this point.
 10. After merge or abandonment: release your claims
-    (`COORD release --id <claim-id>`) and remove the worktree:
+    (`COORD release --id <claim-id> --session <id>`) and remove the worktree:
 
     ```
     git worktree remove .worktrees/<agent>+<slug>

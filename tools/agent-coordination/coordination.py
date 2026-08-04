@@ -210,33 +210,41 @@ def deny_reason_for_shell(command, cwd, repo_hint=None):
     commands plus common write forms (>, >>, tee, sed -i, dd of=, truncate).
     A full shell parser is deferred until a bypass is demonstrated.
     """
+    effective_cwd = cwd  # `cd` in one segment moves the later segments
     for segment in re.split(r"&&|\|\||;|\n", command):
         segment = segment.strip()
         if not segment:
             continue
-        try:
-            argv = shlex.split(segment, posix=True)
-        except ValueError:
-            argv = segment.split()
-        if not argv:
-            continue
-        reason = deny_reason_for_git_argv(argv, cwd)
-        if reason:
-            return reason
         targets = []
         for match in REDIRECT_RE.finditer(segment):
             targets.append(match.group(1))
-        if argv[0] == "tee":
-            targets += [a for a in argv[1:] if not a.startswith("-")]
-        if argv[0] == "sed" and any(a.startswith("-i") for a in argv[1:]):
-            targets += [a for a in argv[1:] if not a.startswith("-")][-1:]
-        if argv[0] == "dd":
-            targets += [a[3:] for a in argv if a.startswith("of=")]
-        if argv[0] == "truncate":
-            targets += [a for a in argv[1:] if not a.startswith("-")]
+        # Writers can sit in any pipeline stage (`producer | tee file`), so
+        # every stage's argv is inspected, not just the first.
+        for stage in segment.split("|"):
+            try:
+                argv = shlex.split(stage.strip(), posix=True)
+            except ValueError:
+                argv = stage.split()
+            if not argv:
+                continue
+            if argv[0] == "cd" and len(argv) > 1:
+                effective_cwd = argv[1] if os.path.isabs(argv[1]) \
+                    else os.path.join(effective_cwd or ".", argv[1])
+                continue
+            reason = deny_reason_for_git_argv(argv, effective_cwd)
+            if reason:
+                return reason
+            if argv[0] == "tee":
+                targets += [a for a in argv[1:] if not a.startswith("-")]
+            if argv[0] == "sed" and any(a.startswith("-i") for a in argv[1:]):
+                targets += [a for a in argv[1:] if not a.startswith("-")][-1:]
+            if argv[0] == "dd":
+                targets += [a[3:] for a in argv if a.startswith("of=")]
+            if argv[0] == "truncate":
+                targets += [a for a in argv[1:] if not a.startswith("-")]
         for target in targets:
             resolved = target if os.path.isabs(target) \
-                else os.path.join(cwd or ".", target)
+                else os.path.join(effective_cwd or ".", target)
             reason = deny_reason_for_target(resolved, repo_hint)
             if reason:
                 return reason
@@ -421,7 +429,10 @@ def release(repo, claim_id, session=None, force=False, reason=""):
                 continue
             if existing["kind"] == "adr":
                 return {"error": "ADR numbers are consumed, never returned"}
-            if not force and session and existing["session"] != session:
+            if not force and not session:
+                return {"error": "release requires --session (ownership "
+                                 "proof); orphan recovery is --force --reason"}
+            if not force and existing["session"] != session:
                 return {"contested": existing}
             if force and not reason:
                 return {"error": "release --force requires --reason"}
@@ -567,17 +578,10 @@ def cmd_check(repo, session, targets):
     except RegistryError as exc:
         print(f"operational: {exc}", file=sys.stderr)
         return OPFAIL
-    for target in targets:
-        rel = os.path.relpath(_norm(target), repo.primary_root)
-        rel = rel.replace(os.sep, "/")
-        for record in claims:
-            if record["kind"] == "file_glob" and record["session"] != session \
-                    and fnmatch.fnmatch(rel, record["value"]):
-                print(f"deny: '{rel}' is inside file_glob "
-                      f"'{record['value']}' claimed by session "
-                      f"{record['session']} (claim {record['id']}).",
-                      file=sys.stderr)
-                return DENY
+    denial = glob_conflict(claims, session, targets)
+    if denial:
+        print(f"deny: {denial}", file=sys.stderr)
+        return DENY
     if session:
         mine = [c for c in claims if c["session"] == session]
         branch_ok = any(
@@ -595,11 +599,35 @@ def cmd_check(repo, session, targets):
                   "pick another slice.", file=sys.stderr)
             return DENY
         if not branch_ok:
-            print(f"warn: no claim for branch '{repo.branch}' by session "
-                  f"{session}; claim it:  coordination.py claim --session "
-                  f"{session} --kind branch --value {repo.branch}",
+            # check is the mandatory pre-write confirmation: an unclaimed
+            # branch is a denial, not advice.
+            print(f"deny: no claim for branch '{repo.branch}' by session "
+                  f"{session}. Claim it first:  coordination.py claim "
+                  f"--session {session} --kind branch --value {repo.branch}",
                   file=sys.stderr)
+            return DENY
     return ALLOW
+
+
+def glob_conflict(claims, session, targets):
+    """Reason string when a target sits in another session's file_glob.
+
+    Paths are made repository-relative against the worktree that governs
+    each target, so a claim of `src/*` matches `src/a.cs` identically from
+    the primary tree and from any linked worktree.
+    """
+    for target in targets:
+        tree = tree_containing(target)
+        if tree is None:
+            continue
+        rel = os.path.relpath(_norm(target), tree).replace(os.sep, "/")
+        for record in claims:
+            if record["kind"] == "file_glob" and record["session"] != session \
+                    and fnmatch.fnmatch(rel, record["value"]):
+                return (f"'{rel}' is inside file_glob '{record['value']}' "
+                        f"claimed by session {record['session']} "
+                        f"(claim {record['id']}).")
+    return None
 
 
 def cmd_sync_main(repo):
@@ -671,6 +699,18 @@ def hook_pre_tool_use(payload_text):
                 if not os.path.isabs(target):
                     target = os.path.join(cwd, target)
                 reason = deny_reason_for_target(target, repo)
+                if reason is None and repo is not None:
+                    # Claim-aware layer: with a session identity available,
+                    # an edit inside another session's file_glob is denied
+                    # here too, not only via the explicit `check` command.
+                    session = payload.get("session_id") \
+                        or os.environ.get("AGENT_SESSION_ID", "")
+                    if session:
+                        try:
+                            reason = glob_conflict(
+                                list_claims(repo), session, [target])
+                        except RegistryError:
+                            reason = None  # stateless rule already passed
         elif tool == "Bash" or tool == "PowerShell":
             command = tool_input.get("command", "")
             reason = deny_reason_for_shell(command, cwd, repo)

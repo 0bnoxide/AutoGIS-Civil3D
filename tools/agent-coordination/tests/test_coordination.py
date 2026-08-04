@@ -105,6 +105,17 @@ class TestMainRule(TempRepoCase):
             "ls && git commit -m x", self.repo_path, self.repo)
         self.assertIsNotNone(reason)
 
+    def test_cd_tracked_across_segments(self):
+        other = make_repo(self.base, "other-main").replace(os.sep, "/")
+        reason = coordination.deny_reason_for_shell(
+            f"cd {other} && git reset --hard", self.base, None)
+        self.assertIsNotNone(reason)
+
+    def test_tee_in_pipeline_stage_denied(self):
+        reason = coordination.deny_reason_for_shell(
+            "echo boom | tee seed.txt", self.repo_path, self.repo)
+        self.assertIsNotNone(reason)
+
     def test_foreign_path_not_governed(self):
         outside = os.path.join(self.base, "elsewhere.txt")
         self.assertIsNone(coordination.deny_reason_for_target(outside, self.repo))
@@ -167,11 +178,21 @@ class TestClaims(TempRepoCase):
     def test_check_denies_target_in_another_sessions_glob(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
         self.repo = coordination.discover(self.repo_path)  # branch changed
+        coordination.claim(self.repo, "s1", "branch", "feature")
         coordination.claim(self.repo, "s1", "file_glob", "src/*")
         target = os.path.join(self.repo_path, "src", "code.cs")
         rc = coordination.cmd_check(self.repo, "s2", [target])
         self.assertEqual(rc, coordination.DENY)
         rc = coordination.cmd_check(self.repo, "s1", [target])
+        self.assertEqual(rc, coordination.ALLOW)
+
+    def test_check_denies_unclaimed_branch(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        self.repo = coordination.discover(self.repo_path)
+        rc = coordination.cmd_check(self.repo, "s1", [])
+        self.assertEqual(rc, coordination.DENY)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        rc = coordination.cmd_check(self.repo, "s1", [])
         self.assertEqual(rc, coordination.ALLOW)
 
     def test_release_by_owner_and_contested_release(self):
@@ -181,6 +202,44 @@ class TestClaims(TempRepoCase):
         self.assertIn("contested", contested)
         released = coordination.release(self.repo, record["id"], session="s1")
         self.assertIn("released", released)
+
+    def test_release_without_session_refused(self):
+        record = coordination.claim(
+            self.repo, "s1", "branch", "feature")["claimed"]
+        result = coordination.release(self.repo, record["id"])
+        self.assertIn("error", result)
+
+    def test_adapter_denies_edit_in_another_sessions_glob(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        self.repo = coordination.discover(self.repo_path)
+        coordination.claim(self.repo, "s1", "file_glob", "src/*")
+        import io
+        from contextlib import redirect_stdout
+        os.environ["AGENT_SESSION_ID"] = "s2"
+        try:
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                coordination.hook_pre_tool_use(json.dumps({
+                    "tool_name": "Edit",
+                    "tool_input": {"file_path": os.path.join(
+                        self.repo_path, "src", "a.cs")},
+                    "cwd": self.repo_path,
+                }))
+            self.assertIn("deny", buffer.getvalue())
+        finally:
+            del os.environ["AGENT_SESSION_ID"]
+
+    def test_glob_matches_from_linked_worktree(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        self.repo = coordination.discover(self.repo_path)
+        coordination.claim(self.repo, "s1", "file_glob", "src/*")
+        wt = os.path.join(self.repo_path, ".worktrees", "claude+wt")
+        run_git(["worktree", "add", "-q", wt, "-b", "wt-branch"],
+                self.repo_path)
+        target = os.path.join(wt, "src", "a.cs")
+        conflict = coordination.glob_conflict(
+            coordination.list_claims(self.repo), "s2", [target])
+        self.assertIsNotNone(conflict)
 
     def test_forced_release_requires_reason_and_audits(self):
         record = coordination.claim(
