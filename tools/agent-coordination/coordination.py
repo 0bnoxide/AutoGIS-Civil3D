@@ -295,6 +295,32 @@ def _argv_of(stage):
         return stage.split()
 
 
+def _copy_move_operands(argv):
+    """Split a cp/mv/install argv into (destination, sources).
+
+    `-t DIR` / `--target-directory=DIR` moves the destination out of the
+    positionals, so the value token must be consumed rather than treated as
+    a source; without that, the last source is mistaken for the destination.
+    """
+    dest, operands, expect_value = None, [], False
+    for arg in argv[1:]:
+        if expect_value:
+            dest, expect_value = arg, False
+        elif arg in ("-t", "--target-directory"):
+            expect_value = True
+        elif arg.startswith("--target-directory="):
+            dest = arg.split("=", 1)[1]
+        elif arg.startswith("-t") and len(arg) > 2 and not arg.startswith("--"):
+            dest = arg[2:]
+        elif not arg.startswith("-"):
+            operands.append(arg)
+    if dest is not None:
+        return dest, operands
+    if len(operands) >= 2:
+        return operands[-1], operands[:-1]
+    return None, []
+
+
 def _shell_events(command, cwd):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
@@ -333,9 +359,12 @@ def _shell_events(command, cwd):
                 # it; the adapter is the only layer that sees it.
                 raw_targets += [a for a in argv[1:] if not a.startswith("-")]
             if argv[0] in ("cp", "mv", "install"):
-                operands = [a for a in argv[1:] if not a.startswith("-")]
-                if len(operands) >= 2:
-                    raw_targets.append(operands[-1])  # the destination
+                dest, sources = _copy_move_operands(argv)
+                if dest:
+                    raw_targets.append(dest)
+                if argv[0] == "mv":
+                    # mv removes its sources with no commit, like rm.
+                    raw_targets += sources
         for target in raw_targets:
             yield ("target", target if os.path.isabs(target)
                    else os.path.join(effective_cwd or ".", target))
@@ -772,20 +801,26 @@ def claim_denial(claims, session, targets):
         if my_globs and not any(fnmatch.fnmatch(rel, g) for g in my_globs):
             return (f"'{rel}' is outside your claimed file scope "
                     f"({', '.join(my_globs)}). Claim it or narrow the change.")
-        branch = branch_of_tree(tree)
-        if branch and branch != MAIN_BRANCH:
-            other = next(
-                (c for c in claims if c["kind"] == "branch"
-                 and c["value"] == branch and c["session"] != session), None)
-            if other:
-                return (f"branch '{branch}' is claimed by session "
-                        f"{other['session']} (claim {other['id']}). "
-                        "Coordinate or pick another slice.")
-            if not any(c["kind"] == "branch" and c["value"] == branch
-                       and c["session"] == session for c in claims):
-                return (f"no claim for branch '{branch}' by session "
-                        f"{session}. Claim it first:  coordination.py claim "
-                        f"--session {session} --kind branch --value {branch}")
+        reason = _branch_claim_denial(claims, session, branch_of_tree(tree))
+        if reason:
+            return reason
+    return None
+
+
+def _branch_claim_denial(claims, session, branch):
+    """Reason string when `branch` is claimed by someone else, or unclaimed."""
+    if not branch or branch == MAIN_BRANCH:
+        return None
+    mine = [c for c in claims if c["kind"] == "branch" and c["value"] == branch]
+    other = next((c for c in mine if c["session"] != session), None)
+    if other:
+        return (f"branch '{branch}' is claimed by session "
+                f"{other['session']} (claim {other['id']}). "
+                "Coordinate or pick another slice.")
+    if not any(c["session"] == session for c in mine):
+        return (f"no claim for branch '{branch}' by session "
+                f"{session}. Claim it first:  coordination.py claim "
+                f"--session {session} --kind branch --value {branch}")
     return None
 
 
