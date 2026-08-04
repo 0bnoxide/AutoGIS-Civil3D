@@ -19,19 +19,11 @@ public sealed class BundleValidator
         using BundleArchive archive = openResult.Archive;
         List<ValidationIssue> issues = [.. openResult.Issues];
 
-        ManifestParseResult manifestResult;
-        try
+        if (!TryRunStage(
+                () => ManifestParser.Parse(archive.ReadManifestBytes()),
+                issues,
+                out ManifestParseResult manifestResult))
         {
-            manifestResult = ManifestParser.Parse(archive.ReadManifestBytes());
-        }
-        catch (BundleLimitExceededException)
-        {
-            issues.Add(StreamLimitIssue());
-            return BuildReport(issues);
-        }
-        catch (BundleEntryDataException exception)
-        {
-            issues.Add(EntryDataIssue(exception));
             return BuildReport(issues);
         }
 
@@ -42,21 +34,15 @@ public sealed class BundleValidator
         }
 
         HandoffManifest manifest = manifestResult.Manifest!;
-        string actualChecksum;
-        try
+        if (!TryRunStage(
+                () =>
+                {
+                    using Stream surfaceStream = archive.OpenSurfaceStream();
+                    return Convert.ToHexString(SHA256.HashData(surfaceStream)).ToLowerInvariant();
+                },
+                issues,
+                out string actualChecksum))
         {
-            using Stream surfaceStream = archive.OpenSurfaceStream();
-            byte[] hash = SHA256.HashData(surfaceStream);
-            actualChecksum = Convert.ToHexString(hash).ToLowerInvariant();
-        }
-        catch (BundleLimitExceededException)
-        {
-            issues.Add(StreamLimitIssue());
-            return BuildReport(issues);
-        }
-        catch (BundleEntryDataException exception)
-        {
-            issues.Add(EntryDataIssue(exception));
             return BuildReport(issues);
         }
 
@@ -70,20 +56,15 @@ public sealed class BundleValidator
             return BuildReport(issues);
         }
 
-        LandXmlParseResult landXmlResult;
-        try
+        if (!TryRunStage(
+                () =>
+                {
+                    using Stream surfaceStream = archive.OpenSurfaceStream();
+                    return LandXmlSurfaceParser.Parse(surfaceStream);
+                },
+                issues,
+                out LandXmlParseResult landXmlResult))
         {
-            using Stream surfaceStream = archive.OpenSurfaceStream();
-            landXmlResult = LandXmlSurfaceParser.Parse(surfaceStream);
-        }
-        catch (BundleLimitExceededException)
-        {
-            issues.Add(StreamLimitIssue());
-            return BuildReport(issues);
-        }
-        catch (BundleEntryDataException exception)
-        {
-            issues.Add(EntryDataIssue(exception));
             return BuildReport(issues);
         }
 
@@ -180,6 +161,29 @@ public sealed class BundleValidator
             VerticalUnitFamily.Foot => manifestUnit is LinearUnit.InternationalFoot or LinearUnit.UsSurveyFoot,
             _ => false
         };
+
+    private static bool TryRunStage<T>(
+        Func<T> stage,
+        List<ValidationIssue> issues,
+        out T result)
+    {
+        try
+        {
+            result = stage();
+            return true;
+        }
+        catch (BundleLimitExceededException)
+        {
+            issues.Add(StreamLimitIssue());
+        }
+        catch (BundleEntryDataException exception)
+        {
+            issues.Add(EntryDataIssue(exception));
+        }
+
+        result = default!;
+        return false;
+    }
 
     private static ValidationIssue StreamLimitIssue() =>
         Error(
