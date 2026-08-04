@@ -31,7 +31,7 @@ and no repository check may hard-depend on them.
 
 ## Verification
 
-`tools/agent-hooks/verify-agent-tools.ps1` performs read-only availability
+`tools/verify-agent-tools.ps1` performs read-only availability
 checks and prints one line per tool: available (with version or index
 status) or the documented fallback. It never fails the session and makes no
 writes. `doctor` reports the same availability as advisory findings.
