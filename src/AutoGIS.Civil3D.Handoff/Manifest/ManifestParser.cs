@@ -194,9 +194,14 @@ internal static class ManifestParser
         string location,
         ICollection<ValidationIssue> issues)
     {
-        if (string.IsNullOrWhiteSpace(value) || !string.Equals(value, value.Trim(), StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(value) ||
+            !string.Equals(value, value.Trim(), StringComparison.Ordinal) ||
+            value.Any(char.IsControl))
         {
-            issues.Add(SemanticIssue("Producer fields must not be blank or padded with whitespace.", location));
+            issues.Add(
+                SemanticIssue(
+                    "Producer fields must not be blank, padded with whitespace, or contain control characters.",
+                    location));
         }
     }
 

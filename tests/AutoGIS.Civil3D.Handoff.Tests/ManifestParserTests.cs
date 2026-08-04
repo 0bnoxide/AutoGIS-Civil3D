@@ -140,6 +140,20 @@ public sealed class ManifestParserTests
     }
 
     [Fact]
+    public void C1_control_character_in_producer_name_fails_semantics()
+    {
+        string json = TestManifests.KnownDatum.Replace(
+            "\"name\":\"AutoGIS\"",
+            "\"name\":\"Auto\\u0085GIS\"",
+            StringComparison.Ordinal);
+
+        ManifestParseResult result = ManifestParser.Parse(Encoding.UTF8.GetBytes(json));
+
+        Assert.Null(result.Manifest);
+        Assert.Contains(result.Issues, issue => issue.Code == IssueCodes.ManifestSemanticViolation);
+    }
+
+    [Fact]
     public void Whitespace_padded_producer_version_fails_semantics()
     {
         string json = TestManifests.KnownDatum.Replace(
