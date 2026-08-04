@@ -49,7 +49,7 @@ Exit-gate criteria are the conditions listed under "Phase 0 acceptance criteria"
 
 Scheduling weight: the 2026-08-04 duplicate-work collision on PR #3, where both agents implemented the same review fixes because no claims mechanism existed, is the first demonstrated need for this phase's core.
 
-Claimable now: writing the implementation plan, from an isolated worktree, per step 11 of the governing design's bootstrap sequence. It needs a writer assignment. Implementation of the phase remains unclaimable until that plan is approved.
+Claimable now: writing the implementation plan, from an isolated worktree, per step 11 of the governing design's bootstrap sequence. Implementation of the phase remains unclaimable until that plan is approved.
 
 ### Next: Phase 3 — AutoGIS producer adoption
 
