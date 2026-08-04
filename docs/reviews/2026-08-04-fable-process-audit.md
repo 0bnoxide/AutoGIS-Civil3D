@@ -64,4 +64,4 @@ Seven PRs in ~9 hours, with cross-references into unmerged branches: the Phase 0
 | E2 + E5 — roadmap refactoring and single-copy rule | Tracking issue; executes after the Phase 0 plan is approved, as its own light-tier change | tracking issue |
 | E3 — serialization enforcement | The one-governance-PR-at-a-time practice and the no-external-reference rule join the agent guide (plan step 10); the mechanical half joins the Step 0 checks | PR #9 amendment |
 | Still-live deixis defect ("108 nodes") on the open plan | Fixed in the same PR #9 amendment | PR #9 |
-| Critique of ADR-0004 as cutting detection | Accepted as fair. The light tier stands only in combination with the Step 0 checks; the ADR's own Consequences section already states the requirement the checks now perform | recorded here |
+| Critique of ADR-0004 as cutting detection | Accepted as fair. ADR-0004 is amended on its own PR to encode the dependency: the light tier is conditioned on the issue #14 checks, and until they run as blocking CI the single pass must verify those mechanical properties itself | ADR-0004 amendment, PR #8 |
