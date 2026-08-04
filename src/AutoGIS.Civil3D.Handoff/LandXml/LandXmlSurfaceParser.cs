@@ -385,10 +385,12 @@ internal static class LandXmlSurfaceParser
             return;
         }
 
-        bool unknownReference =
-            !points.TryGetValue(firstId, out Point3 first) |
-            !points.TryGetValue(secondId, out Point3 second) |
-            !points.TryGetValue(thirdId, out Point3 third);
+        // All three lookups must run: the out values are used below when the
+        // face resolves, so short-circuiting would leave them unassigned.
+        bool missingFirst = !points.TryGetValue(firstId, out Point3 first);
+        bool missingSecond = !points.TryGetValue(secondId, out Point3 second);
+        bool missingThird = !points.TryGetValue(thirdId, out Point3 third);
+        bool unknownReference = missingFirst || missingSecond || missingThird;
         bool repeatedVertex = firstId == secondId || secondId == thirdId || thirdId == firstId;
 
         if (unknownReference)
