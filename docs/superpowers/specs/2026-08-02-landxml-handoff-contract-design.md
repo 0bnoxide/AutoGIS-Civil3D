@@ -212,10 +212,10 @@ Validation is deterministic, read-only, and stops expensive downstream work when
 
 Unknown vertical datum emits a prominent warning explaining that elevation alignment must be confirmed before use. The validator does not transform or guess the datum.
 
-Within the LandXML stage, envelope, surface, and TIN-definition checks have
-flow precedence. If those pass, the first point or face error encountered in
-document order is the single primary issue. Co-occurring LandXML errors are not
-sorted by issue code.
+Within the LandXML stage, the single primary issue is selected in this order:
+envelope, surface, TIN definition, absence of any valid point, first point or
+face error encountered in document order, then absence of faces. Co-occurring
+LandXML errors are not sorted by issue code.
 
 ### Physical container consistency
 

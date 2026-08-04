@@ -58,10 +58,10 @@ to three existing, distinct point identifiers. A face is invalid when its projec
 horizontal vertices coincide or its absolute 2D cross product is at most `1e-12`
 times its largest squared edge length.
 
-Validation is fail-fast by layer. Within LandXML, envelope, surface, and
-TIN-definition checks have precedence; otherwise the first point or face error
-encountered in document order is the single primary issue. Co-occurring errors
-are not sorted by issue code.
+Validation is fail-fast by layer. Within LandXML, the single primary issue is
+selected in this order: envelope, surface, TIN definition, absence of any valid
+point, first point or face error encountered in document order, then absence of
+faces. Co-occurring errors are not sorted by issue code.
 
 The raw `surface.landxml` SHA-256 must match the manifest. A known vertical
 datum supplies authority, positive code, and name. An unknown datum is valid
