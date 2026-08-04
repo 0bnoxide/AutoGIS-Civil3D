@@ -180,27 +180,64 @@ def _git_subcommand(argv):
 
 
 def _git_effective_workdir(argv, cwd):
-    """The tree a git command will act on: honors -C, --work-tree, and
-    --git-dir in both separated and = forms."""
-    workdir = cwd
-    i = 0
+    """The tree a git command will act on.
+
+    Matches git's own resolution order: each -C accumulates against the
+    running directory (`git -C a -C b` acts in cwd/a/b), and when both are
+    given, --work-tree governs the tree while --git-dir alone implies the
+    directory containing the .git dir.
+    """
+    base = cwd or "."
+    work_tree = None
+    git_dir = None
+    i = 1
     while i < len(argv):
         tok = argv[i]
-        value = None
+        key, value = tok, None
         if tok in ("-C", "--work-tree", "--git-dir") and i + 1 < len(argv):
             value, i = argv[i + 1], i + 1
         elif tok.startswith("--work-tree="):
-            value = tok[len("--work-tree="):]
+            key, value = "--work-tree", tok[len("--work-tree="):]
         elif tok.startswith("--git-dir="):
-            value = tok[len("--git-dir="):]
+            key, value = "--git-dir", tok[len("--git-dir="):]
         if value is not None:
-            resolved = value if os.path.isabs(value) \
-                else os.path.join(cwd or ".", value)
-            workdir = os.path.dirname(resolved) \
-                if tok.startswith("--git-dir") or tok == "--git-dir" \
-                else resolved
+            if key == "-C":
+                base = value if os.path.isabs(value) \
+                    else os.path.join(base, value)
+            elif key == "--work-tree":
+                work_tree = value
+            else:
+                git_dir = value
         i += 1
-    return workdir
+    if work_tree is not None:
+        return work_tree if os.path.isabs(work_tree) \
+            else os.path.join(base, work_tree)
+    if git_dir is not None:
+        resolved = git_dir if os.path.isabs(git_dir) \
+            else os.path.join(base, git_dir)
+        return os.path.dirname(resolved)
+    return base
+
+
+def _is_checkout_restore(sub, argv, sub_index, workdir):
+    """checkout acting as restore: overwrites files with no commit, so no
+    hook fires. `-b`/`-B` and bare branch switches stay allowed; a `--`
+    pathspec or a positional naming an existing file is a restore."""
+    if sub != "checkout":
+        return False
+    rest = argv[sub_index + 1:]
+    if "-b" in rest or "-B" in rest:
+        return False
+    if "--" in rest:
+        return True
+    for tok in rest:
+        if tok.startswith("-"):
+            continue
+        candidate = tok if os.path.isabs(tok) \
+            else os.path.join(workdir or ".", tok)
+        if os.path.exists(candidate):
+            return True
+    return False
 
 
 def deny_reason_for_git_argv(argv, cwd):
@@ -217,9 +254,8 @@ def deny_reason_for_git_argv(argv, cwd):
                 return (f"push targets remote '{MAIN_BRANCH}'. Integration "
                         "goes through pull requests only.")
         return None
-    # `checkout -b x` / `switch x` leave main's files alone; `checkout --
-    # <path>` overwrites them with no commit for pre-commit to catch.
-    is_mutator = sub in GIT_MUTATORS or (sub == "checkout" and "--" in argv)
+    is_mutator = sub in GIT_MUTATORS or _is_checkout_restore(
+        sub, argv, sub_index, _git_effective_workdir(argv, cwd))
     if is_mutator:
         tree = tree_containing(workdir or ".")
         if tree and branch_of_tree(tree) == MAIN_BRANCH:
@@ -418,7 +454,18 @@ def _globs_overlap(a, b):
     pa, pb = _glob_prefix(a), _glob_prefix(b)
     if pa is None or pb is None:
         return True  # unvalidatable legacy pattern: treat as conflicting
-    return pa.startswith(pb) or pb.startswith(pa)
+    # Segment-boundary comparison: `src` and `srclib/*` are siblings, not a
+    # conflict, and `src/main` vs `src/main2` differ. A directory claim
+    # conflicts with anything at or under its prefix.
+    la, is_dir_a = pa.rstrip("/"), pa.endswith("/")
+    lb, is_dir_b = pb.rstrip("/"), pb.endswith("/")
+    if la == lb:
+        return True
+    if is_dir_a and lb.startswith(la + "/"):
+        return True
+    if is_dir_b and la.startswith(lb + "/"):
+        return True
+    return False
 
 
 def claim(repo, session, kind, value, harness=""):

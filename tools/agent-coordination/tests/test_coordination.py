@@ -129,15 +129,29 @@ class TestMainRule(TempRepoCase):
     def test_restore_clean_and_checkout_pathspec_denied_on_main(self):
         for argv in (["git", "restore", "seed.txt"],
                      ["git", "clean", "-fd"],
-                     ["git", "checkout", "--", "seed.txt"]):
+                     ["git", "checkout", "--", "seed.txt"],
+                     ["git", "checkout", "seed.txt"]):
             self.assertIsNotNone(
                 coordination.deny_reason_for_git_argv(argv, self.repo_path),
                 argv)
         for argv in (["git", "checkout", "-b", "feature2"],
+                     ["git", "checkout", "some-branch"],
                      ["git", "switch", "-c", "feature3"]):
             self.assertIsNone(
                 coordination.deny_reason_for_git_argv(argv, self.repo_path),
                 argv)
+
+    def test_chained_dash_c_accumulates_and_work_tree_wins(self):
+        nested = os.path.join(self.repo_path, "sub")
+        os.makedirs(nested, exist_ok=True)
+        argv = ["git", "-C", os.path.basename(self.repo_path), "-C", "sub",
+                "reset", "--hard"]
+        self.assertIsNotNone(coordination.deny_reason_for_git_argv(
+            argv, os.path.dirname(self.repo_path)), argv)
+        argv = ["git", f"--git-dir={os.path.join(self.base, 'x', '.git')}",
+                f"--work-tree={self.repo_path}", "reset", "--hard"]
+        self.assertIsNotNone(
+            coordination.deny_reason_for_git_argv(argv, self.base), argv)
 
     def test_tee_in_pipeline_stage_denied(self):
         reason = coordination.deny_reason_for_shell(
@@ -202,6 +216,15 @@ class TestClaims(TempRepoCase):
         self.assertIn("rejected", overlap)
         disjoint = coordination.claim(self.repo, "s2", "file_glob", "docs/*")
         self.assertIn("claimed", disjoint)
+
+    def test_sibling_prefixes_do_not_conflict(self):
+        coordination.claim(self.repo, "s1", "file_glob", "src/*")
+        for ok in ("srclib/*", "src2", "docs/srcnotes/*"):
+            result = coordination.claim(self.repo, "s2", "file_glob", ok)
+            self.assertIn("claimed", result, ok)
+        coordination.claim(self.repo, "s1", "file_glob", "a/main")
+        sibling = coordination.claim(self.repo, "s2", "file_glob", "a/main2")
+        self.assertIn("claimed", sibling)
 
     def test_arbitrary_glob_patterns_rejected_at_claim(self):
         for bad in ("src/*.cs", "src/test*", "**/x", "a?b"):
