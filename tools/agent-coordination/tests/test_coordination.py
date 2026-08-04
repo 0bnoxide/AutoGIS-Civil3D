@@ -188,6 +188,9 @@ class TestMainRule(TempRepoCase):
             ("/dest", ["a"]))
         self.assertEqual(coordination._copy_move_operands(["mv", "a", "b"]),
                          ("b", ["a"]))
+        for argv in (["cp", "-rt", "/dest", "a"], ["cp", "-rt/dest", "a"]):
+            self.assertEqual(coordination._copy_move_operands(argv),
+                             ("/dest", ["a"]), argv)
 
     def test_checkout_of_deleted_tracked_file_denied(self):
         os.remove(os.path.join(self.repo_path, "seed.txt"))

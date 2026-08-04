@@ -310,8 +310,14 @@ def _copy_move_operands(argv):
             expect_value = True
         elif arg.startswith("--target-directory="):
             dest = arg.split("=", 1)[1]
-        elif arg.startswith("-t") and len(arg) > 2 and not arg.startswith("--"):
-            dest = arg[2:]
+        elif arg.startswith("-") and not arg.startswith("--") and "t" in arg:
+            # bundled short flags: -rt DIR, -rtDIR. `t` is the only
+            # value-taking short option cp/mv/install share.
+            value = arg.partition("t")[2]
+            if value:
+                dest = value
+            else:
+                expect_value = True
         elif not arg.startswith("-"):
             operands.append(arg)
     if dest is not None:
@@ -811,13 +817,15 @@ def _branch_claim_denial(claims, session, branch):
     """Reason string when `branch` is claimed by someone else, or unclaimed."""
     if not branch or branch == MAIN_BRANCH:
         return None
-    mine = [c for c in claims if c["kind"] == "branch" and c["value"] == branch]
-    other = next((c for c in mine if c["session"] != session), None)
+    branch_claims = [c for c in claims
+                     if c["kind"] == "branch" and c["value"] == branch]
+    other = next((c for c in branch_claims
+                  if c["session"] != session), None)
     if other:
         return (f"branch '{branch}' is claimed by session "
                 f"{other['session']} (claim {other['id']}). "
                 "Coordinate or pick another slice.")
-    if not any(c["session"] == session for c in mine):
+    if not any(c["session"] == session for c in branch_claims):
         return (f"no claim for branch '{branch}' by session "
                 f"{session}. Claim it first:  coordination.py claim "
                 f"--session {session} --kind branch --value {branch}")
