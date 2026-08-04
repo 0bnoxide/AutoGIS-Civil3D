@@ -11,3 +11,6 @@ TestResults/
 *.nupkg
 *.snupkg
 coverage/
+__pycache__/
+*.pyc
+.agent-state/

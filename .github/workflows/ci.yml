@@ -5,6 +5,23 @@ on:
   pull_request:
 
 jobs:
+  coordination:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Coordination module tests (main protection, claims, hooks)
+        run: python -m unittest discover -s tools/agent-coordination/tests -v
+      - name: Docs checks fixtures
+        run: python -m unittest discover -s tools/checks/tests -v
+      - name: Agent-asset sync tests
+        run: python -m unittest discover -s tools/agent-assets/tests -v
+      - name: Agent-asset drift (check-only)
+        run: python tools/agent-assets/sync.py --check
+      - name: Documentation checks
+        run: python tools/checks/docs_checks.py --root . --baseline origin/main
+
   test:
     runs-on: windows-latest
     steps:

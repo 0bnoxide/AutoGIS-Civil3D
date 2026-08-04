@@ -1,0 +1,9 @@
+#!/bin/sh
+# Thin adapter — all policy lives in the Python rule engine.
+# Fails CLOSED: if the engine or interpreter is missing, the commit is
+# denied. For branch protection that is the correct direction; a tree that
+# cannot evaluate the rule must not assume the write is safe. (The harness
+# PreToolUse adapter is the opposite — it fails open, because the git layer
+# is its backstop.)
+python "$(git rev-parse --show-toplevel)/tools/agent-coordination/coordination.py" hook pre-commit
+exit $?

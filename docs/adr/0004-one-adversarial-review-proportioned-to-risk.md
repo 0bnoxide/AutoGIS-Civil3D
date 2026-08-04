@@ -48,6 +48,8 @@ The floor is a floor, not a target. If defects begin reaching `main`, the correc
 
 Because the light tier removes the second review *round* — not the second reader — a governance document gets exactly one outside pass, and that pass must read it against its own stated rules rather than as prose. The PR #7 defects were all of that kind: a miscounted reference, a status contradicting the vocabulary that defined it, a log row out of sequence, and a task-tracker line in a file that forbids task tracking. None would be caught by reading for sense.
 
+The light tier is conditioned on mechanical documentation checks (issue #14: link resolution within the PR's merge-base plus diff, a transience lint, a ban on counting referenced lists, gate-log append-only). Until those checks run as blocking CI, the single light-tier pass must itself verify those mechanical properties in addition to reading for self-consistency — the reduced ceremony is funded by automation, and before the automation exists the pass carries its load.
+
 This ADR supersedes three things in [ADR-0002](0002-agent-collaboration-and-main-protection.md), and nothing else:
 
 1. **Role rotation, both tiers.** ADR-0002 assigns one writer and one independent reviewer per work item with roles rotating. Rotation is no longer required; the same agent may write consecutive items. The reviewing perspective must still differ from the writing one.

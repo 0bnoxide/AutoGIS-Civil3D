@@ -1,0 +1,19 @@
+# AGENTS.md
+
+Thin Codex entrypoint. The canonical operating policy is
+[docs/agent-guide.md](docs/agent-guide.md) — read it first; it wins over
+anything here. Session lifecycle: [docs/collaboration.md](docs/collaboration.md).
+
+Harness specifics:
+
+- Hooks are wired in the checked-in `.codex/hooks.json` (project trust
+  required; verify with `/hooks`): SessionStart refreshes the
+  codebase-memory index, PreToolUse denies writes targeting `main` through
+  the shared rule engine in `tools/agent-coordination/`. On Windows the
+  SessionStart command runs through `tools/agent-hooks/session-start.ps1`,
+  which locates Git Bash relative to `git` itself.
+- Skills under `.agents/skills/` and agents under `.codex/agents/` are
+  rendered from `tools/agent-assets/` — edit the canonical source and run
+  `python tools/agent-assets/sync.py`, never the rendered copies.
+- Use a stable session id for claims (`--session`); export it as
+  `AGENT_SESSION_ID` so `check` finds it.
