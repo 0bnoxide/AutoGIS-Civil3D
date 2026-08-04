@@ -1,1 +1,13 @@
 .worktrees/
+.vs/
+.vscode/
+bin/
+obj/
+TestResults/
+*.user
+*.suo
+*.dll
+*.pdb
+*.nupkg
+*.snupkg
+coverage/

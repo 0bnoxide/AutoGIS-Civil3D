@@ -1,0 +1,3 @@
+Build-Diagnostics.ps1 copies AutoGIS.Civil3D.Diagnostics.dll into this folder.
+Autodesk managed assemblies are never copied here or redistributed.
+

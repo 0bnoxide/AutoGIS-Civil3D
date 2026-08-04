@@ -6,7 +6,7 @@
 
 **Architecture:** `AutoGIS-Civil3D` owns a strict language-neutral ZIP contract. A pure `net8.0` library validates the container, embedded JSON Schema, manifest semantics, checksum, streaming LandXML topology, and cross-file consistency; a thin console project only maps reports to text and exit codes. Autodesk and ArcGIS dependencies remain outside this slice.
 
-**Tech Stack:** C# 12, .NET 8 SDK, System.Text.Json, streaming System.Xml, JsonSchema.Net 9.4.0, SharpZipLib 1.4.2, xUnit 2.9.3, Microsoft.NET.Test.Sdk 18.8.1, PowerShell, Python 3, GitHub Actions on Windows.
+**Tech Stack:** C# 12, .NET 8 SDK, System.Text.Json, streaming System.Xml, JsonSchema.Net 9.4.0, SharpZipLib 1.4.2, xUnit 2.9.3, xunit.runner.visualstudio 3.1.5, Microsoft.NET.Test.Sdk 18.8.1, PowerShell, Python 3, GitHub Actions on Windows.
 
 ## Global Constraints
 
@@ -30,7 +30,8 @@
 ## Dependency Notes
 
 - JsonSchema.Net 9.4.0 targets .NET 8 and evaluates JSON Schema 2020-12. Build the schema once with `Dialect.Draft202012`; evaluate instances with `RequireFormatValidation = true`.
-- SharpZipLib 1.4.2 is used only for read-only ZIP metadata and streams. Its `ZipEntry` exposes encryption and compression method directly, avoiding a custom central-directory parser.
+- SharpZipLib 1.4.2 owns central-directory enumeration and decompression; the validator performs only the contract-required local-header, descriptor, ZIP64-boundary, and physical-span reconciliation.
+- xunit.runner.visualstudio 3.1.5 is the private VSTest discovery adapter and is not a runtime dependency.
 - Keep all package versions in `Directory.Packages.props` and commit generated lock files.
 
 ## File and Responsibility Map
@@ -860,7 +861,6 @@ internal static class BundleLimits
     internal const long ManifestBytes = 1L * 1024 * 1024;
     internal const long SurfaceBytes = 2L * 1024 * 1024 * 1024;
     internal const double MaximumCompressionRatio = 100d;
-    internal const int EntryCount = 2;
 }
 ```
 
@@ -885,7 +885,7 @@ internal sealed record BundleOpenResult(
     IReadOnlyList<ValidationIssue> Issues);
 ```
 
-`BoundedReadStream` wraps a readable stream, increments a `long` count in both `Read` and `ReadAsync`, and throws `BundleLimitExceededException` before returning bytes that would move the count above its limit. It delegates read/seek state to the source and rejects writes. Unit-test synchronous and asynchronous reads.
+`BoundedReadStream` wraps a readable stream, increments a `long` count in both `Read` and `ReadAsync`, and throws `BundleLimitExceededException` before returning bytes that would move the count above its limit. At EOF it calculates CRC-32 over actual bytes, so size, CRC, and ratio validation share one allocation-free streaming boundary. It delegates read/seek state to the source and rejects writes. Unit-test synchronous and asynchronous reads.
 
 - [ ] **Step 4: Implement deterministic ZIP metadata validation**
 
@@ -893,7 +893,6 @@ Add:
 
 ```csharp
 public const string InvalidArchive = "ZIP001";
-public const string EntryCountMismatch = "ZIP002";
 public const string MissingRequiredEntry = "ZIP003";
 public const string UnexpectedEntry = "ZIP004";
 public const string UnsafeEntryName = "ZIP005";
@@ -907,7 +906,7 @@ public const string CompressionRatioExceeded = "ZIP012";
 public const string StreamLimitExceeded = "ZIP013";
 ```
 
-`BundleArchive.Open` uses `ICSharpCode.SharpZipLib.Zip.ZipFile` and validates in this exact primary-code order: archive parsing; unsafe/rooted names; case-insensitive collisions; unexpected names; missing required names; final entry count; regular-file status; encryption; compression method; nonnegative declared sizes; size limits; ratio. This makes a one-entry archive return `ZIP003`, an extra named entry return `ZIP004`, and a case collision return `ZIP006`. Return a disposable archive only when clean. Convert `ZipException` to `ZIP001`; leave filesystem and access failures as operational exceptions.
+`BundleArchive.Open` uses `ICSharpCode.SharpZipLib.Zip.ZipFile` and validates in this exact primary-code order: archive parsing; unsafe/rooted names; case-insensitive collisions; unexpected names; missing required names; regular-file status; encryption; compression method; nonnegative declared sizes; size limits; ratio. This makes a one-entry archive return `ZIP003`, an extra named entry return `ZIP004`, and a case collision return `ZIP006`. Return a disposable archive only when clean. Convert `ZipException` to `ZIP001`; leave filesystem and access failures as operational exceptions.
 
 - [ ] **Step 5: Run ZIP tests and the full current suite**
 

@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-02
 
-**Status:** Approved for implementation planning
+**Status:** Approved for implementation planning; amended during PR #3 review to record the physical container-consistency layer
 
 **Scope:** Steps 1-4: repository baseline, versioned handoff contract, read-only validator, and sanitized golden fixtures
 
@@ -146,7 +146,7 @@ Rules not fully expressible in JSON Schema are normative semantic rules in the v
 - `contract_version` is exactly `1.0`.
 - `package_id` is an RFC 4122 UUID string.
 - `created_utc` is an ISO 8601 timestamp normalized to UTC with a trailing `Z`.
-- Producer name and version are required, trimmed, control-character-free strings of at most 100 and 64 characters respectively. `source_commit` is optional and, when present, contains 7-64 lowercase hexadecimal characters. These bounded fields are not general-purpose notes and cannot carry paths, usernames, or workstation metadata.
+- Producer name and version are required, trimmed, control-character-free strings of at most 100 and 64 characters respectively. Control characters include the Unicode `Cc` category, including C0, DEL, and C1. `source_commit` is optional and, when present, contains 7-64 lowercase hexadecimal characters. These bounded fields are not general-purpose notes and cannot carry paths, usernames, or workstation metadata.
 - `surface.filename` is exactly `surface.landxml`.
 - `surface.sha256` is the lowercase SHA-256 digest of the raw uncompressed `surface.landxml` bytes.
 - Version 1 supports LandXML 1.2 only.
@@ -192,12 +192,13 @@ Stable issue-code families are reserved by validation layer:
 - `WRNxxx`: accepted conditions requiring human review.
 
 Specific codes become compatibility surface once released and therefore require regression tests before alteration.
+Code values may be intentionally unassigned; a gap does not publish or reserve a meaning by itself.
 
 ## Validation flow
 
 Validation is deterministic, read-only, and stops expensive downstream work when an earlier trust boundary fails:
 
-1. Open the ZIP and enforce entry count, exact names, regular-file status, compression methods, declared sizes, and ratio limits.
+1. Open the ZIP; reconcile central metadata with local headers, descriptors, ZIP64 records, and physical entry spans; then enforce entry count, exact names, regular-file status, compression methods, actual sizes, CRCs, and ratio limits.
 2. Stream and parse `handoff.json`; enforce JSON Schema and semantic manifest rules.
 3. Stream `surface.landxml`, count actual bytes, and calculate SHA-256.
 4. Compare the calculated digest with the manifest before accepting XML semantics.
@@ -210,6 +211,15 @@ Validation is deterministic, read-only, and stops expensive downstream work when
 11. Return an ordered report. Errors determine `Invalid`; no errors plus one or more warnings determine `ValidWithWarnings`; otherwise the result is `Valid`.
 
 Unknown vertical datum emits a prominent warning explaining that elevation alignment must be confirmed before use. The validator does not transform or guess the datum.
+
+Within the LandXML stage, the single primary issue is selected in this order:
+envelope, surface, TIN definition, absence of any valid point, first point or
+face error encountered in document order, then absence of faces. Co-occurring
+LandXML errors are not sorted by issue code.
+
+### Physical container consistency
+
+ZIP central-directory metadata is not trusted alone. Different ZIP readers resolve a central-directory/local-header disagreement differently, so a crafted archive can present one payload to a central-directory consumer and another to a local-header consumer — a parser-differential attack that would let the checksummed bytes differ from what another tool extracts. Step 1 therefore also verifies, with read-only parsing of the raw archive: each entry's local header matches its central-directory record on signature, version, flags, compression method, and name; CRC-32 and size fields match the central directory in the local header for ordinary entries, or in the trailing data descriptor — which must also equal the physical compressed span — for entries flagged to use one; compressed data spans leave no unaccounted bytes between entries; and ZIP64 end-of-central-directory records agree with their locator. While streaming, actual byte counts and CRC-32 values must match the declared metadata. Any physical inconsistency is `ZIP001`. These checks stay within the read-only, no-extraction rule; focused header-mutation tests cover ordinary headers, descriptors, physical spans, ZIP64 locators, and streaming CRC.
 
 ## CLI behavior
 

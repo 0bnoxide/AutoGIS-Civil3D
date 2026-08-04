@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/0bnoxide/AutoGIS-Civil3D/contract/v1/handoff-manifest.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "package_id", "created_utc", "producer", "surface", "coordinate_reference"],
+  "properties": {
+    "contract_version": { "const": "1.0" },
+    "package_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "created_utc": { "type": "string", "format": "date-time" },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name100" },
+        "version": { "$ref": "#/$defs/name64" },
+        "source_commit": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" }
+      }
+    },
+    "surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sha256", "landxml_version", "name", "point_count", "face_count"],
+      "properties": {
+        "filename": { "const": "surface.landxml" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "landxml_version": { "const": "1.2" },
+        "name": { "$ref": "#/$defs/name100" },
+        "point_count": { "type": "integer", "minimum": 1 },
+        "face_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "coordinate_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["horizontal", "vertical"],
+      "properties": {
+        "horizontal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "authority", "code", "unit"],
+          "properties": {
+            "kind": { "const": "projected" },
+            "authority": { "const": "EPSG" },
+            "code": { "type": "integer", "minimum": 1 },
+            "unit": { "$ref": "#/$defs/unit" }
+          }
+        },
+        "vertical": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["unit", "direction", "datum"],
+          "properties": {
+            "unit": { "$ref": "#/$defs/unit" },
+            "direction": { "const": "positive_up" },
+            "datum": {
+              "oneOf": [
+                { "$ref": "#/$defs/knownDatum" },
+                { "$ref": "#/$defs/unknownDatum" }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "name100": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "name64": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "unit": { "enum": ["metre", "international_foot", "us_survey_foot"] },
+    "knownDatum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "authority", "code", "name"],
+      "properties": {
+        "status": { "const": "known" },
+        "authority": { "$ref": "#/$defs/name64" },
+        "code": { "type": "integer", "minimum": 1 },
+        "name": { "$ref": "#/$defs/name100" }
+      }
+    },
+    "unknownDatum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "const": "unknown" },
+        "note": { "$ref": "#/$defs/name100" }
+      }
+    }
+  }
+}

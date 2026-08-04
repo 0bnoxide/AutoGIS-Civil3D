@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>autogis-civil3d-handoff</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="AutoGIS.Civil3D.Handoff.Cli" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AutoGIS.Civil3D.Handoff/AutoGIS.Civil3D.Handoff.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>AutoGIS.Civil3D.Handoff.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="JsonSchema.Net" />
+    <PackageReference Include="SharpZipLib" />
+  </ItemGroup>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>AutoGIS.Civil3D.Handoff.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource
+      Include="../../contract/v1/handoff-manifest.schema.json"
+      Link="Contract/handoff-manifest.schema.json"
+      LogicalName="AutoGIS.Civil3D.Handoff.Contract.v1.handoff-manifest.schema.json" />
+  </ItemGroup>
+</Project>
