@@ -158,6 +158,11 @@ class TestMainRule(TempRepoCase):
             "echo boom | tee seed.txt", self.repo_path, self.repo)
         self.assertIsNotNone(reason)
 
+    def test_rm_on_main_denied(self):
+        reason = coordination.deny_reason_for_shell(
+            "rm -f seed.txt", self.repo_path, self.repo)
+        self.assertIsNotNone(reason)
+
     def test_foreign_path_not_governed(self):
         outside = os.path.join(self.base, "elsewhere.txt")
         self.assertIsNone(coordination.deny_reason_for_target(outside, self.repo))
@@ -216,6 +221,55 @@ class TestClaims(TempRepoCase):
         self.assertIn("rejected", overlap)
         disjoint = coordination.claim(self.repo, "s2", "file_glob", "docs/*")
         self.assertIn("claimed", disjoint)
+
+    def test_adapter_fails_closed_on_corrupt_registry_with_session(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        self.repo = coordination.discover(self.repo_path)
+        os.makedirs(os.path.dirname(self.repo.registry_path), exist_ok=True)
+        with open(self.repo.registry_path, "w", encoding="utf-8") as fh:
+            fh.write("not json {")
+        import io
+        from contextlib import redirect_stdout
+        os.environ["AGENT_SESSION_ID"] = "s2"
+        try:
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                coordination.hook_pre_tool_use(json.dumps({
+                    "tool_name": "Edit",
+                    "tool_input": {"file_path": os.path.join(
+                        self.repo_path, "seed.txt")},
+                    "cwd": self.repo_path,
+                }))
+            self.assertIn("deny", buffer.getvalue())
+        finally:
+            del os.environ["AGENT_SESSION_ID"]
+
+    def test_check_requires_targets_inside_own_scope(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        self.repo = coordination.discover(self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s1", "file_glob", "src/*")
+        inside = os.path.join(self.repo_path, "src", "a.cs")
+        outside = os.path.join(self.repo_path, "docs", "x.md")
+        self.assertEqual(
+            coordination.cmd_check(self.repo, "s1", [inside]),
+            coordination.ALLOW)
+        self.assertEqual(
+            coordination.cmd_check(self.repo, "s1", [outside]),
+            coordination.DENY)
+
+    def test_doctor_reports_asset_drift(self):
+        stub_dir = os.path.join(self.repo_path, "tools", "agent-assets")
+        os.makedirs(stub_dir, exist_ok=True)
+        with open(os.path.join(stub_dir, "sync.py"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("import sys; print('sync --check: DRIFT'); sys.exit(1)\n")
+        import io
+        from contextlib import redirect_stdout
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            coordination.cmd_doctor(self.repo)
+        self.assertIn("agent-asset drift", buffer.getvalue())
 
     def test_sibling_prefixes_do_not_conflict(self):
         coordination.claim(self.repo, "s1", "file_glob", "src/*")

@@ -321,6 +321,10 @@ def _shell_events(command, cwd):
                 raw_targets += [a[3:] for a in argv if a.startswith("of=")]
             if argv[0] == "truncate":
                 raw_targets += [a for a in argv[1:] if not a.startswith("-")]
+            if argv[0] in ("rm", "unlink", "shred"):
+                # A deletion never reaches a commit, so no hook can restore
+                # it; the adapter is the only layer that sees it.
+                raw_targets += [a for a in argv[1:] if not a.startswith("-")]
         for target in raw_targets:
             yield ("target", target if os.path.isabs(target)
                    else os.path.join(effective_cwd or ".", target))
@@ -642,6 +646,18 @@ def cmd_doctor(repo):
             if not re.match(r"\.worktrees[\\/][a-z]+\+[A-Za-z0-9._-]+$", rel):
                 findings.append(f"worktree outside naming convention: {rel} "
                                 "(expected .worktrees/<agent>+<slug>)")
+    sync_script = os.path.join(repo.worktree_root, "tools", "agent-assets",
+                               "sync.py")
+    if os.path.exists(sync_script):
+        proc = subprocess.run(
+            [sys.executable, sync_script, "--check"],
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+        )
+        if proc.returncode == 1:
+            findings.append("agent-asset drift (rendered copies edited "
+                            "directly?): run tools/agent-assets/sync.py")
+        elif proc.returncode not in (0, 1):
+            findings.append("agent-asset drift check failed to run (advisory)")
     for tool in ("gh", "codebase-memory-mcp"):
         from shutil import which
         if which(tool) is None:
@@ -693,6 +709,22 @@ def cmd_check(repo, session, targets):
     if denial:
         print(f"deny: {denial}", file=sys.stderr)
         return DENY
+    if session and targets:
+        my_globs = [c["value"] for c in claims
+                    if c["kind"] == "file_glob" and c["session"] == session]
+        if my_globs:
+            # A session that scoped itself with file_glob claims must stay
+            # inside that scope, not merely outside everyone else's.
+            for target in targets:
+                tree = tree_containing(target)
+                if tree is None:
+                    continue
+                rel = os.path.relpath(_norm(target), tree).replace(os.sep, "/")
+                if not any(fnmatch.fnmatch(rel, g) for g in my_globs):
+                    print(f"deny: '{rel}' is outside your claimed file "
+                          f"scope ({', '.join(my_globs)}). Claim it or "
+                          "narrow the change.", file=sys.stderr)
+                    return DENY
     if session:
         mine = [c for c in claims if c["session"] == session]
         branch_ok = any(
@@ -820,8 +852,11 @@ def hook_pre_tool_use(payload_text):
                         try:
                             reason = glob_conflict(
                                 list_claims(repo), session, [target])
-                        except RegistryError:
-                            reason = None  # stateless rule already passed
+                        except RegistryError as exc:
+                            # Claim-dependent writes are blocked on corrupt
+                            # state (architecture rule) — there is no
+                            # backstop for file ownership below this layer.
+                            reason = str(exc)
         elif tool == "Bash" or tool == "PowerShell":
             command = tool_input.get("command", "")
             reason = deny_reason_for_shell(command, cwd, repo)
@@ -834,8 +869,8 @@ def hook_pre_tool_use(payload_text):
                         reason = glob_conflict(
                             list_claims(repo), session,
                             shell_write_targets(command, cwd))
-                    except RegistryError:
-                        reason = None
+                    except RegistryError as exc:
+                        reason = str(exc)
         if reason:
             print(json.dumps({
                 "hookSpecificOutput": {
