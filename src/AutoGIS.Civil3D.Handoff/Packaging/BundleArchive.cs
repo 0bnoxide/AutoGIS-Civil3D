@@ -165,11 +165,6 @@ internal sealed class BundleArchive : IDisposable
             return Error(IssueCodes.MissingRequiredEntry, "The ZIP is missing a required entry.");
         }
 
-        if (entries.Count != BundleLimits.EntryCount)
-        {
-            return Error(IssueCodes.EntryCountMismatch, "The ZIP does not contain exactly two entries.");
-        }
-
         foreach (ZipEntry entry in entries)
         {
             if (!IsRegularFile(entry))

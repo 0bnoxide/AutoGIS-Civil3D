@@ -3,7 +3,6 @@ namespace AutoGIS.Civil3D.Handoff.Validation;
 public static class IssueCodes
 {
     public const string InvalidArchive = "ZIP001";
-    public const string EntryCountMismatch = "ZIP002";
     public const string MissingRequiredEntry = "ZIP003";
     public const string UnexpectedEntry = "ZIP004";
     public const string UnsafeEntryName = "ZIP005";
