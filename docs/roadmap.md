@@ -19,7 +19,7 @@ Only an explicit owner decision may authorize, advance, reorder, or reopen a pha
 |---|---|---|---|
 | 0 | Repository and collaboration foundation | Governance, agent tooling, local protection, CI, diagnostics preservation plan, and GitHub workflow established | Identified |
 | 1 | Language-neutral handoff contract v1 | ZIP shape, JSON Schema, LandXML rules, safety limits, issue-code policy, and contract fixtures approved | In Progress |
-| 2 | Pure .NET 8 validator and CLI | Restore, build, and tests pass without Autodesk; deterministic valid and invalid fixtures prove the contract | In Progress |
+| 2 | Pure .NET 8 validator and CLI | Restore, build, and tests pass without Autodesk; deterministic valid and invalid fixtures prove the contract | Authorized |
 | 3 | AutoGIS producer adoption | AutoGIS emits conforming packages and passes cross-repository compatibility checks | Identified |
 | 4 | Autodesk adapter foundation | Adapter seam approved; .NET Windows targeting and AutoCAD/Civil 3D SDK discovery established | Identified |
 | 5 | Read-only Civil 3D integration | A contract-valid package can be inspected or imported without unapproved drawing mutation, with live evidence | Identified |
@@ -27,21 +27,19 @@ Only an explicit owner decision may authorize, advance, reorder, or reopen a pha
 | 7 | Packaging and compatibility | Supported Civil 3D versions, bundle packaging, installation, security, and upgrades are validated | Identified |
 | 8 | Operational qualification and release | Authorized workstation qualification, sanitized evidence, support runbook, and release gate are complete | Identified |
 
-Phases 1 and 2 run ahead of Phase 0 by explicit owner decision (see gate-change log, 2026-08-02). The capability sequence above is otherwise unchanged; the deviation is recorded, not rewritten.
+Phases 1 and 2 run ahead of Phase 0 by explicit owner decision (see gate-change log, 2026-08-02, and [ADR-0003](adr/0003-contract-slice-precedes-phase-0.md)). Phase 1 owns the integration gate; Phase 2 is authorized by the same decision, its implementation rides on the same PR, and its gate is evaluated only after Phase 1 acceptance. The capability sequence above is otherwise unchanged; the deviation is recorded, not rewritten.
 
 ## Delivery level
 
-Per the two-level rule, only the active phase and the immediately next phase carry delivery detail. Later phases remain closed regardless of any plan document that mentions them.
+Per the two-level rule, only the active phase and the immediately next phase carry delivery detail. Here the active gate owner is Phase 1; Phase 2 rides the same PR and is described inside the active entry rather than holding its own slot, so the next slot belongs to Phase 0, the next authorization decision. Later phases remain closed regardless of any plan document that mentions them.
 
-### Active: Phases 1–2 — handoff contract v1 and pure validator (PR #3)
+### Active: Phase 1 — handoff contract v1 (PR #3)
 
-Normative design: [`2026-08-02-landxml-handoff-contract-design.md`](superpowers/specs/2026-08-02-landxml-handoff-contract-design.md) (amended during PR #3 review). Plan: [`2026-08-02-landxml-handoff-contract.md`](superpowers/plans/2026-08-02-landxml-handoff-contract.md).
+Normative design: [`2026-08-02-landxml-handoff-contract-design.md`](superpowers/specs/2026-08-02-landxml-handoff-contract-design.md). An amendment (physical container consistency; root-cause issue reduction) is proposed on PR #3 and is not part of this branch or `main` until that PR merges. Plan: [`2026-08-02-landxml-handoff-contract.md`](superpowers/plans/2026-08-02-landxml-handoff-contract.md).
 
-Delivered on the PR branch: contract v1 schema, validator library, CLI with stable exit codes, 42-package golden corpus with byte-for-byte regeneration checks, diagnostics preservation with recorded hashes, CI. Remaining before the gates close:
+PR #3 also carries the Phase 2 validator implementation authorized by the same owner decision; Phase 2's gate is evaluated against the same evidence immediately after Phase 1 acceptance. Delivered on the PR branch: contract v1 schema, validator library, CLI with stable exit codes, 42-package golden corpus with byte-for-byte regeneration checks, diagnostics preservation with recorded hashes, CI.
 
-- Reconcile the 2026-08-04 duplicate-work collision (Codex rebase; recorded on PR #3).
-- Codex re-review of the review-fix delta; owner acceptance and merge.
-- Gate note: contract-valid is not Civil 3D import-tested; the live import gate belongs to Phase 5.
+Durable gate criteria remaining: owner acceptance and merge of PR #3. Live task state — including the 2026-08-04 duplicate-work reconciliation and re-review — is tracked on PR #3, not here. Gate note: contract-valid is not Civil 3D import-tested; the live import gate belongs to Phase 5.
 
 ### Next: Phase 0 — repository and collaboration foundation
 
@@ -55,6 +53,6 @@ Identified capabilities with no implementation authority and no sequence: alignm
 
 | Date | Decision | Recorded |
 |---|---|---|
-| 2026-08-02 | Owner directed Codex to execute the LandXML handoff contract plan ahead of Phase 0 (pre-Phase-0 authorization of the Phase 1–2 slice; does not authorize later phases) | PR #3 description |
+| 2026-08-02 | Owner directed Codex to execute the LandXML handoff contract plan ahead of Phase 0 (pre-Phase-0 authorization of the Phase 1–2 slice; does not authorize later phases) | PR #3 description; [ADR-0003](adr/0003-contract-slice-precedes-phase-0.md) |
 | 2026-08-03 | Repository collaboration architecture accepted at exact head `ed22ac6`; merged as `59cf551` | PR #1 |
-| 2026-08-04 | Roadmap document created; Phase 1–2 recorded as In Progress, all other phases Identified | This PR |
+| 2026-08-04 | Roadmap document created; Phase 1 recorded as In Progress and integration-gate owner, Phase 2 Authorized, all other phases Identified | This PR |
