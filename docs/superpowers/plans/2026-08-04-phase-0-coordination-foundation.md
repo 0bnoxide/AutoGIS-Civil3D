@@ -14,7 +14,7 @@
 
 ## Sequencing rationale
 
-Steps 1–4 deliver main protection and claims, which is the priority: the 2026-08-04 duplicate-work collision on PR #3 happened because no claim existed, and local `main` is currently unprotected because the account plan has no server-side branch protection. Everything after step 4 is necessary for Phase 0 acceptance but does not gate day-to-day safety.
+Step 0 lands first because it protects the artifact class under heaviest current churn — governance documents — and the audit showed that gap is the active defect source. Steps 1–4 then deliver main protection and claims: the 2026-08-04 duplicate-work collision on PR #3 happened because no claim existed, and local `main` is unprotected because the account plan has no server-side branch protection. Everything after step 4 is necessary for Phase 0 acceptance but does not gate day-to-day safety.
 
 Each step is one commit or a small group, independently verifiable, and leaves the repository working.
 
@@ -25,6 +25,14 @@ Each step is one commit or a small group, independently verifiable, and leaves t
 - Repair preserves damaged state. Nothing in this plan deletes claim state; it quarantines.
 - The coordination module is a guardrail, not a security boundary. Repository permissions and GitHub remain the external authority.
 - Untracked diagnostic artifacts in any working tree are evidence: never silently staged, moved, or deleted.
+
+## Step 0: Blocking documentation checks
+
+The 2026-08-04 process audit ([PR #13](https://github.com/0bnoxide/AutoGIS-Civil3D/pull/13), issue #14) demonstrated that the governance defect pattern tracks a checker gap: roughly half of the ~21 findings were mechanically catchable. The governing design deferred docs checks until demonstrated need; the demonstration has happened, so this lands first — before any further governance prose is written.
+
+One small Python check suite, run as a blocking CI job: relative links in `docs/` resolve within the PR's own merge-base plus diff; a transience lint rejects deixis and session-state in `docs/` ("This PR", "currently", working-tree assertions, actor assignments); a numeral summarizing a referenced list is rejected; the roadmap gate-change log only grows at the bottom; and while the roadmap states Phase 0 implementation is unclaimable, any PR whose diff leaves `docs/` fails with a pointer to the gate.
+
+**Acceptance:** each check has a fixture that fails it and a clean case that passes; the job blocks merge. The gate check is retired by the PR that records implementation authorization.
 
 ## Step 1: Module skeleton, discovery, and exit contract
 
@@ -105,7 +113,8 @@ The guide records the operating rules that currently live only in review history
 - The checkout and worktree lifecycle, including `check` before each write-producing operation.
 - The merge bar and review tiers from ADR-0004, and the review triggers that actually reach a reviewer.
 - Any bug or issue discovered during any work item is opened as a GitHub issue and tracked.
-- Prefer the codebase-memory MCP server or a search subagent over manual file-by-file grep when locating code, and treat its index as advisory navigation only — never as an authoritative record. Re-index after a significant merge; the index was found stale at 108 nodes after the Phase 1–2 merge.
+- Prefer the codebase-memory MCP server or a search subagent over manual file-by-file grep when locating code, and treat its index as advisory navigation only — never as an authoritative record. Re-index after a significant merge: a stale index misleads navigation silently, which is why the session-start hook re-indexes and always logs the outcome.
+- Governance changes are serialized, per the governing design's existing rule: one open governance PR at a time, and a PR never references a path absent from its own merge-base plus diff. The mechanical half of this rule is enforced by the Step 0 checks.
 
 **Acceptance:** no policy statement appears in two places with different wording. `AGENTS.md` and `CLAUDE.md` contain no rule not present in the guide.
 
