@@ -163,6 +163,18 @@ class TestMainRule(TempRepoCase):
             "rm -f seed.txt", self.repo_path, self.repo)
         self.assertIsNotNone(reason)
 
+    def test_cp_destination_on_main_denied(self):
+        for cmd in ("cp other.txt seed.txt", "mv other.txt seed.txt"):
+            reason = coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo)
+            self.assertIsNotNone(reason, cmd)
+
+    def test_checkout_of_deleted_tracked_file_denied(self):
+        os.remove(os.path.join(self.repo_path, "seed.txt"))
+        reason = coordination.deny_reason_for_git_argv(
+            ["git", "checkout", "seed.txt"], self.repo_path)
+        self.assertIsNotNone(reason)
+
     def test_foreign_path_not_governed(self):
         outside = os.path.join(self.base, "elsewhere.txt")
         self.assertIsNone(coordination.deny_reason_for_target(outside, self.repo))
@@ -257,6 +269,50 @@ class TestClaims(TempRepoCase):
         self.assertEqual(
             coordination.cmd_check(self.repo, "s1", [outside]),
             coordination.DENY)
+
+    def test_adapter_enforces_callers_own_scope(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        self.repo = coordination.discover(self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s1", "file_glob", "src/*")
+        import io
+        from contextlib import redirect_stdout
+        os.environ["AGENT_SESSION_ID"] = "s1"
+        try:
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                coordination.hook_pre_tool_use(json.dumps({
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": os.path.join(
+                        self.repo_path, "docs", "x.md")},
+                    "cwd": self.repo_path,
+                }))
+            self.assertIn("outside your claimed file scope", buffer.getvalue())
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                coordination.hook_pre_tool_use(json.dumps({
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": os.path.join(
+                        self.repo_path, "src", "a.cs")},
+                    "cwd": self.repo_path,
+                }))
+            self.assertEqual(buffer.getvalue(), "")
+        finally:
+            del os.environ["AGENT_SESSION_ID"]
+
+    def test_doctor_survives_broken_sync_script(self):
+        stub_dir = os.path.join(self.repo_path, "tools", "agent-assets")
+        os.makedirs(stub_dir, exist_ok=True)
+        with open(os.path.join(stub_dir, "sync.py"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("import sys; sys.exit(2)\n")
+        import io
+        from contextlib import redirect_stdout
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            rc = coordination.cmd_doctor(self.repo)
+        self.assertEqual(rc, coordination.ALLOW)
+        self.assertIn("failed to run (advisory)", buffer.getvalue())
 
     def test_doctor_reports_asset_drift(self):
         stub_dir = os.path.join(self.repo_path, "tools", "agent-assets")
