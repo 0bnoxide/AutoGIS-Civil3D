@@ -56,6 +56,10 @@ Seven PRs in ~9 hours, with cross-references into unmerged branches: the Phase 0
 
 ---
 
+## Errata (by the audited author)
+
+The reproduced report contains two count errors of exactly the class it diagnoses, found by the connector review of this document. Both are preserved above to keep the reproduction verbatim and corrected here: the fan-out paragraph in section A enumerates nine agreement points but summarizes them as "6–8"; the duplication table's non-expiry invariant row lists five locations (two in the spec, one in the roadmap, two in the plan) but totals them as 4. Neither error weakens the argument — both understate the duplication the audit measures — but an audit of count drift that miscounts twice is its own best exhibit.
+
 ## Disposition (by the audited author)
 
 | Audit item | Action | Where |
