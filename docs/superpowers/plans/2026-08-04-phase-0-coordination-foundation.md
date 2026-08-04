@@ -6,6 +6,8 @@
 
 **Governing design:** [`2026-08-02-repository-collaboration-architecture-design.md`](../specs/2026-08-02-repository-collaboration-architecture-design.md), accepted at `ed22ac6`, merged `59cf551`. Decisions: [ADR-0002](../../adr/0002-agent-collaboration-and-main-protection.md), [ADR-0004](../../adr/0004-one-adversarial-review-proportioned-to-risk.md).
 
+**Merge-order dependency:** ADR-0004 and the interim ADR-allocation convention are introduced on PR #8. That PR merges before this one; until it does, the ADR-0004 link above does not resolve on `main`.
+
 **Scope:** The blocking core only. Deferred hardening is out of scope and is not stubbed.
 
 **Tech stack:** Python 3, standard library only. No third-party packages, no .NET project reference, no product dependency. PowerShell, Claude, Codex, and Git integrations are thin adapters over one Python rule engine.
@@ -66,7 +68,7 @@ Corrupt or inaccessible claim state blocks new claims and claim-dependent writes
 
 Allocating an ADR number is structurally a claim: parallel sessions must not take the same one, which has already happened. Rather than a separate sequence script, add `claim adr` — it allocates the next unused number atomically under the same lock and records the allocation, so a number is assigned like a ticket and never reissued.
 
-**Acceptance:** concurrent allocation requests return distinct numbers. An allocation that is never used leaves a gap, and a gap is not reissued. Until this ships, the interim convention in `docs/adr/README.md` applies.
+**Acceptance:** concurrent allocation requests return distinct numbers. An allocation that is never used leaves a gap, and a gap is not reissued. Until this ships, the interim convention applies — check the ADR index and every open pull request that adds an ADR before taking the next number. The canonical statement of that convention lands in `docs/adr/README.md` with PR #8.
 
 ## Step 6: `doctor`
 
@@ -90,9 +92,9 @@ Claude and Codex pre-tool adapters that normalize their respective payloads and 
 
 ## Step 9: Agent assets and deterministic sync
 
-Pinned canonical sources under `tools/agent-assets/skills/`, rendered deterministically into `.agents/skills/` and `.claude/skills/`. The sync recreates destinations cleanly, prunes destination-only files, and supports a check-only mode for CI.
+Pinned canonical sources under `tools/agent-assets/`, covering both asset kinds the exit gate names: `skills/` renders deterministically into `.agents/skills/` and `.claude/skills/`, and `agents/` renders each canonical agent definition into both harness formats — `.claude/agents/<name>.md` and `.codex/agents/<name>.toml` — from one source, so neither harness's copy can drift from the other. The sync recreates destinations cleanly, prunes destination-only files, and supports a check-only mode for CI.
 
-**Acceptance:** sync twice is byte-identical. A destination-only file is pruned. Check-only mode fails on drift without writing.
+**Acceptance:** sync twice is byte-identical. A destination-only file is pruned. Check-only mode fails on drift without writing. A parity test asserts every canonical agent renders into both harness formats and every canonical skill reaches both discovery paths; the CI check covers skills and agents alike.
 
 ## Step 10: Canonical guidance documents
 
