@@ -84,7 +84,7 @@ Detect and report: missing or displaced Git hooks, wrong worktree placement, sta
 
 `doctor` reports. It does not repair, and it does not expire claims.
 
-This step also delivers the agent-tool preflights the exit gate names: `docs/agent-tools.md` documents registration, restart, and fallbacks for the optional graph (codebase-memory) and Mnemoverse integrations, and `tools/agent-hooks/verify-agent-tools.ps1` performs read-only availability checks, reporting a documented fallback rather than failing when a tool is absent.
+This step also delivers the agent-tool preflights the exit gate names: `docs/agent-tools.md` documents registration, restart, and fallbacks for the optional graph (codebase-memory) and Mnemoverse integrations, and `tools/verify-agent-tools.ps1` performs read-only availability checks, reporting a documented fallback rather than failing when a tool is absent.
 
 **Acceptance:** each condition is provoked in a fixture and the corresponding report asserted. A stale-suspect claim is reported and still present afterward.
 
@@ -109,6 +109,8 @@ Pinned canonical sources under `tools/agent-assets/`, covering both asset kinds 
 ## Step 10: Canonical guidance documents
 
 `docs/agent-guide.md` is canonical; `AGENTS.md` and `CLAUDE.md` are thin entrypoints with startup details and links only. Add `CONTRIBUTING.md` and `docs/collaboration.md` for contribution and checkout procedure.
+
+This step also creates `docs/architecture.md`, the repository-level dependency and module map the governing design requires, linking to `docs/architecture-handoff.md` for the contract-seam detail rather than duplicating it.
 
 The guide records the operating rules that, before it exists, live only in review history:
 
