@@ -27,7 +27,7 @@ Practices that apply to both tiers:
 
 - Batch fixes. Address every finding from a review pass in one push, not one push per finding.
 - Answer a finding in one line unless it is contested or a real disagreement is worth recording.
-- Request review by a mechanism that reaches a reviewer: mark the PR ready for review, or mention `@codex`.
+- Request review by a mechanism that reaches a reviewer: mark the PR ready for review, or mention `@codex`. When neither reaches a reviewer — the connector was unavailable for this repository on the day this ADR was written, see issue #11 — the bar does not lower. The owner is the reviewer of last resort, and the PR waits rather than merging unreviewed.
 - Roles need not alternate per work item. The same agent may write consecutive items. What the bar requires is that the review come from a perspective other than the one that wrote the change, not that authorship rotate.
 - Any bug or issue discovered during a work item is opened as a GitHub issue and tracked, whether or not it belongs to the current task.
 
