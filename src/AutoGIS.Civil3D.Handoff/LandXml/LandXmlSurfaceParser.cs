@@ -208,36 +208,42 @@ internal static class LandXmlSurfaceParser
 
         if (envelopeInvalid)
         {
-            AddIssueOnce(issues, IssueCodes.LandXmlUnsupportedVersion, "LandXML must use the supported 1.2 envelope, units, and EPSG declaration.");
+            return Invalid(
+                IssueCodes.LandXmlUnsupportedVersion,
+                "LandXML must use the supported 1.2 envelope, units, and EPSG declaration.");
         }
 
         if (surfaceCount != 1 || canonicalSurfaceCount != 1 || surfaceInvalid || surfaceName is null)
         {
-            AddIssueOnce(issues, IssueCodes.LandXmlInvalidSurfaceCount, "LandXML must contain exactly one named surface.");
+            return Invalid(
+                IssueCodes.LandXmlInvalidSurfaceCount,
+                "LandXML must contain exactly one named surface.");
         }
 
         if (definitionCount != 1 || definitionInvalid)
         {
-            AddIssueOnce(issues, IssueCodes.LandXmlInvalidDefinitionCount, "The surface must contain exactly one TIN definition.");
+            return Invalid(
+                IssueCodes.LandXmlInvalidDefinitionCount,
+                "The surface must contain exactly one TIN definition.");
         }
 
         if (pointCount == 0)
         {
-            AddIssueOnce(issues, IssueCodes.LandXmlInvalidPoint, "The TIN definition must contain valid points.");
-        }
-
-        if (faceCount == 0)
-        {
-            AddIssueOnce(issues, IssueCodes.LandXmlInvalidFace, "The TIN definition must contain faces.");
+            return Invalid(
+                IssueCodes.LandXmlInvalidPoint,
+                "The TIN definition must contain valid points.");
         }
 
         if (issues.Count > 0)
         {
-            // XML issue codes are numbered in validation-flow order, so the minimum
-            // code is the root-cause defect; later codes co-occurring in the same
-            // document are downstream consequences and are suppressed.
-            ValidationIssue primaryIssue = issues.MinBy(issue => issue.Code, StringComparer.Ordinal)!;
-            return new LandXmlParseResult(null, [primaryIssue]);
+            return new LandXmlParseResult(null, [issues[0]]);
+        }
+
+        if (faceCount == 0)
+        {
+            return Invalid(
+                IssueCodes.LandXmlInvalidFace,
+                "The TIN definition must contain faces.");
         }
 
         LandXmlSurfaceSummary summary = new(

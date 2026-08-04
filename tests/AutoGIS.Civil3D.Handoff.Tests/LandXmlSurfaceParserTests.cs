@@ -330,6 +330,22 @@ public sealed class LandXmlSurfaceParserTests
     }
 
     [Fact]
+    public void Cooccurring_face_errors_return_the_first_document_order_issue()
+    {
+        string invalid = TestLandXml.Valid.Replace(
+            "<F>1 2 3</F>",
+            "<F>1 2 2</F><F>1 2 99</F>",
+            StringComparison.Ordinal);
+
+        LandXmlParseResult result = LandXmlSurfaceParser.Parse(TestLandXml.Stream(invalid));
+
+        Assert.Null(result.Summary);
+        Assert.Equal(
+            IssueCodes.LandXmlRepeatedFaceVertex,
+            Assert.Single(result.Issues).Code);
+    }
+
+    [Fact]
     public void Near_zero_horizontal_triangle_returns_xml012()
     {
         string invalid = TestLandXml.Valid.Replace(

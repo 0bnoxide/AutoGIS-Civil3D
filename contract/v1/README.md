@@ -26,6 +26,14 @@ duplicate, or case-colliding paths. The v1 limits are exactly two entries, a
 1 MiB uncompressed `handoff.json`, a 2 GiB uncompressed `surface.landxml`, and
 a maximum 100:1 per-entry compression ratio.
 
+Central-directory metadata is not trusted by itself. Each entry's local header
+must agree with the central record on flags, method, and name. Ordinary entries
+also match CRC and sizes there; descriptor entries match them in a valid
+ZIP32/ZIP64 data descriptor whose compressed size equals the physical data span.
+Local extra fields are bounded, ZIP64 records are reconciled, and streaming
+verifies actual size and incremental CRC-32. These checks reject ZIP parser
+differentials and forged-size ratio bypasses without extracting the archive.
+
 ## Semantic rules
 
 `package_id` uses the canonical hyphenated UUID form. `created_utc` is a valid
@@ -49,6 +57,11 @@ three finite coordinates in northing, easting, elevation order. Every face resol
 to three existing, distinct point identifiers. A face is invalid when its projected
 horizontal vertices coincide or its absolute 2D cross product is at most `1e-12`
 times its largest squared edge length.
+
+Validation is fail-fast by layer. Within LandXML, envelope, surface, and
+TIN-definition checks have precedence; otherwise the first point or face error
+encountered in document order is the single primary issue. Co-occurring errors
+are not sorted by issue code.
 
 The raw `surface.landxml` SHA-256 must match the manifest. A known vertical
 datum supplies authority, positive code, and name. An unknown datum is valid

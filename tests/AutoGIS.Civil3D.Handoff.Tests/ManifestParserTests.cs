@@ -139,18 +139,21 @@ public sealed class ManifestParserTests
         Assert.Contains(result.Issues, issue => issue.Code == IssueCodes.ManifestSemanticViolation);
     }
 
-    [Fact]
-    public void C1_control_character_in_producer_name_fails_semantics()
+    [Theory]
+    [InlineData("\"name\":\"AutoGIS\"", "\"name\":\"Auto\\u0085GIS\"")]
+    [InlineData("\"version\":\"1.0.0\"", "\"version\":\"1.0\\u009f0\"")]
+    public void C1_control_character_in_producer_field_fails_semantics(
+        string oldValue,
+        string newValue)
     {
-        string json = TestManifests.KnownDatum.Replace(
-            "\"name\":\"AutoGIS\"",
-            "\"name\":\"Auto\\u0085GIS\"",
-            StringComparison.Ordinal);
+        string json = TestManifests.KnownDatum.Replace(oldValue, newValue, StringComparison.Ordinal);
 
         ManifestParseResult result = ManifestParser.Parse(Encoding.UTF8.GetBytes(json));
 
         Assert.Null(result.Manifest);
-        Assert.Contains(result.Issues, issue => issue.Code == IssueCodes.ManifestSemanticViolation);
+        Assert.Equal(
+            IssueCodes.ManifestSemanticViolation,
+            Assert.Single(result.Issues).Code);
     }
 
     [Fact]

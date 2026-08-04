@@ -11,6 +11,8 @@ public enum PackageFault
 {
     Valid,
     ValidLocalExtraField,
+    ValidDataDescriptor,
+    ValidZip64,
     MissingSurface,
     ExtraEntry,
     UnsafePath,
@@ -32,6 +34,8 @@ public enum PackageFault
     LocalHeaderVersionMismatch,
     LocalHeaderCrcMismatch,
     LocalHeaderSizeMismatch,
+    DataDescriptorMismatch,
+    Zip64LocatorMismatch,
     LocalHeaderMismatchBeforeUnsafeName,
     LegacyEncodedUnexpectedEntry,
     UnderreportedManifestSize,
@@ -73,6 +77,28 @@ internal static class TestPackageBuilder
         if (fault == PackageFault.ValidLocalExtraField)
         {
             CreateArchiveWithLocalExtraField(path);
+            return path;
+        }
+
+        if (fault is PackageFault.ValidDataDescriptor or PackageFault.DataDescriptorMismatch)
+        {
+            CreateArchiveWithDataDescriptors(path);
+            if (fault == PackageFault.DataDescriptorMismatch)
+            {
+                ApplyFault(path, fault);
+            }
+
+            return path;
+        }
+
+        if (fault is PackageFault.ValidZip64 or PackageFault.Zip64LocatorMismatch)
+        {
+            CreateArchiveWithZip64(path);
+            if (fault == PackageFault.Zip64LocatorMismatch)
+            {
+                ApplyFault(path, fault);
+            }
+
             return path;
         }
 
@@ -142,6 +168,8 @@ internal static class TestPackageBuilder
             case PackageFault.LocalHeaderVersionMismatch:
             case PackageFault.LocalHeaderCrcMismatch:
             case PackageFault.LocalHeaderSizeMismatch:
+            case PackageFault.DataDescriptorMismatch:
+            case PackageFault.Zip64LocatorMismatch:
             case PackageFault.UnderreportedManifestSize:
             case PackageFault.MatchingBadManifestCrc:
             case PackageFault.OverreportedCompressedSize:
@@ -227,6 +255,11 @@ internal static class TestPackageBuilder
 
         archive.Dispose();
 
+        MarkEntriesAsRegularFiles(path, entries);
+    }
+
+    private static void MarkEntriesAsRegularFiles(string path, IReadOnlyList<EntrySpec> entries)
+    {
         byte[] bytes = File.ReadAllBytes(path);
         foreach (EntrySpec spec in entries)
         {
@@ -278,6 +311,90 @@ internal static class TestPackageBuilder
         }
 
         archive.Finish();
+    }
+
+    private static void CreateArchiveWithDataDescriptors(string path)
+    {
+        EntrySpec[] entries =
+        [
+            new("handoff.json", "{}"u8.ToArray()),
+            new("surface.landxml", "<LandXML/>"u8.ToArray())
+        ];
+
+        using (FileStream file = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            NonSeekableWriteStream nonSeekable = new(file);
+            using (ZipArchive archive = new(nonSeekable, ZipArchiveMode.Create, leaveOpen: true, Encoding.UTF8))
+            {
+                foreach (EntrySpec spec in entries)
+                {
+                    ZipArchiveEntry entry = archive.CreateEntry(spec.Name, CompressionLevel.SmallestSize);
+                    entry.LastWriteTime = new DateTimeOffset(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
+                    using Stream entryStream = entry.Open();
+                    entryStream.Write(spec.Contents);
+                }
+            }
+
+            file.Flush();
+        }
+
+        MarkEntriesAsRegularFiles(path, entries);
+    }
+
+    private static void CreateArchiveWithZip64(string path)
+    {
+        EntrySpec[] entries =
+        [
+            new("handoff.json", "{}"u8.ToArray()),
+            new("surface.landxml", "<LandXML/>"u8.ToArray())
+        ];
+
+        CreateArchive(path, entries);
+
+        byte[] source = File.ReadAllBytes(path);
+        int endOfCentralDirectoryOffset = FindSignatureFromEnd(source, 0x06054b50);
+        uint centralDirectorySize = BinaryPrimitives.ReadUInt32LittleEndian(
+            source.AsSpan(endOfCentralDirectoryOffset + 12));
+        uint centralDirectoryOffset = BinaryPrimitives.ReadUInt32LittleEndian(
+            source.AsSpan(endOfCentralDirectoryOffset + 16));
+        const int zip64RecordLength = 56;
+        const int zip64LocatorLength = 20;
+        byte[] bytes = new byte[source.Length + zip64RecordLength + zip64LocatorLength];
+        source.AsSpan(0, endOfCentralDirectoryOffset).CopyTo(bytes);
+
+        Span<byte> record = bytes.AsSpan(endOfCentralDirectoryOffset, zip64RecordLength);
+        BinaryPrimitives.WriteUInt32LittleEndian(record, 0x06064b50);
+        BinaryPrimitives.WriteUInt64LittleEndian(record[4..], 44);
+        BinaryPrimitives.WriteUInt16LittleEndian(record[12..], 45);
+        BinaryPrimitives.WriteUInt16LittleEndian(record[14..], 45);
+        BinaryPrimitives.WriteUInt64LittleEndian(record[24..], (ulong)entries.Length);
+        BinaryPrimitives.WriteUInt64LittleEndian(record[32..], (ulong)entries.Length);
+        BinaryPrimitives.WriteUInt64LittleEndian(record[40..], centralDirectorySize);
+        BinaryPrimitives.WriteUInt64LittleEndian(record[48..], centralDirectoryOffset);
+
+        Span<byte> locator = bytes.AsSpan(
+            endOfCentralDirectoryOffset + zip64RecordLength,
+            zip64LocatorLength);
+        BinaryPrimitives.WriteUInt32LittleEndian(locator, 0x07064b50);
+        BinaryPrimitives.WriteUInt64LittleEndian(locator[8..], (ulong)endOfCentralDirectoryOffset);
+        BinaryPrimitives.WriteUInt32LittleEndian(locator[16..], 1);
+
+        int newEndOfCentralDirectoryOffset =
+            endOfCentralDirectoryOffset + zip64RecordLength + zip64LocatorLength;
+        source.AsSpan(endOfCentralDirectoryOffset).CopyTo(bytes.AsSpan(newEndOfCentralDirectoryOffset));
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            bytes.AsSpan(newEndOfCentralDirectoryOffset + 8),
+            ushort.MaxValue);
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            bytes.AsSpan(newEndOfCentralDirectoryOffset + 10),
+            ushort.MaxValue);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(newEndOfCentralDirectoryOffset + 12),
+            uint.MaxValue);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(newEndOfCentralDirectoryOffset + 16),
+            uint.MaxValue);
+        File.WriteAllBytes(path, bytes);
     }
 
     private static void ApplyFault(string path, PackageFault fault)
@@ -408,6 +525,55 @@ internal static class TestPackageBuilder
                         checked(uncompressedSize + 1));
                 });
                 break;
+            case PackageFault.DataDescriptorMismatch:
+                PatchEntry(bytes, "surface.landxml", (centralHeaderOffset, localHeaderOffset) =>
+                {
+                    ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 6));
+                    if ((flags & 0x0008) == 0)
+                    {
+                        throw new InvalidDataException("The test ZIP entry must use a data descriptor.");
+                    }
+
+                    ushort nameLength = BinaryPrimitives.ReadUInt16LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 26));
+                    ushort extraLength = BinaryPrimitives.ReadUInt16LittleEndian(
+                        bytes.AsSpan(localHeaderOffset + 28));
+                    int dataOffset = checked(localHeaderOffset + 30 + nameLength + extraLength);
+                    uint compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(
+                        bytes.AsSpan(centralHeaderOffset + 20));
+                    int descriptorOffset = checked(dataOffset + (int)compressedSize);
+                    int crcOffset = BinaryPrimitives.ReadUInt32LittleEndian(
+                        bytes.AsSpan(descriptorOffset)) == 0x08074b50
+                        ? descriptorOffset + 4
+                        : descriptorOffset;
+                    int compressedSizeOffset = crcOffset + sizeof(uint);
+                    uint descriptorCompressedSize = BinaryPrimitives.ReadUInt32LittleEndian(
+                        bytes.AsSpan(compressedSizeOffset));
+                    BinaryPrimitives.WriteUInt32LittleEndian(
+                        bytes.AsSpan(compressedSizeOffset),
+                        checked(descriptorCompressedSize + 1));
+                });
+                break;
+            case PackageFault.Zip64LocatorMismatch:
+                {
+                    int endOfCentralDirectoryOffset = FindSignatureFromEnd(bytes, 0x06054b50);
+                    if (BinaryPrimitives.ReadUInt32LittleEndian(
+                            bytes.AsSpan(endOfCentralDirectoryOffset + 16)) != uint.MaxValue)
+                    {
+                        throw new InvalidDataException("The test ZIP must use a ZIP64 central-directory offset.");
+                    }
+
+                    int locatorOffset = checked(endOfCentralDirectoryOffset - 20);
+                    if (locatorOffset < 0 || BinaryPrimitives.ReadUInt32LittleEndian(
+                            bytes.AsSpan(locatorOffset)) != 0x07064b50)
+                    {
+                        throw new InvalidDataException("The test ZIP64 locator is missing.");
+                    }
+
+                    bytes[locatorOffset] ^= 0x01;
+                    break;
+                }
             case PackageFault.LocalHeaderMismatchBeforeUnsafeName:
                 PatchEntry(bytes, "../surface.landxml", (_, localHeaderOffset) =>
                 {
@@ -489,6 +655,19 @@ internal static class TestPackageBuilder
         }
 
         File.WriteAllBytes(path, bytes);
+    }
+
+    private static int FindSignatureFromEnd(byte[] bytes, uint signature)
+    {
+        for (int offset = bytes.Length - sizeof(uint); offset >= 0; offset--)
+        {
+            if (BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset)) == signature)
+            {
+                return offset;
+            }
+        }
+
+        throw new InvalidDataException($"The test ZIP is missing signature 0x{signature:x8}.");
     }
 
     private static void SetDosAttributes(byte[] bytes, string entryName, uint attributes)
@@ -622,4 +801,36 @@ internal static class TestPackageBuilder
     }
 
     private sealed record EntrySpec(string Name, byte[] Contents);
+
+    private sealed class NonSeekableWriteStream(Stream source) : Stream
+    {
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => source.CanWrite;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => source.Flush();
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            source.Write(buffer, offset, count);
+
+        public override void Write(ReadOnlySpan<byte> buffer) => source.Write(buffer);
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
 }

@@ -65,6 +65,25 @@ public sealed class BundleArchiveTests
     }
 
     [Theory]
+    [InlineData(PackageFault.ValidDataDescriptor)]
+    [InlineData(PackageFault.ValidZip64)]
+    public void Valid_descriptor_and_zip64_archives_are_accepted(PackageFault fault)
+    {
+        string path = TestPackageBuilder.Create(fault);
+        try
+        {
+            BundleOpenResult result = BundleArchive.Open(path);
+
+            Assert.Empty(result.Issues);
+            using BundleArchive archive = Assert.IsType<BundleArchive>(result.Archive);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Theory]
     [InlineData(PackageFault.MissingSurface, "ZIP003")]
     [InlineData(PackageFault.ExtraEntry, "ZIP004")]
     [InlineData(PackageFault.UnsafePath, "ZIP005")]
@@ -177,6 +196,26 @@ public sealed class BundleArchiveTests
     [InlineData(PackageFault.LocalHeaderCrcMismatch)]
     [InlineData(PackageFault.LocalHeaderSizeMismatch)]
     public void Central_and_local_header_mismatch_returns_zip001(PackageFault fault)
+    {
+        string path = TestPackageBuilder.Create(fault);
+        try
+        {
+            BundleOpenResult result = BundleArchive.Open(path);
+
+            result.Archive?.Dispose();
+            Assert.Null(result.Archive);
+            Assert.Equal("ZIP001", Assert.Single(result.Issues).Code);
+        }
+        finally
+        {
+            TestPackageBuilder.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(PackageFault.DataDescriptorMismatch)]
+    [InlineData(PackageFault.Zip64LocatorMismatch)]
+    public void Invalid_descriptor_or_zip64_locator_returns_zip001(PackageFault fault)
     {
         string path = TestPackageBuilder.Create(fault);
         try
