@@ -33,9 +33,10 @@ Every command below is run from the repository unless noted.
    A rejection names the holder. Pick another slice or coordinate through
    the owner; never force-release another session's claim yourself.
 
-   For `file_glob` claims, `*` spans directory separators — `src/*` claims
-   the entire `src/` subtree, not just its top level — and overlapping
-   globs are rejected. Claim the narrowest glob that covers your slice.
+   A `file_glob` claim is a literal path or a directory claim `<dir>/*`,
+   which covers the entire subtree under `<dir>/`. Other patterns are
+   rejected, and two claims that share a path prefix conflict. Claim the
+   narrowest directory that covers your slice.
 
 ## While working
 

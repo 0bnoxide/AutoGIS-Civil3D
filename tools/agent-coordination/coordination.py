@@ -134,6 +134,7 @@ def tree_containing(path):
 
 GIT_MUTATORS = {
     "commit", "merge", "rebase", "cherry-pick", "revert", "reset", "am",
+    "restore", "clean",
 }
 REDIRECT_RE = re.compile(r"(?<![<>])>{1,2}\s*([^\s|;&<>]+)")
 
@@ -178,14 +179,35 @@ def _git_subcommand(argv):
     return "", len(argv)
 
 
+def _git_effective_workdir(argv, cwd):
+    """The tree a git command will act on: honors -C, --work-tree, and
+    --git-dir in both separated and = forms."""
+    workdir = cwd
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        value = None
+        if tok in ("-C", "--work-tree", "--git-dir") and i + 1 < len(argv):
+            value, i = argv[i + 1], i + 1
+        elif tok.startswith("--work-tree="):
+            value = tok[len("--work-tree="):]
+        elif tok.startswith("--git-dir="):
+            value = tok[len("--git-dir="):]
+        if value is not None:
+            resolved = value if os.path.isabs(value) \
+                else os.path.join(cwd or ".", value)
+            workdir = os.path.dirname(resolved) \
+                if tok.startswith("--git-dir") or tok == "--git-dir" \
+                else resolved
+        i += 1
+    return workdir
+
+
 def deny_reason_for_git_argv(argv, cwd):
     """Deny git commands that mutate main or push to remote main."""
     if not argv or argv[0] != "git":
         return None
-    workdir = cwd
-    for i, tok in enumerate(argv):
-        if tok == "-C" and i + 1 < len(argv):
-            workdir = os.path.join(cwd or ".", argv[i + 1])
+    workdir = _git_effective_workdir(argv, cwd)
     sub, sub_index = _git_subcommand(argv)
     if sub == "push":
         for tok in argv[sub_index + 1:]:
@@ -195,7 +217,10 @@ def deny_reason_for_git_argv(argv, cwd):
                 return (f"push targets remote '{MAIN_BRANCH}'. Integration "
                         "goes through pull requests only.")
         return None
-    if sub in GIT_MUTATORS:
+    # `checkout -b x` / `switch x` leave main's files alone; `checkout --
+    # <path>` overwrites them with no commit for pre-commit to catch.
+    is_mutator = sub in GIT_MUTATORS or (sub == "checkout" and "--" in argv)
+    if is_mutator:
         tree = tree_containing(workdir or ".")
         if tree and branch_of_tree(tree) == MAIN_BRANCH:
             return (f"git {sub} on '{MAIN_BRANCH}' is denied. main is "
@@ -210,45 +235,63 @@ def deny_reason_for_shell(command, cwd, repo_hint=None):
     commands plus common write forms (>, >>, tee, sed -i, dd of=, truncate).
     A full shell parser is deferred until a bypass is demonstrated.
     """
-    effective_cwd = cwd  # `cd` in one segment moves the later segments
+    for event in _shell_events(command, cwd):
+        if event[0] == "git":
+            reason = deny_reason_for_git_argv(event[1], event[2])
+        else:
+            reason = deny_reason_for_target(event[1], repo_hint)
+        if reason:
+            return reason
+    return None
+
+
+def _argv_of(stage):
+    try:
+        return shlex.split(stage.strip(), posix=True)
+    except ValueError:
+        return stage.split()
+
+
+def _shell_events(command, cwd):
+    """Yield ("git", argv, cwd) and ("target", resolved_path) events.
+
+    One parser feeds both the stateless main rule and the claim layer, so a
+    write form covered by one is covered by the other.
+    """
+    effective_cwd = cwd
     for segment in re.split(r"&&|\|\||;|\n", command):
         segment = segment.strip()
         if not segment:
             continue
-        targets = []
-        for match in REDIRECT_RE.finditer(segment):
-            targets.append(match.group(1))
-        # Writers can sit in any pipeline stage (`producer | tee file`), so
-        # every stage's argv is inspected, not just the first.
-        for stage in segment.split("|"):
-            try:
-                argv = shlex.split(stage.strip(), posix=True)
-            except ValueError:
-                argv = stage.split()
+        stages = segment.split("|")
+        first = _argv_of(stages[0])
+        # `cd` moves the parent shell only outside a pipeline; inside one it
+        # runs in a subshell and must NOT move later segments.
+        if len(stages) == 1 and first and first[0] == "cd" and len(first) > 1:
+            effective_cwd = first[1] if os.path.isabs(first[1]) \
+                else os.path.join(effective_cwd or ".", first[1])
+            continue
+        raw_targets = [m.group(1) for m in REDIRECT_RE.finditer(segment)]
+        for stage in stages:
+            argv = _argv_of(stage)
             if not argv:
                 continue
-            if argv[0] == "cd" and len(argv) > 1:
-                effective_cwd = argv[1] if os.path.isabs(argv[1]) \
-                    else os.path.join(effective_cwd or ".", argv[1])
-                continue
-            reason = deny_reason_for_git_argv(argv, effective_cwd)
-            if reason:
-                return reason
+            yield ("git", argv, effective_cwd)
             if argv[0] == "tee":
-                targets += [a for a in argv[1:] if not a.startswith("-")]
+                raw_targets += [a for a in argv[1:] if not a.startswith("-")]
             if argv[0] == "sed" and any(a.startswith("-i") for a in argv[1:]):
-                targets += [a for a in argv[1:] if not a.startswith("-")][-1:]
+                raw_targets += [a for a in argv[1:] if not a.startswith("-")][-1:]
             if argv[0] == "dd":
-                targets += [a[3:] for a in argv if a.startswith("of=")]
+                raw_targets += [a[3:] for a in argv if a.startswith("of=")]
             if argv[0] == "truncate":
-                targets += [a for a in argv[1:] if not a.startswith("-")]
-        for target in targets:
-            resolved = target if os.path.isabs(target) \
-                else os.path.join(effective_cwd or ".", target)
-            reason = deny_reason_for_target(resolved, repo_hint)
-            if reason:
-                return reason
-    return None
+                raw_targets += [a for a in argv[1:] if not a.startswith("-")]
+        for target in raw_targets:
+            yield ("target", target if os.path.isabs(target)
+                   else os.path.join(effective_cwd or ".", target))
+
+
+def shell_write_targets(command, cwd):
+    return [e[1] for e in _shell_events(command, cwd) if e[0] == "target"]
 
 
 # --------------------------------------------------------------------------
@@ -356,6 +399,28 @@ def _same_value(kind, a, b):
     return a == b
 
 
+def _glob_prefix(value):
+    """A claimable glob is a literal path or `<dir>/*` (whole-subtree claim).
+
+    Restricting the domain makes overlap exactly decidable — a prefix
+    relation — where arbitrary patterns would need glob intersection.
+    Returns the claimed prefix ("dir/" or the literal), or None if invalid.
+    """
+    value = value.replace("\\", "/")
+    if re.fullmatch(r"[^*?\[\]]+/\*", value):
+        return value[:-1]  # "src/*" -> "src/"
+    if re.fullmatch(r"[^*?\[\]]+", value):
+        return value
+    return None
+
+
+def _globs_overlap(a, b):
+    pa, pb = _glob_prefix(a), _glob_prefix(b)
+    if pa is None or pb is None:
+        return True  # unvalidatable legacy pattern: treat as conflicting
+    return pa.startswith(pb) or pb.startswith(pa)
+
+
 def claim(repo, session, kind, value, harness=""):
     if kind not in CLAIM_KINDS:
         raise ValueError(f"unknown claim kind '{kind}'")
@@ -363,17 +428,16 @@ def claim(repo, session, kind, value, harness=""):
     def apply(data):
         if kind == "adr":
             return _allocate_adr(repo, data, session, harness)
+        if kind == "file_glob" and _glob_prefix(value) is None:
+            return {"error": "file_glob must be a literal path or a "
+                             "directory claim of the form <dir>/* — "
+                             "arbitrary patterns make overlap undecidable"}
         for existing in data["claims"]:
             if existing["kind"] != kind or existing["session"] == session:
                 continue
             if _same_value(kind, existing["value"], value):
                 return {"rejected": existing}
-            # ponytail: overlap heuristic for globs — either pattern matching
-            # the other's literal text counts as a conflict ("src/*" vs
-            # "src/x/*"). Precise glob-intersection is deferred hardening.
-            if kind == "file_glob" and (
-                    fnmatch.fnmatch(value, existing["value"])
-                    or fnmatch.fnmatch(existing["value"], value)):
+            if kind == "file_glob" and _globs_overlap(value, existing["value"]):
                 return {"rejected": existing}
         record = {
             "id": uuid.uuid4().hex[:12],
@@ -714,6 +778,17 @@ def hook_pre_tool_use(payload_text):
         elif tool == "Bash" or tool == "PowerShell":
             command = tool_input.get("command", "")
             reason = deny_reason_for_shell(command, cwd, repo)
+            if reason is None and repo is not None:
+                # Shell write forms get the same claim layer as Edit/Write.
+                session = payload.get("session_id") \
+                    or os.environ.get("AGENT_SESSION_ID", "")
+                if session:
+                    try:
+                        reason = glob_conflict(
+                            list_claims(repo), session,
+                            shell_write_targets(command, cwd))
+                    except RegistryError:
+                        reason = None
         if reason:
             print(json.dumps({
                 "hookSpecificOutput": {

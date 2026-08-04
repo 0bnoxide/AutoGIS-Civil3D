@@ -111,6 +111,34 @@ class TestMainRule(TempRepoCase):
             f"cd {other} && git reset --hard", self.base, None)
         self.assertIsNotNone(reason)
 
+    def test_cd_inside_pipeline_does_not_move_later_segments(self):
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe, exist_ok=True)
+        reason = coordination.deny_reason_for_shell(
+            f"true | cd {safe} && git reset --hard", self.repo_path, self.repo)
+        self.assertIsNotNone(reason)
+
+    def test_worktree_and_gitdir_options_resolve_target_tree(self):
+        for form in ([f"--work-tree={self.repo_path}"],
+                     ["--work-tree", self.repo_path],
+                     [f"--git-dir={os.path.join(self.repo_path, '.git')}"]):
+            argv = ["git", *form, "reset", "--hard"]
+            self.assertIsNotNone(
+                coordination.deny_reason_for_git_argv(argv, self.base), argv)
+
+    def test_restore_clean_and_checkout_pathspec_denied_on_main(self):
+        for argv in (["git", "restore", "seed.txt"],
+                     ["git", "clean", "-fd"],
+                     ["git", "checkout", "--", "seed.txt"]):
+            self.assertIsNotNone(
+                coordination.deny_reason_for_git_argv(argv, self.repo_path),
+                argv)
+        for argv in (["git", "checkout", "-b", "feature2"],
+                     ["git", "switch", "-c", "feature3"]):
+            self.assertIsNone(
+                coordination.deny_reason_for_git_argv(argv, self.repo_path),
+                argv)
+
     def test_tee_in_pipeline_stage_denied(self):
         reason = coordination.deny_reason_for_shell(
             "echo boom | tee seed.txt", self.repo_path, self.repo)
@@ -174,6 +202,30 @@ class TestClaims(TempRepoCase):
         self.assertIn("rejected", overlap)
         disjoint = coordination.claim(self.repo, "s2", "file_glob", "docs/*")
         self.assertIn("claimed", disjoint)
+
+    def test_arbitrary_glob_patterns_rejected_at_claim(self):
+        for bad in ("src/*.cs", "src/test*", "**/x", "a?b"):
+            result = coordination.claim(self.repo, "s1", "file_glob", bad)
+            self.assertIn("error", result, bad)
+
+    def test_adapter_denies_shell_redirect_into_claimed_glob(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        self.repo = coordination.discover(self.repo_path)
+        coordination.claim(self.repo, "s1", "file_glob", "src/*")
+        import io
+        from contextlib import redirect_stdout
+        os.environ["AGENT_SESSION_ID"] = "s2"
+        try:
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                coordination.hook_pre_tool_use(json.dumps({
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "echo boom > src/code.cs"},
+                    "cwd": self.repo_path,
+                }))
+            self.assertIn("deny", buffer.getvalue())
+        finally:
+            del os.environ["AGENT_SESSION_ID"]
 
     def test_check_denies_target_in_another_sessions_glob(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
