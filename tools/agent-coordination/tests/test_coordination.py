@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, MODULE_DIR)
@@ -163,6 +164,40 @@ class TestMainRule(TempRepoCase):
             "rm -f seed.txt", self.repo_path, self.repo)
         self.assertIsNotNone(reason)
 
+    def test_cp_destination_on_main_denied(self):
+        for cmd in ("cp other.txt seed.txt", "mv other.txt seed.txt"):
+            reason = coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo)
+            self.assertIsNotNone(reason, cmd)
+
+    def test_mv_source_off_main_denied(self):
+        # mv deletes its source with no commit; only the adapter sees it.
+        outside = os.path.join(self.base, "elsewhere.txt").replace(os.sep, "/")
+        reason = coordination.deny_reason_for_shell(
+            f"mv seed.txt {outside}", self.repo_path, self.repo)
+        self.assertIsNotNone(reason)
+
+    def test_target_directory_flag_resolves_destination(self):
+        for flag in ("-t", "--target-directory"):
+            argv = ["mv", flag, "/dest", "a", "b"]
+            self.assertEqual(coordination._copy_move_operands(argv),
+                             ("/dest", ["a", "b"]), argv)
+        self.assertEqual(
+            coordination._copy_move_operands(
+                ["cp", "--target-directory=/dest", "a"]),
+            ("/dest", ["a"]))
+        self.assertEqual(coordination._copy_move_operands(["mv", "a", "b"]),
+                         ("b", ["a"]))
+        for argv in (["cp", "-rt", "/dest", "a"], ["cp", "-rt/dest", "a"]):
+            self.assertEqual(coordination._copy_move_operands(argv),
+                             ("/dest", ["a"]), argv)
+
+    def test_checkout_of_deleted_tracked_file_denied(self):
+        os.remove(os.path.join(self.repo_path, "seed.txt"))
+        reason = coordination.deny_reason_for_git_argv(
+            ["git", "checkout", "seed.txt"], self.repo_path)
+        self.assertIsNotNone(reason)
+
     def test_foreign_path_not_governed(self):
         outside = os.path.join(self.base, "elsewhere.txt")
         self.assertIsNone(coordination.deny_reason_for_target(outside, self.repo))
@@ -230,8 +265,8 @@ class TestClaims(TempRepoCase):
             fh.write("not json {")
         import io
         from contextlib import redirect_stdout
-        os.environ["AGENT_SESSION_ID"] = "s2"
-        try:
+        with mock.patch.dict(
+                os.environ, {"AGENT_SESSION_ID": "s2"}):
             buffer = io.StringIO()
             with redirect_stdout(buffer):
                 coordination.hook_pre_tool_use(json.dumps({
@@ -241,8 +276,6 @@ class TestClaims(TempRepoCase):
                     "cwd": self.repo_path,
                 }))
             self.assertIn("deny", buffer.getvalue())
-        finally:
-            del os.environ["AGENT_SESSION_ID"]
 
     def test_check_requires_targets_inside_own_scope(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
@@ -257,6 +290,48 @@ class TestClaims(TempRepoCase):
         self.assertEqual(
             coordination.cmd_check(self.repo, "s1", [outside]),
             coordination.DENY)
+
+    def test_adapter_enforces_callers_own_scope(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        self.repo = coordination.discover(self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s1", "file_glob", "src/*")
+        import io
+        from contextlib import redirect_stdout
+        with mock.patch.dict(
+                os.environ, {"AGENT_SESSION_ID": "s1"}):
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                coordination.hook_pre_tool_use(json.dumps({
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": os.path.join(
+                        self.repo_path, "docs", "x.md")},
+                    "cwd": self.repo_path,
+                }))
+            self.assertIn("outside your claimed file scope", buffer.getvalue())
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                coordination.hook_pre_tool_use(json.dumps({
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": os.path.join(
+                        self.repo_path, "src", "a.cs")},
+                    "cwd": self.repo_path,
+                }))
+            self.assertEqual(buffer.getvalue(), "")
+
+    def test_doctor_survives_broken_sync_script(self):
+        stub_dir = os.path.join(self.repo_path, "tools", "agent-assets")
+        os.makedirs(stub_dir, exist_ok=True)
+        with open(os.path.join(stub_dir, "sync.py"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("import sys; sys.exit(2)\n")
+        import io
+        from contextlib import redirect_stdout
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            rc = coordination.cmd_doctor(self.repo)
+        self.assertEqual(rc, coordination.ALLOW)
+        self.assertIn("failed to run (advisory)", buffer.getvalue())
 
     def test_doctor_reports_asset_drift(self):
         stub_dir = os.path.join(self.repo_path, "tools", "agent-assets")
@@ -291,8 +366,8 @@ class TestClaims(TempRepoCase):
         coordination.claim(self.repo, "s1", "file_glob", "src/*")
         import io
         from contextlib import redirect_stdout
-        os.environ["AGENT_SESSION_ID"] = "s2"
-        try:
+        with mock.patch.dict(
+                os.environ, {"AGENT_SESSION_ID": "s2"}):
             buffer = io.StringIO()
             with redirect_stdout(buffer):
                 coordination.hook_pre_tool_use(json.dumps({
@@ -301,8 +376,6 @@ class TestClaims(TempRepoCase):
                     "cwd": self.repo_path,
                 }))
             self.assertIn("deny", buffer.getvalue())
-        finally:
-            del os.environ["AGENT_SESSION_ID"]
 
     def test_check_denies_target_in_another_sessions_glob(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
@@ -344,8 +417,8 @@ class TestClaims(TempRepoCase):
         coordination.claim(self.repo, "s1", "file_glob", "src/*")
         import io
         from contextlib import redirect_stdout
-        os.environ["AGENT_SESSION_ID"] = "s2"
-        try:
+        with mock.patch.dict(
+                os.environ, {"AGENT_SESSION_ID": "s2"}):
             buffer = io.StringIO()
             with redirect_stdout(buffer):
                 coordination.hook_pre_tool_use(json.dumps({
@@ -355,8 +428,6 @@ class TestClaims(TempRepoCase):
                     "cwd": self.repo_path,
                 }))
             self.assertIn("deny", buffer.getvalue())
-        finally:
-            del os.environ["AGENT_SESSION_ID"]
 
     def test_glob_matches_from_linked_worktree(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)

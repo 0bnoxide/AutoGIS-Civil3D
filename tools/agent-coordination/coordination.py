@@ -222,7 +222,10 @@ def _git_effective_workdir(argv, cwd):
 def _is_checkout_restore(sub, argv, sub_index, workdir):
     """checkout acting as restore: overwrites files with no commit, so no
     hook fires. `-b`/`-B` and bare branch switches stay allowed; a `--`
-    pathspec or a positional naming an existing file is a restore."""
+    pathspec or a positional naming a tracked path is a restore. Tracked
+    status comes from git, not filesystem existence — a deleted tracked
+    file no longer exists on disk, yet checkout recreates it from the
+    index, discarding the uncommitted deletion."""
     if sub != "checkout":
         return False
     rest = argv[sub_index + 1:]
@@ -236,6 +239,10 @@ def _is_checkout_restore(sub, argv, sub_index, workdir):
         candidate = tok if os.path.isabs(tok) \
             else os.path.join(workdir or ".", tok)
         if os.path.exists(candidate):
+            return True
+        rc, _, _err = _git(["-C", workdir or ".", "ls-files",
+                            "--error-unmatch", tok])
+        if rc == 0:
             return True
     return False
 
@@ -288,6 +295,38 @@ def _argv_of(stage):
         return stage.split()
 
 
+def _copy_move_operands(argv):
+    """Split a cp/mv/install argv into (destination, sources).
+
+    `-t DIR` / `--target-directory=DIR` moves the destination out of the
+    positionals, so the value token must be consumed rather than treated as
+    a source; without that, the last source is mistaken for the destination.
+    """
+    dest, operands, expect_value = None, [], False
+    for arg in argv[1:]:
+        if expect_value:
+            dest, expect_value = arg, False
+        elif arg in ("-t", "--target-directory"):
+            expect_value = True
+        elif arg.startswith("--target-directory="):
+            dest = arg.split("=", 1)[1]
+        elif arg.startswith("-") and not arg.startswith("--") and "t" in arg:
+            # bundled short flags: -rt DIR, -rtDIR. `t` is the only
+            # value-taking short option cp/mv/install share.
+            value = arg.partition("t")[2]
+            if value:
+                dest = value
+            else:
+                expect_value = True
+        elif not arg.startswith("-"):
+            operands.append(arg)
+    if dest is not None:
+        return dest, operands
+    if len(operands) >= 2:
+        return operands[-1], operands[:-1]
+    return None, []
+
+
 def _shell_events(command, cwd):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
@@ -325,6 +364,13 @@ def _shell_events(command, cwd):
                 # A deletion never reaches a commit, so no hook can restore
                 # it; the adapter is the only layer that sees it.
                 raw_targets += [a for a in argv[1:] if not a.startswith("-")]
+            if argv[0] in ("cp", "mv", "install"):
+                dest, sources = _copy_move_operands(argv)
+                if dest:
+                    raw_targets.append(dest)
+                if argv[0] == "mv":
+                    # mv removes its sources with no commit, like rm.
+                    raw_targets += sources
         for target in raw_targets:
             yield ("target", target if os.path.isabs(target)
                    else os.path.join(effective_cwd or ".", target))
@@ -649,14 +695,21 @@ def cmd_doctor(repo):
     sync_script = os.path.join(repo.worktree_root, "tools", "agent-assets",
                                "sync.py")
     if os.path.exists(sync_script):
-        proc = subprocess.run(
-            [sys.executable, sync_script, "--check"],
-            capture_output=True, text=True, encoding="utf-8", timeout=60,
-        )
-        if proc.returncode == 1:
+        # doctor is advisory: a hanging, unspawnable, or garbage-emitting
+        # sync must become a finding, never abort the diagnostic run.
+        try:
+            proc = subprocess.run(
+                [sys.executable, sync_script, "--check"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=60,
+            )
+            rc = proc.returncode
+        except (subprocess.TimeoutExpired, OSError):
+            rc = -1
+        if rc == 1:
             findings.append("agent-asset drift (rendered copies edited "
                             "directly?): run tools/agent-assets/sync.py")
-        elif proc.returncode not in (0, 1):
+        elif rc != 0:
             findings.append("agent-asset drift check failed to run (advisory)")
     for tool in ("gh", "codebase-memory-mcp"):
         from shutil import which
@@ -705,26 +758,10 @@ def cmd_check(repo, session, targets):
     except RegistryError as exc:
         print(f"operational: {exc}", file=sys.stderr)
         return OPFAIL
-    denial = glob_conflict(claims, session, targets)
+    denial = claim_denial(claims, session, targets)
     if denial:
         print(f"deny: {denial}", file=sys.stderr)
         return DENY
-    if session and targets:
-        my_globs = [c["value"] for c in claims
-                    if c["kind"] == "file_glob" and c["session"] == session]
-        if my_globs:
-            # A session that scoped itself with file_glob claims must stay
-            # inside that scope, not merely outside everyone else's.
-            for target in targets:
-                tree = tree_containing(target)
-                if tree is None:
-                    continue
-                rel = os.path.relpath(_norm(target), tree).replace(os.sep, "/")
-                if not any(fnmatch.fnmatch(rel, g) for g in my_globs):
-                    print(f"deny: '{rel}' is outside your claimed file "
-                          f"scope ({', '.join(my_globs)}). Claim it or "
-                          "narrow the change.", file=sys.stderr)
-                    return DENY
     if session:
         mine = [c for c in claims if c["session"] == session]
         branch_ok = any(
@@ -750,6 +787,49 @@ def cmd_check(repo, session, targets):
                   file=sys.stderr)
             return DENY
     return ALLOW
+
+
+def claim_denial(claims, session, targets):
+    """Positive claim validation, shared by `check` and the adapter so the
+    automatic path is never weaker than the explicit command: others' globs,
+    the caller's own file scope, and the branch claim of each target's tree.
+    """
+    reason = glob_conflict(claims, session, targets)
+    if reason or not session:
+        return reason
+    my_globs = [c["value"] for c in claims
+                if c["kind"] == "file_glob" and c["session"] == session]
+    for target in targets:
+        tree = tree_containing(target)
+        if tree is None:
+            continue
+        rel = os.path.relpath(_norm(target), tree).replace(os.sep, "/")
+        if my_globs and not any(fnmatch.fnmatch(rel, g) for g in my_globs):
+            return (f"'{rel}' is outside your claimed file scope "
+                    f"({', '.join(my_globs)}). Claim it or narrow the change.")
+        reason = _branch_claim_denial(claims, session, branch_of_tree(tree))
+        if reason:
+            return reason
+    return None
+
+
+def _branch_claim_denial(claims, session, branch):
+    """Reason string when `branch` is claimed by someone else, or unclaimed."""
+    if not branch or branch == MAIN_BRANCH:
+        return None
+    branch_claims = [c for c in claims
+                     if c["kind"] == "branch" and c["value"] == branch]
+    other = next((c for c in branch_claims
+                  if c["session"] != session), None)
+    if other:
+        return (f"branch '{branch}' is claimed by session "
+                f"{other['session']} (claim {other['id']}). "
+                "Coordinate or pick another slice.")
+    if not any(c["session"] == session for c in branch_claims):
+        return (f"no claim for branch '{branch}' by session "
+                f"{session}. Claim it first:  coordination.py claim "
+                f"--session {session} --kind branch --value {branch}")
+    return None
 
 
 def glob_conflict(claims, session, targets):
@@ -850,7 +930,7 @@ def hook_pre_tool_use(payload_text):
                         or os.environ.get("AGENT_SESSION_ID", "")
                     if session:
                         try:
-                            reason = glob_conflict(
+                            reason = claim_denial(
                                 list_claims(repo), session, [target])
                         except RegistryError as exc:
                             # Claim-dependent writes are blocked on corrupt
@@ -866,7 +946,7 @@ def hook_pre_tool_use(payload_text):
                     or os.environ.get("AGENT_SESSION_ID", "")
                 if session:
                     try:
-                        reason = glob_conflict(
+                        reason = claim_denial(
                             list_claims(repo), session,
                             shell_write_targets(command, cwd))
                     except RegistryError as exc:
