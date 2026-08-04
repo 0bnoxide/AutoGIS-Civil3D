@@ -21,7 +21,9 @@ Agent-to-agent review is not continuous. `chatgpt-codex-connector` is a separate
 Review depth is proportioned to risk:
 
 - **Full review** — product code, contract schemas, issue codes, fixtures, CI configuration, and coordination tooling. An independent reviewer verifies the exact pushed head, runs the suite, and records evidence; findings are dispositioned before merge.
-- **Light review** — governance and documentation: roadmap, ADRs, guides, READMEs. One adversarial pass plus green checks is sufficient. No independent-review round, no per-finding rationale, no head-change narration.
+- **Light review** — governance and documentation: roadmap, ADRs, guides, READMEs. One adversarial pass plus green checks is sufficient. No second review round, no per-finding rationale, no head-change narration. The pass itself is not optional: a light-tier change still requires a reader other than its author.
+
+In the light tier the merged head need not equal the reviewed head, provided the delta between them is confined to addressing that pass's findings. Any change beyond that scope — new content, a different decision, an unrelated fix — restarts the bar and requires a fresh pass. In the full tier the reviewed head and the merged head must be the same commit.
 
 Practices that apply to both tiers:
 
@@ -44,6 +46,12 @@ Governance changes move at the speed of a single pass. Code keeps its scrutiny.
 
 The floor is a floor, not a target. If defects begin reaching `main`, the correction is to raise the tier of whatever drifted, not to add rounds uniformly. Drift is judged by what reaches `main`, not by review volume.
 
-Because the light tier removes the second reader from governance documents, those documents must be reviewed against their own stated rules rather than read as prose. The PR #7 defects were all of that kind: a miscounted reference, a status contradicting the vocabulary that defined it, a log row out of sequence, and a task-tracker line in a file that forbids task tracking.
+Because the light tier removes the second review *round* — not the second reader — a governance document gets exactly one outside pass, and that pass must read it against its own stated rules rather than as prose. The PR #7 defects were all of that kind: a miscounted reference, a status contradicting the vocabulary that defined it, a log row out of sequence, and a task-tracker line in a file that forbids task tracking. None would be caught by reading for sense.
 
-This ADR supersedes no part of ADR-0002 except the implication that every work item carries a distinct reviewer role. Main protection, worktree isolation, and exact-head review within the full tier are unchanged.
+This ADR supersedes three things in [ADR-0002](0002-agent-collaboration-and-main-protection.md), and nothing else:
+
+1. **Role rotation, both tiers.** ADR-0002 assigns one writer and one independent reviewer per work item with roles rotating. Rotation is no longer required; the same agent may write consecutive items. The reviewing perspective must still differ from the writing one.
+2. **Exact-head review, light tier only.** ADR-0002 requires review of the exact pushed head. Batching fixes after a single pass necessarily means the merged head is not the reviewed head, so in the light tier that requirement is replaced by the bounded rule in the Decision: the delta must be confined to addressing the pass's findings.
+3. **The implication that every work item carries a distinct reviewer role.**
+
+Main protection, worktree isolation, and exact-head review within the full tier are unchanged.
