@@ -2,7 +2,7 @@ using AutoGIS.Civil3D.FixtureBuilder;
 
 if (args.Length != 1)
 {
-    Console.Error.WriteLine("Usage: AutoGIS.Civil3D.FixtureBuilder <output-directory>");
+    await Console.Error.WriteLineAsync("Usage: AutoGIS.Civil3D.FixtureBuilder <output-directory>");
     return 2;
 }
 

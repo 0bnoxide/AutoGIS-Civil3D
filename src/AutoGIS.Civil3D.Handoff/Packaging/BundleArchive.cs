@@ -135,29 +135,20 @@ internal sealed class BundleArchive : IDisposable
 
     private static ValidationIssue? ValidateEntries(IReadOnlyList<ZipEntry> entries)
     {
-        foreach (ZipEntry entry in entries)
+        if (entries.Any(entry => !IsSafeEntryName(entry.Name)))
         {
-            if (!IsSafeEntryName(entry.Name))
-            {
-                return Error(IssueCodes.UnsafeEntryName, "The ZIP contains an unsafe entry name.");
-            }
+            return Error(IssueCodes.UnsafeEntryName, "The ZIP contains an unsafe entry name.");
         }
 
-        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
-        foreach (ZipEntry entry in entries)
+        if (entries.Select(entry => entry.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count() != entries.Count)
         {
-            if (!names.Add(entry.Name))
-            {
-                return Error(IssueCodes.DuplicateEntryName, "The ZIP contains duplicate entry names.");
-            }
+            return Error(IssueCodes.DuplicateEntryName, "The ZIP contains duplicate entry names.");
         }
 
-        foreach (ZipEntry entry in entries)
+        if (entries.Any(entry => !IsExpectedEntryName(entry.Name)))
         {
-            if (!IsExpectedEntryName(entry.Name))
-            {
-                return Error(IssueCodes.UnexpectedEntry, "The ZIP contains an unexpected entry.");
-            }
+            return Error(IssueCodes.UnexpectedEntry, "The ZIP contains an unexpected entry.");
         }
 
         if (!ContainsEntry(entries, ManifestEntryName) || !ContainsEntry(entries, SurfaceEntryName))
@@ -165,36 +156,25 @@ internal sealed class BundleArchive : IDisposable
             return Error(IssueCodes.MissingRequiredEntry, "The ZIP is missing a required entry.");
         }
 
-        foreach (ZipEntry entry in entries)
+        if (entries.Any(entry => !IsRegularFile(entry)))
         {
-            if (!IsRegularFile(entry))
-            {
-                return Error(IssueCodes.NonRegularEntry, "The ZIP contains a non-regular entry.");
-            }
+            return Error(IssueCodes.NonRegularEntry, "The ZIP contains a non-regular entry.");
         }
 
-        foreach (ZipEntry entry in entries)
+        if (entries.Any(entry => entry.IsCrypted))
         {
-            if (entry.IsCrypted)
-            {
-                return Error(IssueCodes.EncryptedEntry, "The ZIP contains an encrypted entry.");
-            }
+            return Error(IssueCodes.EncryptedEntry, "The ZIP contains an encrypted entry.");
         }
 
-        foreach (ZipEntry entry in entries)
+        if (entries.Any(entry =>
+                entry.CompressionMethod is not (CompressionMethod.Stored or CompressionMethod.Deflated)))
         {
-            if (entry.CompressionMethod is not (CompressionMethod.Stored or CompressionMethod.Deflated))
-            {
-                return Error(IssueCodes.UnsupportedCompression, "The ZIP uses an unsupported compression method.");
-            }
+            return Error(IssueCodes.UnsupportedCompression, "The ZIP uses an unsupported compression method.");
         }
 
-        foreach (ZipEntry entry in entries)
+        if (entries.Any(entry => entry.Size < 0 || entry.CompressedSize < 0))
         {
-            if (entry.Size < 0 || entry.CompressedSize < 0)
-            {
-                return Error(IssueCodes.InvalidArchive, "The ZIP contains an entry with an invalid declared size.");
-            }
+            return Error(IssueCodes.InvalidArchive, "The ZIP contains an entry with an invalid declared size.");
         }
 
         ZipEntry manifestEntry = FindEntry(entries, ManifestEntryName);

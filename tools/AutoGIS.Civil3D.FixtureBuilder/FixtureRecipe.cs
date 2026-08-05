@@ -13,6 +13,8 @@ internal sealed record FixtureRecipe(
 
 internal static class FixtureCatalog
 {
+    private const string SurfaceEntryName = "surface.landxml";
+
     private const string ValidSurface = """
         <?xml version="1.0" encoding="utf-8"?>
         <LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2" version="1.2">
@@ -70,10 +72,10 @@ internal static class FixtureCatalog
                 ZipRecipeWriter.Write(stagedPath, recipe);
             }
 
-            foreach (FixtureRecipe recipe in Recipes())
+            foreach (string relativePath in Recipes().Select(recipe => recipe.RelativePath))
             {
-                string stagedPath = GetBoundedPath(stagingRoot, recipe.RelativePath);
-                string destinationPath = GetBoundedPath(fullOutputRoot, recipe.RelativePath);
+                string stagedPath = GetBoundedPath(stagingRoot, relativePath);
+                string destinationPath = GetBoundedPath(fullOutputRoot, relativePath);
                 string destinationDirectory = Path.GetDirectoryName(destinationPath)!;
                 Directory.CreateDirectory(destinationDirectory);
                 RejectReparsePoints(destinationDirectory);
@@ -162,25 +164,25 @@ internal static class FixtureCatalog
                 knownManifest,
                 ValidSurface,
                 CompressionMethod.Stored,
-                bytes => ZipHeaderMutator.SetUnixMode(bytes, "surface.landxml", 0xA1FF)),
+                bytes => ZipHeaderMutator.SetUnixMode(bytes, SurfaceEntryName, 0xA1FF)),
             new(
                 "invalid/dos-reparse-entry.zip",
                 knownManifest,
                 ValidSurface,
                 CompressionMethod.Stored,
-                bytes => ZipHeaderMutator.SetDosAttributes(bytes, "surface.landxml", 0x0400)),
+                bytes => ZipHeaderMutator.SetDosAttributes(bytes, SurfaceEntryName, 0x0400)),
             new(
                 "invalid/encrypted-entry.zip",
                 knownManifest,
                 ValidSurface,
                 CompressionMethod.Stored,
-                bytes => ZipHeaderMutator.SetEncrypted(bytes, "surface.landxml")),
+                bytes => ZipHeaderMutator.SetEncrypted(bytes, SurfaceEntryName)),
             new(
                 "invalid/unsupported-compression.zip",
                 knownManifest,
                 ValidSurface,
                 CompressionMethod.Stored,
-                bytes => ZipHeaderMutator.SetCompressionMethod(bytes, "surface.landxml", 12)),
+                bytes => ZipHeaderMutator.SetCompressionMethod(bytes, SurfaceEntryName, 12)),
             new(
                 "invalid/manifest-too-large.zip",
                 knownManifest,
@@ -192,7 +194,7 @@ internal static class FixtureCatalog
                 knownManifest,
                 ValidSurface,
                 CompressionMethod.Stored,
-                bytes => ZipHeaderMutator.SetUncompressedSize(bytes, "surface.landxml", SurfaceTooLargeSize)),
+                bytes => ZipHeaderMutator.SetUncompressedSize(bytes, SurfaceEntryName, SurfaceTooLargeSize)),
             new(
                 "invalid/compression-ratio.zip",
                 CreateManifest(ratioSurface, knownDatum: true),

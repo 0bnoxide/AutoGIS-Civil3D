@@ -58,11 +58,13 @@ internal static class ZipHeaderMutator
         string entryName,
         Action<int, int> mutation)
     {
-        for (int offset = 0; offset <= archive.Length - 46; offset++)
+        int offset = 0;
+        while (offset <= archive.Length - 46)
         {
             if (BinaryPrimitives.ReadUInt32LittleEndian(archive.AsSpan(offset))
                 != CentralDirectoryHeaderSignature)
             {
+                offset++;
                 continue;
             }
 
@@ -78,7 +80,7 @@ internal static class ZipHeaderMutator
             string currentName = Encoding.UTF8.GetString(archive, offset + 46, nameLength);
             if (!string.Equals(currentName, entryName, StringComparison.Ordinal))
             {
-                offset += recordLength - 1;
+                offset += recordLength;
                 continue;
             }
 
