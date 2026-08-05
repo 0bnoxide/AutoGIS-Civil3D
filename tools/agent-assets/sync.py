@@ -58,7 +58,9 @@ def parse_frontmatter(md_text):
     lines = md_text.splitlines(keepends=True)
     if not lines or lines[0].rstrip("\r\n") != "---":
         return {}, md_text
-    for index in range(1, len(lines)):
+    # Start at 2: the regex required a newline between the fences, so a
+    # closing fence directly after the opener is not a match.
+    for index in range(2, len(lines)):
         if lines[index].rstrip("\r\n") != "---":
             continue
         fields = {}
