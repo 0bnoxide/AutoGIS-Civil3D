@@ -55,6 +55,31 @@ internal static class LandXmlSurfaceParser
         }
     }
 
+    /// <summary>
+    /// Mutable accumulator threaded through the streaming parse. One instance
+    /// per document; the element handlers below are its only writers.
+    /// </summary>
+    private sealed class ParseState
+    {
+        public readonly List<ElementFrame> Ancestors = [];
+        public readonly Dictionary<long, Point3> Points = [];
+        public readonly List<ValidationIssue> Issues = [];
+        public string? SurfaceName;
+        public int EpsgCode;
+        public LinearUnit? HorizontalUnit;
+        public VerticalUnitFamily? VerticalUnitFamily;
+        public long SurfaceCount;
+        public long CanonicalSurfaceCount;
+        public long DefinitionCount;
+        public long PointCount;
+        public long FaceCount;
+        public int CoordinateSystemCount;
+        public int UnitDeclarationCount;
+        public bool EnvelopeInvalid;
+        public bool DefinitionInvalid;
+        public bool SurfaceInvalid;
+    }
+
     private static LandXmlParseResult Parse(XmlReader reader)
     {
         if (reader.MoveToContent() != XmlNodeType.Element)
@@ -62,187 +87,236 @@ internal static class LandXmlSurfaceParser
             return Invalid(IssueCodes.LandXmlMalformed, "surface.landxml does not contain a root element.");
         }
 
-        bool envelopeInvalid =
-            reader.Depth != 0 ||
-            reader.LocalName != LandXmlElementName ||
-            reader.NamespaceURI != LandXmlNamespace ||
-            reader.GetAttribute("version") != SupportedVersion;
-
-        List<ElementFrame> ancestors = [];
-        Dictionary<long, Point3> points = [];
-        List<ValidationIssue> issues = [];
-        string? surfaceName = null;
-        int epsgCode = 0;
-        LinearUnit? horizontalUnit = null;
-        VerticalUnitFamily? verticalUnitFamily = null;
-        long surfaceCount = 0;
-        long canonicalSurfaceCount = 0;
-        long definitionCount = 0;
-        long pointCount = 0;
-        long faceCount = 0;
-        int coordinateSystemCount = 0;
-        int unitDeclarationCount = 0;
-        bool definitionInvalid = false;
-        bool surfaceInvalid = false;
+        ParseState state = new()
+        {
+            EnvelopeInvalid =
+                reader.Depth != 0 ||
+                reader.LocalName != LandXmlElementName ||
+                reader.NamespaceURI != LandXmlNamespace ||
+                reader.GetAttribute("version") != SupportedVersion,
+        };
 
         while (!reader.EOF)
         {
             if (reader.NodeType == XmlNodeType.Element)
             {
-                ElementFrame element = new(reader.LocalName, reader.NamespaceURI);
-
-                if (IsLandXmlElement(element, "Metric") || IsLandXmlElement(element, "Imperial"))
+                // A leaf handler has already advanced the reader past its
+                // subtree; re-entering reader.Read() would skip a node.
+                if (HandleElement(reader, state))
                 {
-                    if (HasLandXmlAncestorPath(ancestors, LandXmlElementName, "Units"))
-                    {
-                        unitDeclarationCount++;
-                        ParseUnits(reader, ref horizontalUnit, ref verticalUnitFamily, ref envelopeInvalid);
-                    }
-                }
-                else if (IsLandXmlElement(element, "CoordinateSystem"))
-                {
-                    if (HasLandXmlAncestorPath(ancestors, LandXmlElementName))
-                    {
-                        coordinateSystemCount++;
-                        if (!TryParsePositiveInt32(reader.GetAttribute("epsgCode"), out epsgCode))
-                        {
-                            envelopeInvalid = true;
-                        }
-                    }
-                }
-                else if (IsLandXmlElement(element, SurfaceElementName))
-                {
-                    surfaceCount++;
-                    if (HasLandXmlAncestorPath(ancestors, LandXmlElementName, SurfacesElementName))
-                    {
-                        canonicalSurfaceCount++;
-                        string? candidateName = reader.GetAttribute("name")?.Trim();
-                        if (string.IsNullOrEmpty(candidateName))
-                        {
-                            surfaceInvalid = true;
-                        }
-                        else if (surfaceName is null)
-                        {
-                            surfaceName = candidateName;
-                        }
-                    }
-                }
-                else if (IsLandXmlElement(element, "Definition") &&
-                    HasLandXmlAncestorPath(ancestors, LandXmlElementName, SurfacesElementName, SurfaceElementName))
-                {
-                    definitionCount++;
-                    if (reader.GetAttribute("surfType") != "TIN")
-                    {
-                        definitionInvalid = true;
-                    }
-                }
-                else if (IsLandXmlElement(element, "P") &&
-                    HasLandXmlAncestorPath(
-                        ancestors,
-                        LandXmlElementName,
-                        SurfacesElementName,
-                        SurfaceElementName,
-                        "Definition",
-                        "Pnts"))
-                {
-                    string? idText = reader.GetAttribute("id");
-                    LeafContent pointContent = ReadLeafContent(reader);
-                    surfaceCount += pointContent.SameNamespaceSurfaceCount;
-                    if (pointContent.HasChildElement)
-                    {
-                        AddIssueOnce(issues, IssueCodes.LandXmlInvalidPoint, "A TIN point is malformed.");
-                    }
-                    else
-                    {
-                        ParsePoint(idText, pointContent, points, issues, ref pointCount);
-                    }
-
                     continue;
-                }
-                else if (IsLandXmlElement(element, "F") &&
-                    HasLandXmlAncestorPath(
-                        ancestors,
-                        LandXmlElementName,
-                        SurfacesElementName,
-                        SurfaceElementName,
-                        "Definition",
-                        "Faces"))
-                {
-                    LeafContent faceContent = ReadLeafContent(reader);
-                    surfaceCount += faceContent.SameNamespaceSurfaceCount;
-                    faceCount++;
-                    if (faceContent.HasChildElement)
-                    {
-                        AddIssueOnce(issues, IssueCodes.LandXmlInvalidFace, "A TIN face is malformed.");
-                    }
-                    else
-                    {
-                        ParseFace(faceContent, points, issues);
-                    }
-
-                    continue;
-                }
-
-                if (!reader.IsEmptyElement)
-                {
-                    ancestors.Add(element);
                 }
             }
             else if (reader.NodeType == XmlNodeType.EndElement)
             {
-                if (ancestors.Count == 0 ||
-                    ancestors[^1].LocalName != reader.LocalName ||
-                    ancestors[^1].NamespaceUri != reader.NamespaceURI)
-                {
-                    throw new XmlException("The LandXML element stack is inconsistent.");
-                }
-
-                ancestors.RemoveAt(ancestors.Count - 1);
+                PopAncestor(reader, state.Ancestors);
             }
 
             reader.Read();
         }
 
-        if (unitDeclarationCount != 1 || coordinateSystemCount != 1 ||
-            horizontalUnit is null || verticalUnitFamily is null || epsgCode <= 0)
+        return BuildResult(state);
+    }
+
+    /// <summary>Dispatches one element event. Returns true when the handler
+    /// consumed the element's subtree and the reader is already advanced.</summary>
+    private static bool HandleElement(XmlReader reader, ParseState state)
+    {
+        ElementFrame element = new(reader.LocalName, reader.NamespaceURI);
+
+        if (IsLandXmlElement(element, "Metric") || IsLandXmlElement(element, "Imperial"))
         {
-            envelopeInvalid = true;
+            HandleUnitDeclaration(reader, state);
+        }
+        else if (IsLandXmlElement(element, "CoordinateSystem"))
+        {
+            HandleCoordinateSystem(reader, state);
+        }
+        else if (IsLandXmlElement(element, SurfaceElementName))
+        {
+            HandleSurface(reader, state);
+        }
+        else if (IsLandXmlElement(element, "Definition") &&
+            HasLandXmlAncestorPath(
+                state.Ancestors, LandXmlElementName, SurfacesElementName, SurfaceElementName))
+        {
+            state.DefinitionCount++;
+            if (reader.GetAttribute("surfType") != "TIN")
+            {
+                state.DefinitionInvalid = true;
+            }
+        }
+        else if (IsLandXmlElement(element, "P") &&
+            HasLandXmlAncestorPath(
+                state.Ancestors,
+                LandXmlElementName,
+                SurfacesElementName,
+                SurfaceElementName,
+                "Definition",
+                "Pnts"))
+        {
+            HandlePointLeaf(reader, state);
+            return true;
+        }
+        else if (IsLandXmlElement(element, "F") &&
+            HasLandXmlAncestorPath(
+                state.Ancestors,
+                LandXmlElementName,
+                SurfacesElementName,
+                SurfaceElementName,
+                "Definition",
+                "Faces"))
+        {
+            HandleFaceLeaf(reader, state);
+            return true;
         }
 
-        if (envelopeInvalid)
+        if (!reader.IsEmptyElement)
+        {
+            state.Ancestors.Add(element);
+        }
+
+        return false;
+    }
+
+    private static void HandleUnitDeclaration(XmlReader reader, ParseState state)
+    {
+        if (!HasLandXmlAncestorPath(state.Ancestors, LandXmlElementName, "Units"))
+        {
+            return;
+        }
+
+        state.UnitDeclarationCount++;
+        LinearUnit? horizontalUnit = state.HorizontalUnit;
+        VerticalUnitFamily? verticalUnitFamily = state.VerticalUnitFamily;
+        bool envelopeInvalid = state.EnvelopeInvalid;
+        ParseUnits(reader, ref horizontalUnit, ref verticalUnitFamily, ref envelopeInvalid);
+        state.HorizontalUnit = horizontalUnit;
+        state.VerticalUnitFamily = verticalUnitFamily;
+        state.EnvelopeInvalid = envelopeInvalid;
+    }
+
+    private static void HandleCoordinateSystem(XmlReader reader, ParseState state)
+    {
+        if (!HasLandXmlAncestorPath(state.Ancestors, LandXmlElementName))
+        {
+            return;
+        }
+
+        state.CoordinateSystemCount++;
+        if (!TryParsePositiveInt32(reader.GetAttribute("epsgCode"), out int epsgCode))
+        {
+            state.EnvelopeInvalid = true;
+        }
+
+        state.EpsgCode = epsgCode;
+    }
+
+    private static void HandleSurface(XmlReader reader, ParseState state)
+    {
+        state.SurfaceCount++;
+        if (!HasLandXmlAncestorPath(state.Ancestors, LandXmlElementName, SurfacesElementName))
+        {
+            return;
+        }
+
+        state.CanonicalSurfaceCount++;
+        string? candidateName = reader.GetAttribute("name")?.Trim();
+        if (string.IsNullOrEmpty(candidateName))
+        {
+            state.SurfaceInvalid = true;
+        }
+        else if (state.SurfaceName is null)
+        {
+            state.SurfaceName = candidateName;
+        }
+    }
+
+    private static void HandlePointLeaf(XmlReader reader, ParseState state)
+    {
+        string? idText = reader.GetAttribute("id");
+        LeafContent pointContent = ReadLeafContent(reader);
+        state.SurfaceCount += pointContent.SameNamespaceSurfaceCount;
+        if (pointContent.HasChildElement)
+        {
+            AddIssueOnce(state.Issues, IssueCodes.LandXmlInvalidPoint, "A TIN point is malformed.");
+            return;
+        }
+
+        long pointCount = state.PointCount;
+        ParsePoint(idText, pointContent, state.Points, state.Issues, ref pointCount);
+        state.PointCount = pointCount;
+    }
+
+    private static void HandleFaceLeaf(XmlReader reader, ParseState state)
+    {
+        LeafContent faceContent = ReadLeafContent(reader);
+        state.SurfaceCount += faceContent.SameNamespaceSurfaceCount;
+        state.FaceCount++;
+        if (faceContent.HasChildElement)
+        {
+            AddIssueOnce(state.Issues, IssueCodes.LandXmlInvalidFace, "A TIN face is malformed.");
+            return;
+        }
+
+        ParseFace(faceContent, state.Points, state.Issues);
+    }
+
+    private static void PopAncestor(XmlReader reader, List<ElementFrame> ancestors)
+    {
+        if (ancestors.Count == 0 ||
+            ancestors[^1].LocalName != reader.LocalName ||
+            ancestors[^1].NamespaceUri != reader.NamespaceURI)
+        {
+            throw new XmlException("The LandXML element stack is inconsistent.");
+        }
+
+        ancestors.RemoveAt(ancestors.Count - 1);
+    }
+
+    private static LandXmlParseResult BuildResult(ParseState state)
+    {
+        if (state.UnitDeclarationCount != 1 || state.CoordinateSystemCount != 1 ||
+            state.HorizontalUnit is null || state.VerticalUnitFamily is null || state.EpsgCode <= 0)
+        {
+            state.EnvelopeInvalid = true;
+        }
+
+        if (state.EnvelopeInvalid)
         {
             return Invalid(
                 IssueCodes.LandXmlUnsupportedVersion,
                 "LandXML must use the supported 1.2 envelope, units, and EPSG declaration.");
         }
 
-        if (surfaceCount != 1 || canonicalSurfaceCount != 1 || surfaceInvalid || surfaceName is null)
+        if (state.SurfaceCount != 1 || state.CanonicalSurfaceCount != 1 ||
+            state.SurfaceInvalid || state.SurfaceName is null)
         {
             return Invalid(
                 IssueCodes.LandXmlInvalidSurfaceCount,
                 "LandXML must contain exactly one named surface.");
         }
 
-        if (definitionCount != 1 || definitionInvalid)
+        if (state.DefinitionCount != 1 || state.DefinitionInvalid)
         {
             return Invalid(
                 IssueCodes.LandXmlInvalidDefinitionCount,
                 "The surface must contain exactly one TIN definition.");
         }
 
-        if (pointCount == 0)
+        if (state.PointCount == 0)
         {
             return Invalid(
                 IssueCodes.LandXmlInvalidPoint,
                 "The TIN definition must contain valid points.");
         }
 
-        if (issues.Count > 0)
+        if (state.Issues.Count > 0)
         {
-            return new LandXmlParseResult(null, [issues[0]]);
+            return new LandXmlParseResult(null, [state.Issues[0]]);
         }
 
-        if (faceCount == 0)
+        if (state.FaceCount == 0)
         {
             return Invalid(
                 IssueCodes.LandXmlInvalidFace,
@@ -251,12 +325,12 @@ internal static class LandXmlSurfaceParser
 
         LandXmlSurfaceSummary summary = new(
             SupportedVersion,
-            surfaceName!,
-            pointCount,
-            faceCount,
-            epsgCode,
-            horizontalUnit!.Value,
-            verticalUnitFamily!.Value);
+            state.SurfaceName!,
+            state.PointCount,
+            state.FaceCount,
+            state.EpsgCode,
+            state.HorizontalUnit!.Value,
+            state.VerticalUnitFamily!.Value);
         return new LandXmlParseResult(summary, Array.Empty<ValidationIssue>());
     }
 
