@@ -377,8 +377,9 @@ def _shell_events(command, cwd):
             target = target.strip("\"'")
             if "$" in target or "`" in target:
                 # Unexpanded substitution: not evaluable here. Fail open —
-                # the adapter's contract — and let the stateless git hooks
-                # backstop whatever the shell actually resolves it to.
+                # the adapter's contract (#17). Git hooks backstop write
+                # forms; delete-class targets (rm, mv sources) have no
+                # backstop, an accepted residual of failing open.
                 continue
             target = os.path.expanduser(target)
             yield ("target", target if os.path.isabs(target)
