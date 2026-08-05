@@ -142,6 +142,35 @@ class TestMainRule(TempRepoCase):
         self.assertIsNotNone(coordination.deny_reason_for_git_argv(
             ["git", "push", "-f", "origin", "feature:main"], self.repo_path))
 
+    def test_git_worktree_mutators_denied_on_main(self):
+        # rm/mv/stash/apply mutate the tree with no commit, so no
+        # pre-commit backstop (#42).
+        for argv in (["git", "rm", "seed.txt"],
+                     ["git", "mv", "seed.txt", "other.txt"],
+                     ["git", "stash"],
+                     ["git", "apply", "p.patch"]):
+            self.assertIsNotNone(
+                coordination.deny_reason_for_git_argv(argv, self.repo_path),
+                argv)
+
+    def test_powershell_write_cmdlets_denied_on_main(self):
+        # PowerShell write forms reach the same rule as POSIX ones (#41).
+        for cmd in ("Set-Content -Path seed.txt -Value pwned",
+                    "Remove-Item seed.txt",
+                    "'x' | Out-File seed.txt",
+                    "New-Item -ItemType File -Force seed.txt",
+                    "Copy-Item other.txt seed.txt",
+                    "Move-Item seed.txt ../elsewhere.txt"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo), cmd)
+
+    def test_powershell_copy_from_main_allowed(self):
+        # Copy-class cmdlets write only their destination; reading a file
+        # off main is not a mutation.
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            "Copy-Item seed.txt ~/coord-test-elsewhere.txt",
+            self.repo_path, self.repo))
+
     def test_shell_redirect_onto_main_denied(self):
         reason = coordination.deny_reason_for_shell(
             "echo boom > seed.txt", self.repo_path, self.repo)

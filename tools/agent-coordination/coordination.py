@@ -137,6 +137,10 @@ def tree_containing(path):
 GIT_MUTATORS = {
     "commit", "merge", "rebase", "cherry-pick", "revert", "reset", "am",
     "restore", "clean",
+    # Working-tree mutators with no commit, so no hook backstop (#42):
+    # rm/mv delete or displace tracked files, stash reverts the tree,
+    # apply writes files directly.
+    "rm", "mv", "stash", "apply",
 }
 REDIRECT_RE = re.compile(r"(?<![<>])>{1,2}\s*([^\s|;&<>]+)")
 
@@ -329,6 +333,57 @@ def _copy_move_operands(argv):
     return None, []
 
 
+# PowerShell write cmdlets and their aliases (#41). Matching is
+# case-insensitive, like PowerShell itself. Copy-class cmdlets write only
+# their destination; the rest treat every path operand as written or
+# removed (Move-Item removes its sources, like mv).
+_PS_WRITE_CMDLETS = {
+    "set-content", "add-content", "clear-content", "out-file", "new-item",
+    "remove-item", "move-item", "sc", "ac", "clc", "ni", "ri", "del",
+    "erase", "move", "mi",
+}
+_PS_COPY_CMDLETS = {"copy-item", "cpi", "copy"}
+_PS_PATH_PARAMS = {"-path", "-literalpath", "-filepath", "-destination",
+                   "-target"}
+# Common switch parameters (no value). Any other dashed parameter is
+# assumed to consume the following token, so `New-Item -ItemType File
+# README.md` reads README.md as the path, not File.
+_PS_SWITCHES = {"-force", "-recurse", "-confirm", "-whatif", "-noclobber",
+                "-append", "-passthru"}
+
+
+def _ps_operands(argv):
+    """Split a PowerShell cmdlet argv into path-parameter values and
+    positional operands. `-Path a,b` claims both; values after unknown
+    dashed parameters are consumed, not mistaken for paths."""
+    flagged, positional, i = [], [], 1
+    while i < len(argv):
+        tok = argv[i]
+        low = tok.lower()
+        if low.startswith("-"):
+            if low in _PS_PATH_PARAMS and i + 1 < len(argv):
+                flagged += [(low, v) for v in argv[i + 1].split(",")]
+                i += 2
+            elif low not in _PS_SWITCHES and i + 1 < len(argv) \
+                    and not argv[i + 1].startswith("-"):
+                i += 2  # parameter whose value is not a path
+            else:
+                i += 1
+        else:
+            positional += tok.split(",")
+            i += 1
+    return flagged, positional
+
+
+def _ps_write_targets(argv):
+    cmd = argv[0].lower()
+    flagged, positional = _ps_operands(argv)
+    if cmd in _PS_COPY_CMDLETS:
+        dests = [v for k, v in flagged if k == "-destination"]
+        return dests or positional[-1:]
+    return [v for _, v in flagged] + positional
+
+
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
@@ -421,6 +476,11 @@ def _shell_events(command, cwd):
                 # A deletion never reaches a commit, so no hook can restore
                 # it; the adapter is the only layer that sees it.
                 raw_targets += [a for a in argv[1:] if not a.startswith("-")]
+            low = argv[0].lower()
+            if low in _PS_WRITE_CMDLETS or low in _PS_COPY_CMDLETS:
+                # Remove-Item and Move-Item sources are the same
+                # no-backstop delete class as rm/mv above.
+                raw_targets += _ps_write_targets(argv)
             if argv[0] in ("cp", "mv", "install"):
                 dest, sources = _copy_move_operands(argv)
                 if dest:
