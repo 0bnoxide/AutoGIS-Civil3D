@@ -328,7 +328,7 @@ def _copy_move_operands(argv):
 
 
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
-_HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)(\w+)\1")
+_HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
 
 

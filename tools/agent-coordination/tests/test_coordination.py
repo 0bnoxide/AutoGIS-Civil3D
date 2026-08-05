@@ -189,6 +189,22 @@ class TestMainRule(TempRepoCase):
         self.assertEqual(
             coordination.shell_write_targets(cmd, self.repo_path), [])
 
+    def test_herestring_does_not_mask_later_commands(self):
+        # <<< is a here-string, not a heredoc: it must not swallow the
+        # rest of the command as a phantom heredoc body.
+        targets = coordination.shell_write_targets(
+            'grep x <<<"data"\necho hi > protected.txt', self.repo_path)
+        self.assertEqual([os.path.basename(t) for t in targets],
+                         ["protected.txt"])
+
+    def test_escaped_quote_outside_string_pins_behavior(self):
+        # \" outside a string opens _QUOTE_RE's double-quote branch,
+        # diverging from shell semantics; pin that the redirect after the
+        # closing quote is still seen (advisory, PR #26 review P3).
+        targets = coordination.shell_write_targets(
+            'echo \\"x\\" > out.txt', self.repo_path)
+        self.assertEqual([os.path.basename(t) for t in targets], ["out.txt"])
+
     def test_redirect_after_quoted_arg_still_detected(self):
         targets = coordination.shell_write_targets(
             'echo "a > b" > out.txt', self.repo_path)
