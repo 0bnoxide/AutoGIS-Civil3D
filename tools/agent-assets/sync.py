@@ -114,58 +114,79 @@ def _files_equal(path, content):
         return fh.read() == content.encode("utf-8")
 
 
+def _sync_skill_target(target_rel, target_root, skills, check_only, drift):
+    """Copy out-of-sync skills into one target and prune destination-only
+    directories there."""
+    for name, src in skills.items():
+        dest = os.path.join(target_root, name)
+        if not os.path.isdir(dest) or not _trees_equal(src, dest):
+            drift.append(f"{target_rel}/{name}: out of sync")
+            if not check_only:
+                shutil.rmtree(dest, ignore_errors=True)
+                shutil.copytree(src, dest)
+    _prune_skill_dirs(target_rel, target_root, skills, check_only, drift)
+
+
+def _prune_skill_dirs(target_rel, target_root, skills, check_only, drift):
+    """Remove rendered skill directories whose canonical source is gone."""
+    if not os.path.isdir(target_root):
+        return
+    for name in sorted(os.listdir(target_root)):
+        if name in skills or not os.path.isdir(os.path.join(target_root, name)):
+            continue
+        suffix = "destination-only" if check_only else "destination-only, pruned"
+        drift.append(f"{target_rel}/{name}: {suffix}")
+        if not check_only:
+            shutil.rmtree(os.path.join(target_root, name))
+
+
+def _write_if_drifted(dest, dest_rel, content, check_only, drift):
+    """Record and (outside check mode) write one rendered agent file."""
+    if _files_equal(dest, content):
+        return
+    drift.append(f"{dest_rel}: out of sync")
+    if not check_only:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(content)
+
+
+def _prune_agent_files(root, target_root, suffix, agents, check_only, drift):
+    """Remove rendered agent files whose canonical source is gone."""
+    if not os.path.isdir(target_root):
+        return
+    for name in sorted(os.listdir(target_root)):
+        if not name.endswith(suffix) or name[: -len(suffix)] in agents:
+            continue
+        drift.append(f"{os.path.relpath(target_root, root)}/"
+                     f"{name}: destination-only")
+        if not check_only:
+            os.remove(os.path.join(target_root, name))
+
+
 def run(root, check_only):
     drift = []
     skills = canonical_skills()
     agents = canonical_agents()
 
     for target_rel in SKILL_TARGETS:
-        target_root = os.path.join(root, target_rel)
-        for name, src in skills.items():
-            dest = os.path.join(target_root, name)
-            if not os.path.isdir(dest) or not _trees_equal(src, dest):
-                drift.append(f"{target_rel}/{name}: out of sync")
-                if not check_only:
-                    shutil.rmtree(dest, ignore_errors=True)
-                    shutil.copytree(src, dest)
-        if os.path.isdir(target_root):
-            for name in sorted(os.listdir(target_root)):
-                if name not in skills and os.path.isdir(
-                        os.path.join(target_root, name)):
-                    drift.append(f"{target_rel}/{name}: destination-only, "
-                                 "pruned" if not check_only else
-                                 f"{target_rel}/{name}: destination-only")
-                    if not check_only:
-                        shutil.rmtree(os.path.join(target_root, name))
+        _sync_skill_target(
+            target_rel, os.path.join(root, target_rel), skills, check_only, drift)
 
     md_root = os.path.join(root, AGENT_MD_TARGET)
     toml_root = os.path.join(root, AGENT_TOML_TARGET)
     for name, src in agents.items():
         with open(src, encoding="utf-8") as fh:
             md_text = fh.read()
-        md_dest = os.path.join(md_root, f"{name}.md")
-        if not _files_equal(md_dest, md_text):
-            drift.append(f"{AGENT_MD_TARGET}/{name}.md: out of sync")
-            if not check_only:
-                os.makedirs(md_root, exist_ok=True)
-                with open(md_dest, "w", encoding="utf-8", newline="\n") as fh:
-                    fh.write(md_text)
-        toml_text = render_toml(name, md_text)
-        toml_dest = os.path.join(toml_root, f"{name}.toml")
-        if not _files_equal(toml_dest, toml_text):
-            drift.append(f"{AGENT_TOML_TARGET}/{name}.toml: out of sync")
-            if not check_only:
-                os.makedirs(toml_root, exist_ok=True)
-                with open(toml_dest, "w", encoding="utf-8", newline="\n") as fh:
-                    fh.write(toml_text)
+        _write_if_drifted(
+            os.path.join(md_root, f"{name}.md"),
+            f"{AGENT_MD_TARGET}/{name}.md", md_text, check_only, drift)
+        _write_if_drifted(
+            os.path.join(toml_root, f"{name}.toml"),
+            f"{AGENT_TOML_TARGET}/{name}.toml",
+            render_toml(name, md_text), check_only, drift)
     for target_root, suffix in ((md_root, ".md"), (toml_root, ".toml")):
-        if os.path.isdir(target_root):
-            for name in sorted(os.listdir(target_root)):
-                if name.endswith(suffix) and name[: -len(suffix)] not in agents:
-                    drift.append(f"{os.path.relpath(target_root, root)}/"
-                                 f"{name}: destination-only")
-                    if not check_only:
-                        os.remove(os.path.join(target_root, name))
+        _prune_agent_files(root, target_root, suffix, agents, check_only, drift)
 
     return drift
 
