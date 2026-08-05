@@ -215,6 +215,7 @@ public sealed class BundleArchiveTests
     [Theory]
     [InlineData(PackageFault.DataDescriptorMismatch)]
     [InlineData(PackageFault.Zip64LocatorMismatch)]
+    [InlineData(PackageFault.Zip64RecordSizeMismatch)]
     public void Invalid_descriptor_or_zip64_locator_returns_zip001(PackageFault fault)
     {
         string path = TestPackageBuilder.Create(fault);

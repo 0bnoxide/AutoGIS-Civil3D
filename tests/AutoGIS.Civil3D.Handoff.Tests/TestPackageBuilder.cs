@@ -36,6 +36,7 @@ public enum PackageFault
     LocalHeaderSizeMismatch,
     DataDescriptorMismatch,
     Zip64LocatorMismatch,
+    Zip64RecordSizeMismatch,
     LocalHeaderMismatchBeforeUnsafeName,
     LegacyEncodedUnexpectedEntry,
     UnderreportedManifestSize,
@@ -91,10 +92,11 @@ internal static class TestPackageBuilder
             return path;
         }
 
-        if (fault is PackageFault.ValidZip64 or PackageFault.Zip64LocatorMismatch)
+        if (fault is PackageFault.ValidZip64 or PackageFault.Zip64LocatorMismatch
+            or PackageFault.Zip64RecordSizeMismatch)
         {
             CreateArchiveWithZip64(path);
-            if (fault == PackageFault.Zip64LocatorMismatch)
+            if (fault != PackageFault.ValidZip64)
             {
                 ApplyFault(path, fault);
             }
@@ -572,6 +574,34 @@ internal static class TestPackageBuilder
                     }
 
                     bytes[locatorOffset] ^= 0x01;
+                    break;
+                }
+            case PackageFault.Zip64RecordSizeMismatch:
+                {
+                    // Leave both signatures valid and make the EOCD64 record's
+                    // declared size disagree with the locator-derived span, so
+                    // the agreement check itself is what rejects the archive.
+                    int endOfCentralDirectoryOffset = FindSignatureFromEnd(bytes, 0x06054b50);
+                    int locatorOffset = checked(endOfCentralDirectoryOffset - 20);
+                    if (locatorOffset < 0 || BinaryPrimitives.ReadUInt32LittleEndian(
+                            bytes.AsSpan(locatorOffset)) != 0x07064b50)
+                    {
+                        throw new InvalidDataException("The test ZIP64 locator is missing.");
+                    }
+
+                    ulong recordOffset = BinaryPrimitives.ReadUInt64LittleEndian(
+                        bytes.AsSpan(locatorOffset + 8));
+                    if (BinaryPrimitives.ReadUInt32LittleEndian(
+                            bytes.AsSpan((int)recordOffset)) != 0x06064b50)
+                    {
+                        throw new InvalidDataException("The test ZIP64 record is missing.");
+                    }
+
+                    int sizeOffset = checked((int)recordOffset + 4);
+                    ulong declaredSize = BinaryPrimitives.ReadUInt64LittleEndian(
+                        bytes.AsSpan(sizeOffset));
+                    BinaryPrimitives.WriteUInt64LittleEndian(
+                        bytes.AsSpan(sizeOffset), checked(declaredSize + 1));
                     break;
                 }
             case PackageFault.LocalHeaderMismatchBeforeUnsafeName:
