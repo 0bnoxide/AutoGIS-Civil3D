@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 
 import os
-import re
 import shutil
 import sys
 
@@ -65,11 +64,18 @@ def parse_frontmatter(md_text):
             continue
         fields = {}
         for line in lines[1:index]:
-            kv = re.match(r"^(\w[\w-]*):\s*(.*)$", line)
-            if kv:
-                fields[kv.group(1)] = kv.group(2).strip().strip("'\"")
+            key, sep, value = line.partition(":")
+            if sep and _is_frontmatter_key(key):
+                fields[key] = value.strip().strip("'\"")
         return fields, "".join(lines[index + 1:])
     return {}, md_text
+
+
+def _is_frontmatter_key(key):
+    """Equivalent of the former `\\w[\\w-]*` key pattern, without regex
+    (SonarQube S8786 flagged the backtracking potential)."""
+    return (bool(key) and (key[0].isalnum() or key[0] == "_")
+            and all(ch.isalnum() or ch in "_-" for ch in key))
 
 
 def _toml_basic(value):

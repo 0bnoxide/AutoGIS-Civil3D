@@ -323,45 +323,61 @@ internal sealed class BundleArchive : IDisposable
         int[] descriptorLengths = isZip64 ? [24, 20] : [16, 12];
         foreach (int descriptorLength in descriptorLengths)
         {
-            long descriptorOffset = boundary - descriptorLength;
-            long compressedSpan = descriptorOffset - layout.DataOffset;
-            if (compressedSpan < 0)
-            {
-                continue;
-            }
-
-            byte[] descriptor = new byte[descriptorLength];
-            archiveStream.Position = descriptorOffset;
-            ReadExactly(archiveStream, descriptor);
-
-            int valueOffset = descriptorLength is 16 or 24 ? 4 : 0;
-            if (valueOffset != 0 &&
-                BinaryPrimitives.ReadUInt32LittleEndian(descriptor) != 0x08074b50)
-            {
-                continue;
-            }
-
-            uint crc = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(valueOffset));
-            valueOffset += sizeof(uint);
-            ulong compressedSize = isZip64
-                ? BinaryPrimitives.ReadUInt64LittleEndian(descriptor.AsSpan(valueOffset))
-                : BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(valueOffset));
-            valueOffset += isZip64 ? sizeof(ulong) : sizeof(uint);
-            ulong size = isZip64
-                ? BinaryPrimitives.ReadUInt64LittleEndian(descriptor.AsSpan(valueOffset))
-                : BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(valueOffset));
-
-            if (layout.Entry.Crc is >= 0 and <= uint.MaxValue &&
-                crc == (uint)layout.Entry.Crc &&
-                compressedSize == (ulong)layout.Entry.CompressedSize &&
-                size == (ulong)layout.Entry.Size &&
-                compressedSize == (ulong)compressedSpan)
+            if (DescriptorMatchesEntry(
+                    archiveStream, layout, boundary, descriptorLength, isZip64,
+                    out long compressedSpan))
             {
                 return compressedSpan;
             }
         }
 
         throw new ZipException("The ZIP entry data descriptor does not match its physical data span.");
+    }
+
+    /// <summary>Tries one candidate descriptor length: reads the trailing
+    /// descriptor and checks every declared value against the central record
+    /// and the physical span.</summary>
+    private static bool DescriptorMatchesEntry(
+        FileStream archiveStream,
+        LocalEntryLayout layout,
+        long boundary,
+        int descriptorLength,
+        bool isZip64,
+        out long compressedSpan)
+    {
+        long descriptorOffset = boundary - descriptorLength;
+        compressedSpan = descriptorOffset - layout.DataOffset;
+        if (compressedSpan < 0)
+        {
+            return false;
+        }
+
+        byte[] descriptor = new byte[descriptorLength];
+        archiveStream.Position = descriptorOffset;
+        ReadExactly(archiveStream, descriptor);
+
+        int valueOffset = descriptorLength is 16 or 24 ? 4 : 0;
+        if (valueOffset != 0 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(descriptor) != 0x08074b50)
+        {
+            return false;
+        }
+
+        uint crc = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(valueOffset));
+        valueOffset += sizeof(uint);
+        ulong compressedSize = isZip64
+            ? BinaryPrimitives.ReadUInt64LittleEndian(descriptor.AsSpan(valueOffset))
+            : BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(valueOffset));
+        valueOffset += isZip64 ? sizeof(ulong) : sizeof(uint);
+        ulong size = isZip64
+            ? BinaryPrimitives.ReadUInt64LittleEndian(descriptor.AsSpan(valueOffset))
+            : BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(valueOffset));
+
+        return layout.Entry.Crc is >= 0 and <= uint.MaxValue &&
+            crc == (uint)layout.Entry.Crc &&
+            compressedSize == (ulong)layout.Entry.CompressedSize &&
+            size == (ulong)layout.Entry.Size &&
+            compressedSize == (ulong)compressedSpan;
     }
 
     private static long FindCentralDirectoryStart(FileStream archiveStream)
