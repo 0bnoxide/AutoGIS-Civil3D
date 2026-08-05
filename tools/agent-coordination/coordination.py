@@ -653,6 +653,29 @@ def cmd_init(repo):
     return ALLOW
 
 
+def codex_hook_trust_date(repo):
+    """Return the recorded hook-trust verification date, if complete."""
+    evidence_path = os.path.join(
+        repo.worktree_root, "docs", "verification",
+        "codex-project-hook-trust.md")
+    try:
+        with open(evidence_path, encoding="utf-8") as fh:
+            lines = {line.rstrip("\r\n") for line in fh}
+    except OSError:
+        return None
+    date_prefix = "Verification date: "
+    dates = [line[len(date_prefix):] for line in lines
+             if line.startswith(date_prefix)]
+    if len(dates) != 1 or not {
+            "Hooks inspection: passed", "Activation probe: passed"} <= lines:
+        return None
+    try:
+        _dt.date.fromisoformat(dates[0])
+    except ValueError:
+        return None
+    return dates[0]
+
+
 def cmd_doctor(repo):
     findings = []
     rc, hooks_path, _ = _git(["config", "core.hooksPath"], cwd=repo.primary_root)
@@ -715,8 +738,13 @@ def cmd_doctor(repo):
         from shutil import which
         if which(tool) is None:
             findings.append(f"optional tool unavailable: {tool} (advisory)")
-    findings.append("Codex project-hook trust: unverified until the documented "
-                    "/hooks inspection and activation probe are recorded")
+    trust_date = codex_hook_trust_date(repo)
+    if trust_date is not None:
+        findings.append(f"Codex project-hook trust: verified ({trust_date})")
+    else:
+        findings.append("Codex project-hook trust: unverified until the "
+                        "documented /hooks inspection and activation probe "
+                        "are recorded")
     if findings:
         print("doctor findings:")
         for finding in findings:

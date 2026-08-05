@@ -5,6 +5,7 @@ under a temp directory — the real primary worktree is never a target.
 """
 
 import json
+import io
 import os
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 
 MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -45,6 +47,50 @@ class TempRepoCase(unittest.TestCase):
         self.repo_path = make_repo(self.base)
         self.repo = coordination.discover(self.repo_path)
         self.assertIsNotNone(self.repo)
+
+
+class TestCodexHookTrust(TempRepoCase):
+    def write_hook_trust_evidence(self, content):
+        evidence_dir = os.path.join(
+            self.repo_path, "docs", "verification")
+        os.makedirs(evidence_dir, exist_ok=True)
+        with open(os.path.join(evidence_dir, "codex-project-hook-trust.md"),
+                  "w", encoding="utf-8") as fh:
+            fh.write(content)
+
+    def doctor_output(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            rc = coordination.cmd_doctor(self.repo)
+        self.assertEqual(rc, coordination.ALLOW)
+        return buffer.getvalue()
+
+    def test_doctor_reports_valid_hook_trust_evidence_as_verified(self):
+        self.write_hook_trust_evidence(
+            "Verification date: 2026-08-05\n"
+            "Hooks inspection: passed\n"
+            "Activation probe: passed")
+
+        self.assertIn("Codex project-hook trust: verified (2026-08-05)",
+                      self.doctor_output())
+
+    def test_doctor_reports_missing_hook_trust_evidence_as_unverified(self):
+        self.assertIn("Codex project-hook trust: unverified",
+                      self.doctor_output())
+
+    def test_doctor_reports_invalid_hook_trust_date_as_unverified(self):
+        self.write_hook_trust_evidence("Verification date: invalid")
+
+        self.assertIn("Codex project-hook trust: unverified",
+                      self.doctor_output())
+
+    def test_doctor_reports_incomplete_hook_trust_evidence_as_unverified(self):
+        self.write_hook_trust_evidence(
+            "Verification date: 2026-08-05\n"
+            "Hooks inspection: passed")
+
+        self.assertIn("Codex project-hook trust: unverified",
+                      self.doctor_output())
 
 
 class TestMainRule(TempRepoCase):
