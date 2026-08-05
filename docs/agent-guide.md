@@ -30,9 +30,10 @@ wins for its row's concern; file an issue for the mismatch.
 2. **Claim before you write.** Follow the numbered procedure in
    [docs/collaboration.md](collaboration.md). A contested claim is a stop
    sign, not an obstacle to route around.
-3. **One phase at a time.** Work only inside the roadmap gate that is open.
-   Authorizing, advancing, or reopening a phase is an owner decision recorded
-   in the roadmap gate-change log.
+3. **One phase at a time.** Work only inside the roadmap gate that is open,
+   or on the maintenance the roadmap exempts from a gate. Authorizing,
+   advancing, or reopening a phase is an owner decision recorded in the
+   roadmap gate-change log.
 4. **Every discovered bug becomes a GitHub issue**, whatever you were doing
    when you found it, whether or not it is yours. If you cannot file it,
    record it as an explicitly marked unfiled item in your handoff.
