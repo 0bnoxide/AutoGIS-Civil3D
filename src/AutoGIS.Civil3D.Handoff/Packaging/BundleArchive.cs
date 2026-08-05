@@ -464,7 +464,10 @@ internal sealed class BundleArchive : IDisposable
         }
 
         ulong recordSize = BinaryPrimitives.ReadUInt64LittleEndian(record[4..]);
-        if (recordSize > long.MaxValue - 12 || recordOffset + 12 + (long)recordSize != locatorOffset)
+        // Compared by subtraction: `recordOffset + 12 + recordSize` overflows
+        // for a hostile recordSize, and a wrapped sum is not a valid bound.
+        long expectedRecordSize = locatorOffset - recordOffset - 12;
+        if (expectedRecordSize < 0 || recordSize != (ulong)expectedRecordSize)
         {
             throw new ZipException("The ZIP64 end-of-central-directory length is invalid.");
         }
