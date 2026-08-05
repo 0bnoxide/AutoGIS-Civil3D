@@ -168,6 +168,32 @@ class TestMainRule(TempRepoCase):
             "ls && git commit -m x", self.repo_path, self.repo)
         self.assertIsNotNone(reason)
 
+    def test_quoted_message_text_yields_no_targets(self):
+        # Words, newlines, and <angle>+ markup inside a quoted -m message
+        # must never surface as segments or write targets.
+        cmd = ('git add real.py && git commit -m "fix: accept '
+               '.claude/worktrees/<slug> and that\n'
+               'location > and other words; rm -rf nothing\n'
+               'end."')
+        self.assertEqual(
+            coordination.shell_write_targets(cmd, self.repo_path), [])
+        events = list(coordination._shell_events(cmd, self.repo_path))
+        self.assertEqual([e[1][0] for e in events if e[0] == "git"],
+                         ["git", "git"])
+
+    def test_heredoc_body_yields_no_targets(self):
+        cmd = ("gh pr create --body-file - <<'EOF'\n"
+               "- `x`: alongside `.worktrees/<agent>+<slug>` stuff\n"
+               "echo boom > seed.txt\n"
+               "EOF")
+        self.assertEqual(
+            coordination.shell_write_targets(cmd, self.repo_path), [])
+
+    def test_redirect_after_quoted_arg_still_detected(self):
+        targets = coordination.shell_write_targets(
+            'echo "a > b" > out.txt', self.repo_path)
+        self.assertEqual([os.path.basename(t) for t in targets], ["out.txt"])
+
     def test_cd_tracked_across_segments(self):
         other = make_repo(self.base, "other-main").replace(os.sep, "/")
         reason = coordination.deny_reason_for_shell(

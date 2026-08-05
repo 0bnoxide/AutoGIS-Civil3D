@@ -327,6 +327,39 @@ def _copy_move_operands(argv):
     return None, []
 
 
+_QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+_HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)(\w+)\1")
+_REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
+
+
+def _mask_literals(command):
+    """Blank quoted-string contents and heredoc bodies, preserving positions.
+
+    Operator and redirect scanning runs on the masked text so commit
+    messages and heredoc bodies can never yield fake segments or targets;
+    argv extraction still reads the real text at the same offsets.
+    """
+    def blank(m):
+        s = m.group(0)
+        return s[0] + " " * (len(s) - 2) + s[-1]
+    masked = _QUOTE_RE.sub(blank, command)
+    # Openers are found in the real text (quote-masking blanks a quoted
+    # delimiter like <<'EOF'); masking preserves offsets, so requiring the
+    # << itself to be unmasked skips heredoc lookalikes inside strings.
+    for m in list(_HEREDOC_RE.finditer(command)):
+        if masked[m.start()] != "<":
+            continue
+        nl = command.find("\n", m.end())
+        if nl == -1:
+            continue
+        term = re.search(r"^[ \t]*%s[ \t]*$" % re.escape(m.group(2)),
+                         command[nl + 1:], re.M)
+        end = nl + 1 + (term.end() if term else len(masked) - nl - 1)
+        masked = masked[:nl + 1] \
+            + re.sub(r"[^\n]", " ", masked[nl + 1:end]) + masked[end:]
+    return masked
+
+
 def _shell_events(command, cwd):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
@@ -334,11 +367,26 @@ def _shell_events(command, cwd):
     write form covered by one is covered by the other.
     """
     effective_cwd = cwd
-    for segment in re.split(r"&&|\|\||;|\n", command):
-        segment = segment.strip()
-        if not segment:
+    masked_all = _mask_literals(command)
+    cuts = [m.span() for m in re.finditer(r"&&|\|\||;|\n", masked_all)]
+    cuts.append((len(command), len(command)))
+    seg_start = 0
+    for cut_start, cut_end in cuts:
+        seg_real, seg_masked = (command[seg_start:cut_start],
+                                masked_all[seg_start:cut_start])
+        seg_start = cut_end
+        pad = len(seg_real) - len(seg_real.lstrip())
+        segment = seg_real.strip()
+        seg_masked = seg_masked[pad:pad + len(segment)]
+        if not segment or not seg_masked.strip():
+            # Fully masked segment: a heredoc body line, not a command.
             continue
-        stages = segment.split("|")
+        pipe_cuts = [m.start() for m in re.finditer(r"\|", seg_masked)] \
+            + [len(segment)]
+        stages, last = [], 0
+        for p in pipe_cuts:
+            stages.append(segment[last:p])
+            last = p + 1
         first = _argv_of(stages[0])
         # `cd` moves the parent shell only outside a pipeline; inside one it
         # runs in a subshell and must NOT move later segments.
@@ -346,7 +394,14 @@ def _shell_events(command, cwd):
             effective_cwd = first[1] if os.path.isabs(first[1]) \
                 else os.path.join(effective_cwd or ".", first[1])
             continue
-        raw_targets = [m.group(1) for m in REDIRECT_RE.finditer(segment)]
+        # Locate redirects in the masked text (never inside quotes or
+        # heredocs), then read the target token from the real text so a
+        # quoted filename survives intact.
+        raw_targets = []
+        for m in REDIRECT_RE.finditer(seg_masked):
+            t = _REDIR_TARGET_RE.match(segment, m.start())
+            if t:
+                raw_targets.append(t.group(1))
         for stage in stages:
             argv = _argv_of(stage)
             if not argv:
