@@ -721,10 +721,14 @@ def cmd_doctor(repo):
             path = line.split(" ", 1)[1]
             if _norm(path) == repo.primary_root:
                 continue
-            rel = os.path.relpath(path, repo.primary_root)
-            if not re.match(r"\.worktrees[\\/][a-z]+\+[A-Za-z0-9._-]+$", rel):
+            rel = os.path.relpath(path, repo.primary_root).replace("\\", "/")
+            # .claude/worktrees/ is Claude Code's fixed native location; it
+            # cannot be relocated into .worktrees/, so doctor accepts it.
+            if not re.match(r"(\.worktrees/[a-z]+\+"
+                            r"|\.claude/worktrees/)[A-Za-z0-9._-]+$", rel):
                 findings.append(f"worktree outside naming convention: {rel} "
-                                "(expected .worktrees/<agent>+<slug>)")
+                                "(expected .worktrees/<agent>+<slug> or "
+                                ".claude/worktrees/<slug>)")
     sync_script = os.path.join(repo.worktree_root, "tools", "agent-assets",
                                "sync.py")
     if os.path.exists(sync_script):
