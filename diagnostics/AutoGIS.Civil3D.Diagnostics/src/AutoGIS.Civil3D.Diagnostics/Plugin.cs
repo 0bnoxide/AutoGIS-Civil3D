@@ -13,9 +13,11 @@ public sealed class Plugin : IExtensionApplication
 {
     public void Initialize()
     {
+        // Intentionally empty: load-time work would widen the pilot's scope.
     }
 
     public void Terminate()
     {
+        // Intentionally empty: nothing was acquired in Initialize.
     }
 }

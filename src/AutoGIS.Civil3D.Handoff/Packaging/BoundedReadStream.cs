@@ -30,6 +30,8 @@ internal sealed class BundleEntryDataException : IOException
 
 internal sealed class BoundedReadStream : Stream
 {
+    private const string ReadOnlyMessage = "The bounded stream is read-only.";
+
     private static readonly uint[] Crc32Table = BuildCrc32Table();
 
     private readonly Stream source;
@@ -104,7 +106,7 @@ internal sealed class BoundedReadStream : Stream
         set => source.Position = value;
     }
 
-    public override void Flush() => throw new NotSupportedException("The bounded stream is read-only.");
+    public override void Flush() => throw new NotSupportedException(ReadOnlyMessage);
 
     public override int Read(byte[] buffer, int offset, int count)
     {
@@ -184,25 +186,25 @@ internal sealed class BoundedReadStream : Stream
 
     public override long Seek(long offset, SeekOrigin origin) => source.Seek(offset, origin);
 
-    public override void SetLength(long value) => throw new NotSupportedException("The bounded stream is read-only.");
+    public override void SetLength(long value) => throw new NotSupportedException(ReadOnlyMessage);
 
     public override void Write(byte[] buffer, int offset, int count) =>
-        throw new NotSupportedException("The bounded stream is read-only.");
+        throw new NotSupportedException(ReadOnlyMessage);
 
     public override void Write(ReadOnlySpan<byte> buffer) =>
-        throw new NotSupportedException("The bounded stream is read-only.");
+        throw new NotSupportedException(ReadOnlyMessage);
 
     public override Task WriteAsync(
         byte[] buffer,
         int offset,
         int count,
         CancellationToken cancellationToken) =>
-        Task.FromException(new NotSupportedException("The bounded stream is read-only."));
+        Task.FromException(new NotSupportedException(ReadOnlyMessage));
 
     public override ValueTask WriteAsync(
         ReadOnlyMemory<byte> buffer,
         CancellationToken cancellationToken = default) =>
-        ValueTask.FromException(new NotSupportedException("The bounded stream is read-only."));
+        ValueTask.FromException(new NotSupportedException(ReadOnlyMessage));
 
     protected override void Dispose(bool disposing)
     {

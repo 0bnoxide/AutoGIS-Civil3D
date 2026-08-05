@@ -21,6 +21,7 @@ mkdir -p "$(dirname "$log_file")" 2>/dev/null || true
 
 note() {
   echo "$(date -Iseconds 2>/dev/null) AutoGIS-Civil3D $*" >> "$log_file" 2>/dev/null || true
+  return 0
 }
 
 # Resolve the canonical repository root rather than the current worktree.
@@ -37,7 +38,7 @@ note() {
 # AutoGIS's project list. Branches here are short-lived; main is the shared
 # structure worth navigating. Revisit if the MCP grows a project-name option.
 common_dir="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-if [ -z "$common_dir" ]; then
+if [[ -z "$common_dir" ]]; then
   note "SKIPPED not a git repository"
   exit 0
 fi
@@ -45,13 +46,13 @@ fi
 # pwd -W yields the Windows form (C:/Users/...). The MCP argument requires that
 # form, not the MSYS /c/Users/... form. Fall back where -W is unsupported.
 repo_root="$(cd "$(dirname "$common_dir")" 2>/dev/null && { pwd -W 2>/dev/null || pwd; })"
-if [ -z "$repo_root" ]; then
+if [[ -z "$repo_root" ]]; then
   note "SKIPPED could not resolve repository root from $common_dir"
   exit 0
 fi
 
 cbm="$(command -v codebase-memory-mcp || true)"
-if [ -z "$cbm" ]; then
+if [[ -z "$cbm" ]]; then
   note "FAILED codebase-memory-mcp not found on PATH"
   exit 0
 fi

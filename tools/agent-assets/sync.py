@@ -50,16 +50,26 @@ def canonical_agents():
 
 
 def parse_frontmatter(md_text):
-    """Minimal YAML frontmatter reader: name/description scalars only."""
-    match = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n(.*)$", md_text, re.DOTALL)
-    if not match:
+    """Minimal YAML frontmatter reader: name/description scalars only.
+
+    Line-based rather than one DOTALL regex: the lazy `(.*?)` form is
+    super-linear on input with no closing fence (SonarQube S8786).
+    """
+    lines = md_text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
         return {}, md_text
-    fields = {}
-    for line in match.group(1).splitlines():
-        kv = re.match(r"^(\w[\w-]*):\s*(.*)$", line)
-        if kv:
-            fields[kv.group(1)] = kv.group(2).strip().strip("'\"")
-    return fields, match.group(2)
+    # Start at 2: the regex required a newline between the fences, so a
+    # closing fence directly after the opener is not a match.
+    for index in range(2, len(lines)):
+        if lines[index].rstrip("\r\n") != "---":
+            continue
+        fields = {}
+        for line in lines[1:index]:
+            kv = re.match(r"^(\w[\w-]*):\s*(.*)$", line)
+            if kv:
+                fields[kv.group(1)] = kv.group(2).strip().strip("'\"")
+        return fields, "".join(lines[index + 1:])
+    return {}, md_text
 
 
 def _toml_basic(value):

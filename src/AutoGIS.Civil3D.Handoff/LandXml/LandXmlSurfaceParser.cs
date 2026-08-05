@@ -9,6 +9,9 @@ namespace AutoGIS.Civil3D.Handoff.LandXml;
 internal static class LandXmlSurfaceParser
 {
     private const string LandXmlNamespace = "http://www.landxml.org/schema/LandXML-1.2";
+    private const string LandXmlElementName = "LandXML";
+    private const string SurfaceElementName = "Surface";
+    private const string SurfacesElementName = "Surfaces";
     private const string SupportedVersion = "1.2";
     private const int MaximumLeafTokenCount = 4;
     private const int MaximumScalarTokenLength = 128;
@@ -61,7 +64,7 @@ internal static class LandXmlSurfaceParser
 
         bool envelopeInvalid =
             reader.Depth != 0 ||
-            reader.LocalName != "LandXML" ||
+            reader.LocalName != LandXmlElementName ||
             reader.NamespaceURI != LandXmlNamespace ||
             reader.GetAttribute("version") != SupportedVersion;
 
@@ -90,7 +93,7 @@ internal static class LandXmlSurfaceParser
 
                 if (IsLandXmlElement(element, "Metric") || IsLandXmlElement(element, "Imperial"))
                 {
-                    if (HasLandXmlAncestorPath(ancestors, "LandXML", "Units"))
+                    if (HasLandXmlAncestorPath(ancestors, LandXmlElementName, "Units"))
                     {
                         unitDeclarationCount++;
                         ParseUnits(reader, ref horizontalUnit, ref verticalUnitFamily, ref envelopeInvalid);
@@ -98,7 +101,7 @@ internal static class LandXmlSurfaceParser
                 }
                 else if (IsLandXmlElement(element, "CoordinateSystem"))
                 {
-                    if (HasLandXmlAncestorPath(ancestors, "LandXML"))
+                    if (HasLandXmlAncestorPath(ancestors, LandXmlElementName))
                     {
                         coordinateSystemCount++;
                         if (!TryParsePositiveInt32(reader.GetAttribute("epsgCode"), out epsgCode))
@@ -107,10 +110,10 @@ internal static class LandXmlSurfaceParser
                         }
                     }
                 }
-                else if (IsLandXmlElement(element, "Surface"))
+                else if (IsLandXmlElement(element, SurfaceElementName))
                 {
                     surfaceCount++;
-                    if (HasLandXmlAncestorPath(ancestors, "LandXML", "Surfaces"))
+                    if (HasLandXmlAncestorPath(ancestors, LandXmlElementName, SurfacesElementName))
                     {
                         canonicalSurfaceCount++;
                         string? candidateName = reader.GetAttribute("name")?.Trim();
@@ -125,7 +128,7 @@ internal static class LandXmlSurfaceParser
                     }
                 }
                 else if (IsLandXmlElement(element, "Definition") &&
-                    HasLandXmlAncestorPath(ancestors, "LandXML", "Surfaces", "Surface"))
+                    HasLandXmlAncestorPath(ancestors, LandXmlElementName, SurfacesElementName, SurfaceElementName))
                 {
                     definitionCount++;
                     if (reader.GetAttribute("surfType") != "TIN")
@@ -136,9 +139,9 @@ internal static class LandXmlSurfaceParser
                 else if (IsLandXmlElement(element, "P") &&
                     HasLandXmlAncestorPath(
                         ancestors,
-                        "LandXML",
-                        "Surfaces",
-                        "Surface",
+                        LandXmlElementName,
+                        SurfacesElementName,
+                        SurfaceElementName,
                         "Definition",
                         "Pnts"))
                 {
@@ -159,9 +162,9 @@ internal static class LandXmlSurfaceParser
                 else if (IsLandXmlElement(element, "F") &&
                     HasLandXmlAncestorPath(
                         ancestors,
-                        "LandXML",
-                        "Surfaces",
-                        "Surface",
+                        LandXmlElementName,
+                        SurfacesElementName,
+                        SurfaceElementName,
                         "Definition",
                         "Faces"))
                 {
@@ -308,7 +311,7 @@ internal static class LandXmlSurfaceParser
                 reader.Read();
                 return new LeafContent(
                     tokens.Tokens,
-                    tokens.Invalid,
+                    tokens.InvalidToken,
                     hasChildElement,
                     sameNamespaceSurfaceCount);
             }
@@ -316,7 +319,7 @@ internal static class LandXmlSurfaceParser
             if (reader.NodeType == XmlNodeType.Element)
             {
                 hasChildElement = true;
-                if (reader.LocalName == "Surface" && reader.NamespaceURI == LandXmlNamespace)
+                if (reader.LocalName == SurfaceElementName && reader.NamespaceURI == LandXmlNamespace)
                 {
                     sameNamespaceSurfaceCount++;
                 }
@@ -531,7 +534,7 @@ internal static class LandXmlSurfaceParser
 
         internal IReadOnlyList<string> Tokens => tokens;
 
-        internal bool Invalid { get; private set; }
+        internal bool InvalidToken { get; private set; }
 
         internal void Append(ReadOnlySpan<char> value)
         {
@@ -550,7 +553,7 @@ internal static class LandXmlSurfaceParser
                 }
                 else
                 {
-                    Invalid = true;
+                    InvalidToken = true;
                 }
             }
         }
@@ -568,7 +571,7 @@ internal static class LandXmlSurfaceParser
             }
             else
             {
-                Invalid = true;
+                InvalidToken = true;
             }
 
             currentToken.Clear();

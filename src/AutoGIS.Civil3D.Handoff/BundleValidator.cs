@@ -203,11 +203,15 @@ public sealed class BundleValidator
         IReadOnlyList<ValidationIssue> issues,
         VerifiedPackageMetadata? metadata = null)
     {
-        ValidationStatus status = HasErrors(issues)
-            ? ValidationStatus.Invalid
-            : issues.Any(issue => issue.Severity == IssueSeverity.Warning)
-                ? ValidationStatus.ValidWithWarnings
-                : ValidationStatus.Valid;
+        ValidationStatus status = ValidationStatus.Valid;
+        if (HasErrors(issues))
+        {
+            status = ValidationStatus.Invalid;
+        }
+        else if (issues.Any(issue => issue.Severity == IssueSeverity.Warning))
+        {
+            status = ValidationStatus.ValidWithWarnings;
+        }
         return new ValidationReport(status, issues, metadata);
     }
 }
