@@ -349,6 +349,27 @@ class TestClaims(TempRepoCase):
         self.assertEqual(rc, coordination.ALLOW)
         self.assertIn("failed to run (advisory)", buffer.getvalue())
 
+    def test_doctor_worktree_naming(self):
+        import io
+        from contextlib import redirect_stdout
+        for wt_rel, branch, ok in (
+            (os.path.join(".worktrees", "claude+good"), "wt-good", True),
+            (os.path.join(".claude", "worktrees", "native-slug"),
+             "wt-native", True),
+            (os.path.join("stray", "spot"), "wt-stray", False),
+        ):
+            run_git(["worktree", "add", "-q",
+                     os.path.join(self.repo_path, wt_rel), "-b", branch],
+                    self.repo_path)
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                coordination.cmd_doctor(self.repo)
+            flagged = f"naming convention: {wt_rel.replace(os.sep, '/')}" \
+                in buffer.getvalue().replace("\\", "/")
+            self.assertEqual(flagged, not ok, wt_rel)
+            run_git(["worktree", "remove", "--force",
+                     os.path.join(self.repo_path, wt_rel)], self.repo_path)
+
     def test_doctor_reports_asset_drift(self):
         stub_dir = os.path.join(self.repo_path, "tools", "agent-assets")
         os.makedirs(stub_dir, exist_ok=True)
