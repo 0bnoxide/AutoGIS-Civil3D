@@ -372,6 +372,15 @@ def _shell_events(command, cwd):
                     # mv removes its sources with no commit, like rm.
                     raw_targets += sources
         for target in raw_targets:
+            # Redirect targets are cut from raw text, so quotes survive;
+            # argv-derived ones already had theirs stripped by shlex.
+            target = target.strip("\"'")
+            if "$" in target or "`" in target:
+                # Unexpanded substitution: not evaluable here. Fail open —
+                # the adapter's contract — and let the stateless git hooks
+                # backstop whatever the shell actually resolves it to.
+                continue
+            target = os.path.expanduser(target)
             yield ("target", target if os.path.isabs(target)
                    else os.path.join(effective_cwd or ".", target))
 

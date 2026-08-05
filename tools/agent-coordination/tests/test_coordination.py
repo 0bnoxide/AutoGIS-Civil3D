@@ -101,6 +101,22 @@ class TestMainRule(TempRepoCase):
             "echo boom > seed.txt", self.repo_path, self.repo)
         self.assertIsNotNone(reason)
 
+    def test_unexpanded_var_redirect_skipped(self):
+        # Not evaluable without expansion: fail open, git hooks backstop.
+        for cmd in ('echo x > "$TEMP/y.md"', "echo x > $TMPDIR/y",
+                    "echo x > `mktemp`"):
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo), cmd)
+
+    def test_quoted_literal_redirect_still_denied(self):
+        for cmd in ('echo x > "seed.txt"', "echo x > 'seed.txt'"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo), cmd)
+
+    def test_tilde_redirect_resolves_outside_repo(self):
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            "echo x > ~/coord-test-elsewhere.txt", self.repo_path, self.repo))
+
     def test_shell_segments_checked_independently(self):
         reason = coordination.deny_reason_for_shell(
             "ls && git commit -m x", self.repo_path, self.repo)
