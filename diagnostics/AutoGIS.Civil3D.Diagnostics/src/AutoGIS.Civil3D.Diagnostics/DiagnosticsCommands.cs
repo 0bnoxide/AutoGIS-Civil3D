@@ -117,7 +117,7 @@ public sealed class DiagnosticsCommands
             WriteLine(editor, "SECTION", "PASS");
             return true;
         }
-        catch (Exception exception)
+        catch (System.Exception exception)
         {
             WriteLine(editor, "ERROR", $"{exception.GetType().Name}: {exception.Message}");
             return false;
