@@ -38,6 +38,8 @@ import uuid
 
 MAIN_BRANCH = "main"
 STATE_DIR = ".agent-state"
+GITHOOKS_DIR = ".githooks"
+HOOKSPATH_KEY = "core.hooksPath"
 REGISTRY_NAME = "claims.json"
 LOCK_SUFFIX = ".lock"
 STALE_SUSPECT_HOURS = 24
@@ -346,7 +348,7 @@ def _mask_literals(command):
     # Openers are found in the real text (quote-masking blanks a quoted
     # delimiter like <<'EOF'); masking preserves offsets, so requiring the
     # << itself to be unmasked skips heredoc lookalikes inside strings.
-    for m in list(_HEREDOC_RE.finditer(command)):
+    for m in _HEREDOC_RE.finditer(command):
         if masked[m.start()] != "<":
             continue
         nl = command.find("\n", m.end())
@@ -689,19 +691,19 @@ def cmd_init(repo):
     # Hooks resolve per-worktree (core.hooksPath is relative), so verify the
     # tree init runs from. Before the hooks land on main, the primary tree
     # lacks them and git silently skips — an advisory, not a failure.
-    hooks_dir = os.path.join(repo.worktree_root, ".githooks")
+    hooks_dir = os.path.join(repo.worktree_root, GITHOOKS_DIR)
     for hook in ("pre-commit", "pre-push"):
         if not os.path.exists(os.path.join(hooks_dir, hook)):
             print(f"init: missing {hooks_dir}/{hook}", file=sys.stderr)
             return OPFAIL
     if repo.primary_root != repo.worktree_root and not os.path.exists(
-            os.path.join(repo.primary_root, ".githooks", "pre-commit")):
+            os.path.join(repo.primary_root, GITHOOKS_DIR, "pre-commit")):
         print("init: note — the primary tree has no .githooks yet; its "
               "protection begins when they merge to main")
-    rc, current, _ = _git(["config", "core.hooksPath"], cwd=repo.primary_root)
-    if current != ".githooks":
+    rc, current, _ = _git(["config", HOOKSPATH_KEY], cwd=repo.primary_root)
+    if current != GITHOOKS_DIR:
         rc, _, err = _git(
-            ["config", "core.hooksPath", ".githooks"], cwd=repo.primary_root
+            ["config", HOOKSPATH_KEY, GITHOOKS_DIR], cwd=repo.primary_root
         )
         if rc != 0:
             print(f"init: git config failed: {err}", file=sys.stderr)
@@ -743,11 +745,11 @@ def codex_hook_trust_date(repo):
 
 def cmd_doctor(repo):
     findings = []
-    rc, hooks_path, _ = _git(["config", "core.hooksPath"], cwd=repo.primary_root)
-    if hooks_path != ".githooks":
+    rc, hooks_path, _ = _git(["config", HOOKSPATH_KEY], cwd=repo.primary_root)
+    if hooks_path != GITHOOKS_DIR:
         findings.append("core.hooksPath is not .githooks — run init")
     for hook in ("pre-commit", "pre-push"):
-        if not os.path.exists(os.path.join(repo.worktree_root, ".githooks", hook)):
+        if not os.path.exists(os.path.join(repo.worktree_root, GITHOOKS_DIR, hook)):
             findings.append(f".githooks/{hook} missing in this worktree")
     lock = repo.registry_path + LOCK_SUFFIX
     if os.path.exists(lock):
