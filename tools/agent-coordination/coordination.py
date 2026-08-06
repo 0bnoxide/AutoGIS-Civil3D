@@ -267,6 +267,19 @@ def deny_reason_for_git_argv(argv, cwd):
                 return (f"push targets remote '{MAIN_BRANCH}'. Integration "
                         "goes through pull requests only.")
         return None
+    rest = argv[sub_index + 1:]
+    # Read-only forms of the worktree mutators. `stash list/show` is
+    # matched on the FIRST token only — `stash push -m "list"` must not
+    # slip through on its message text. `apply --check/--stat/--numstat`
+    # writes nothing unless --apply forces it; `rm --dry-run` likewise.
+    if sub == "stash" and rest[:1] and rest[0] in ("list", "show"):
+        return None
+    if sub == "apply" and "--apply" not in rest and any(
+            a in ("--check", "--stat", "--numstat", "--summary")
+            for a in rest):
+        return None
+    if sub == "rm" and any(a in ("-n", "--dry-run") for a in rest):
+        return None
     is_mutator = sub in GIT_MUTATORS or _is_checkout_restore(
         sub, argv, sub_index, _git_effective_workdir(argv, cwd))
     if is_mutator:
@@ -345,17 +358,22 @@ _PS_WRITE_CMDLETS = {
 _PS_COPY_CMDLETS = {"copy-item", "cpi", "copy"}
 _PS_PATH_PARAMS = {"-path", "-literalpath", "-filepath", "-destination",
                    "-target"}
-# Common switch parameters (no value). Any other dashed parameter is
-# assumed to consume the following token, so `New-Item -ItemType File
-# README.md` reads README.md as the path, not File.
-_PS_SWITCHES = {"-force", "-recurse", "-confirm", "-whatif", "-noclobber",
-                "-append", "-passthru"}
+# Parameters known to consume a non-path value. Every OTHER dashed
+# parameter is treated as a boolean switch: an unmodeled value-taker can
+# only ADD a spurious target (deny direction), whereas the inverse
+# default would let an unmodeled switch swallow the path token and
+# bypass the rule (`Out-File -NoNewline seed.txt`) — and PowerShell
+# writes have no git-hook backstop.
+_PS_VALUE_PARAMS = {"-itemtype", "-value", "-encoding", "-filter",
+                    "-include", "-exclude", "-newname", "-stream",
+                    "-credential", "-erroraction", "-warningaction",
+                    "-errorvariable", "-warningvariable", "-outvariable",
+                    "-outbuffer", "-delimiter", "-width"}
 
 
 def _ps_operands(argv):
     """Split a PowerShell cmdlet argv into path-parameter values and
-    positional operands. `-Path a,b` claims both; values after unknown
-    dashed parameters are consumed, not mistaken for paths."""
+    positional operands. `-Path a,b` claims both."""
     flagged, positional, i = [], [], 1
     while i < len(argv):
         tok = argv[i]
@@ -364,11 +382,10 @@ def _ps_operands(argv):
             if low in _PS_PATH_PARAMS and i + 1 < len(argv):
                 flagged += [(low, v) for v in argv[i + 1].split(",")]
                 i += 2
-            elif low not in _PS_SWITCHES and i + 1 < len(argv) \
-                    and not argv[i + 1].startswith("-"):
-                i += 2  # parameter whose value is not a path
+            elif low in _PS_VALUE_PARAMS and i + 1 < len(argv):
+                i += 2  # known value that is not a path
             else:
-                i += 1
+                i += 1  # switch, or unknown: fail toward deny
         else:
             positional += tok.split(",")
             i += 1

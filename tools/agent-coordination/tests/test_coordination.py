@@ -164,6 +164,32 @@ class TestMainRule(TempRepoCase):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo), cmd)
 
+    def test_git_read_only_forms_allowed_on_main(self):
+        for argv in (["git", "stash", "list"],
+                     ["git", "stash", "show"],
+                     ["git", "apply", "--check", "p.patch"],
+                     ["git", "apply", "--stat", "p.patch"],
+                     ["git", "rm", "--dry-run", "seed.txt"],
+                     ["git", "rm", "-n", "seed.txt"]):
+            self.assertIsNone(
+                coordination.deny_reason_for_git_argv(argv, self.repo_path),
+                argv)
+
+    def test_git_read_only_lookalikes_still_denied_on_main(self):
+        # A stash message naming "list" is still a push; --apply forces
+        # an apply despite --check-style flags.
+        for argv in (["git", "stash", "push", "-m", "list"],
+                     ["git", "apply", "--stat", "--apply", "p.patch"]):
+            self.assertIsNotNone(
+                coordination.deny_reason_for_git_argv(argv, self.repo_path),
+                argv)
+
+    def test_powershell_unmodeled_switch_does_not_swallow_path(self):
+        # -NoNewline is not modeled; the unknown-parameter default must
+        # fail toward deny, not consume the path token.
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            "Out-File -NoNewline seed.txt", self.repo_path, self.repo))
+
     def test_powershell_copy_from_main_allowed(self):
         # Copy-class cmdlets write only their destination; reading a file
         # off main is not a mutation.
