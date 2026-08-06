@@ -18,4 +18,4 @@ Direct commits to `main` with post-hoc review (rejected: no independent gate); a
 
 ## Consequences
 
-All work lands through reviewed PRs from isolated worktrees. Until the Phase 0 claims tooling exists, collision avoidance is manual — a limitation demonstrated by the 2026-08-04 duplicate-work collision on PR #3. Full mechanism and scope split (blocking core vs deferred hardening): [collaboration architecture](../superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md).
+All work lands through reviewed PRs from isolated worktrees. Until the Phase 0 claims tooling exists, collision avoidance is manual — a limitation demonstrated by the duplicate-work collision recorded in [ADR-0003](0003-contract-slice-precedes-phase-0.md). Full mechanism and scope split (blocking core vs deferred hardening): [collaboration architecture](../superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md).

@@ -6,18 +6,18 @@ This file is the authoritative record of capabilities, sequence, gate state, and
 
 `Identified` — named in the capability map; no implementation authority.
 `Authorized` — the owner has explicitly opened the phase; work may be claimed.
-`In Progress` — authorized work is underway on a branch or PR.
-`Blocked` — authorized work cannot proceed; the blocker is recorded on the work item.
 `Accepted` — the phase's exit gate has been met and the owner has accepted the evidence.
 `Deferred` — explicitly postponed by owner decision.
 
-Only an explicit owner decision may authorize, advance, reorder, or reopen a phase. Every such decision is appended to the gate-change log below. A change to phase ordering or architecture also requires an ADR.
+These are decision-states: each records an owner decision, never live work state. Whether authorized work is underway, blocked, or under review is represented by GitHub issues and pull requests, not by this file.
+
+Only an explicit owner decision may authorize, advance, reorder, or reopen a phase. Every such decision is appended to the gate-change log below as one row carrying PR and ADR references only — evidence prose, counts, and delivery detail belong to the referenced records. A change to phase ordering or architecture also requires an ADR.
 
 ## Capability level
 
 | Phase | Capability | Exit-gate outcome | Status |
 |---|---|---|---|
-| 0 | Repository and collaboration foundation | Governance, agent tooling, local protection, CI, diagnostics preservation plan, and GitHub workflow established | In Progress |
+| 0 | Repository and collaboration foundation | Governance, agent tooling, local protection, CI, diagnostics preservation plan, and GitHub workflow established | Authorized |
 | 1 | Language-neutral handoff contract v1 | ZIP shape, JSON Schema, LandXML rules, safety limits, issue-code policy, and contract fixtures approved | Accepted |
 | 2 | Pure .NET 8 validator and CLI | Restore, build, and tests pass without Autodesk; deterministic valid and invalid fixtures prove the contract | Accepted |
 | 3 | AutoGIS producer adoption | AutoGIS emits conforming packages and passes cross-repository compatibility checks | Identified |
@@ -27,29 +27,21 @@ Only an explicit owner decision may authorize, advance, reorder, or reopen a pha
 | 7 | Packaging and compatibility | Supported Civil 3D versions, bundle packaging, installation, security, and upgrades are validated | Identified |
 | 8 | Operational qualification and release | Authorized workstation qualification, sanitized evidence, support runbook, and release gate are complete | Identified |
 
-Phases 1 and 2 ran ahead of Phase 0 by explicit owner decision (see gate-change log, 2026-08-02, and [ADR-0003](adr/0003-contract-slice-precedes-phase-0.md)) and were accepted together on 2026-08-04. The capability sequence above is otherwise unchanged; the deviation is recorded, not rewritten.
+Phases 1 and 2 ran ahead of Phase 0 by explicit owner decision (gate-change log, 2026-08-02; [ADR-0003](adr/0003-contract-slice-precedes-phase-0.md)) and were accepted together on 2026-08-04. The capability sequence above is otherwise unchanged; the deviation is recorded, not rewritten.
 
 Acceptance of Phases 1 and 2 does not carry any Civil 3D claim: contract-valid is not equivalent to Civil 3D import-tested, and the live import gate belongs to Phase 5.
 
-Phase 0 and its implementation are authorized by owner decisions on 2026-08-04 (gate-change log). Delivery is governed by the approved [implementation plan](superpowers/plans/2026-08-04-phase-0-coordination-foundation.md); live work status belongs to GitHub.
-
 ## Delivery level
 
-Per the two-level rule, only the active phase and the immediately next phase carry delivery detail: Phase 0 (active, integration-gate owner) and Phase 3 (next). Later phases remain closed regardless of any plan document that mentions them.
+Per the two-level rule, only the active phase and the immediately next phase carry delivery pointers: Phase 0 (active, integration-gate owner) and Phase 3 (next). Later phases remain closed regardless of any plan document that mentions them. Delivery detail is a link to the governing spec or plan, never a restatement.
 
 ### Active: Phase 0 — repository and collaboration foundation
 
-Governing design: [`2026-08-02-repository-collaboration-architecture-design.md`](superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md), accepted at head `ed22ac6` and merged as `59cf551`. Decision record: [ADR-0002](adr/0002-agent-collaboration-and-main-protection.md).
-
-**Blocking core**, per the accepted scope split: stateless `main` protection, the worktree lifecycle, explicit-release claims with their integrity controls (writer lock, reread-after-lock, atomic replace, contested-claim rejection), `init` and `doctor`, deterministic agent-asset sync, and the focused CI proofs.
-
-**Deferred hardening**, added only on demonstrated need: temporal claims, `resync`, a general coded break-glass flow, broad corruption-repair automation, exhaustive adapter parity, and broader CI matrices. Deferred commands are not stubbed. One invariant binds any future temporal design: a claim is never released or ignored solely because a heartbeat was missed or a TTL elapsed.
-
-Exit-gate criteria are the conditions listed under "Phase 0 acceptance criteria" in the governing design and are not restated or counted here; that list is authoritative and may be amended there. Three are worth surfacing because they are easy to under-scope: CI must prove main-targeting payload denial through both adapters *and* real Git-hook denial in a disposable repository; each harness must separately pass an out-of-CI interception smoke test, since CI cannot prove that a harness actually invokes its project hook before an edit; and diagnostic evidence must be preserved and only organized within its authorized slice, so untracked diagnostic artifacts in any working tree must never be silently staged, moved, or deleted during Phase 0.
-
-Scheduling weight: the 2026-08-04 duplicate-work collision on PR #3, where both agents implemented the same review fixes because no claims mechanism existed, is the first demonstrated need for this phase's core.
-
-The approved [implementation plan](superpowers/plans/2026-08-04-phase-0-coordination-foundation.md) decomposes delivery into independently verifiable steps; the exit gate is the acceptance-criteria list in the governing design.
+- Governing design: [`2026-08-02-repository-collaboration-architecture-design.md`](superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md), accepted at head `ed22ac6`, merged as `59cf551`. Decision record: [ADR-0002](adr/0002-agent-collaboration-and-main-protection.md).
+- Delivery decomposition: the approved [implementation plan](superpowers/plans/2026-08-04-phase-0-coordination-foundation.md).
+- Scope split (blocking core vs deferred hardening) and the temporal-claim invariant: the governing design's "Coordination module" section is the single copy.
+- Exit gate: the "Phase 0 acceptance criteria" list in the governing design; that list is authoritative and may be amended there.
+- Scheduling weight: the demonstrated need recorded in [ADR-0003](adr/0003-contract-slice-precedes-phase-0.md).
 
 ### Next: Phase 3 — AutoGIS producer adoption
 
@@ -61,6 +53,8 @@ Identified capabilities with no implementation authority and no sequence: alignm
 
 ## Gate-change log
 
+Append-only: one row per owner decision, references only; corrections are new rows, never edits. Rows predating the 2026-08-05 log discipline (issue #15) retain their original evidence prose unedited.
+
 | Date | Decision | Recorded |
 |---|---|---|
 | 2026-08-02 | Owner directed Codex to execute the LandXML handoff contract plan ahead of Phase 0 (pre-Phase-0 authorization of the Phase 1–2 slice; does not authorize later phases) | PR #3 description; [ADR-0003](adr/0003-contract-slice-precedes-phase-0.md) |
@@ -69,3 +63,4 @@ Identified capabilities with no implementation authority and no sequence: alignm
 | 2026-08-04 | Owner accepted and merged the Phase 1–2 slice, meeting the stated gate criterion; both phases advance to Accepted. Accepted evidence: contract v1 schema and rules, safety limits, issue-code policy, the 42-package golden fixture corpus with byte-for-byte regeneration checks, diagnostics preservation with recorded hashes, and the validator and CLI with stable exit codes, building and testing with no Autodesk or ArcGIS dependency — verified on merged `main` at 0 warnings, 0 errors, 181/181 tests. Carried forward as non-blocking: issues #5 (ZIP64 agreement fixture gap; design spec lagging `contract/v1/README.md`) and #2 (trailing blank lines) | PR #3, merged `8820d7c` |
 | 2026-08-04 | Owner authorized Phase 0. The phase advances to Authorized and becomes the active integration gate; implementation remains blocked until a plan under `docs/superpowers/plans/` is approved. Authorizes no later phase | PR #7 |
 | 2026-08-04 | Owner approved the Phase 0 implementation plan and authorized implementation, directing the repository past its coordination crux for ready use by lower-tier agent sessions (owner goal directive, quoted in the PR #16 record). Phase 0 advances to In Progress. Authorizes no later phase | PR #9 (plan); PR #16 (implementation) |
+| 2026-08-05 | Status vocabulary reduced to decision-states per the audit disposition; `In Progress` and `Blocked` removed, so Phase 0's recorded state maps to Authorized. No gate state changes | issue #15 |

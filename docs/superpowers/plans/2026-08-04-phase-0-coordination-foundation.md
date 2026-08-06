@@ -14,7 +14,7 @@
 
 ## Sequencing rationale
 
-Step 0 lands first because it protects the artifact class under heaviest current churn — governance documents — and the audit showed that gap is the active defect source. Steps 1–4 then deliver main protection and claims: the 2026-08-04 duplicate-work collision on PR #3 happened because no claim existed, and local `main` is unprotected because the account plan has no server-side branch protection. Everything after step 4 is necessary for Phase 0 acceptance but does not gate day-to-day safety.
+Step 0 lands first because it protects the artifact class under heaviest current churn — governance documents — and the audit showed that gap is the active defect source. Steps 1–4 then deliver main protection and claims: the demonstrated need is the duplicate-work collision recorded in [ADR-0003](../../adr/0003-contract-slice-precedes-phase-0.md), and local `main` is unprotected because the account plan has no server-side branch protection. Everything after step 4 is necessary for Phase 0 acceptance but does not gate day-to-day safety.
 
 Each step is one commit or a small group, independently verifiable, and leaves the repository working.
 
@@ -142,6 +142,4 @@ Phase 0 is complete when the acceptance criteria in the governing design are met
 
 ## Out of scope
 
-Temporal claims, heartbeat, TTL, automatic expiry and reaping, `resync` automation, a general coded break-glass flow, broad corruption-repair automation, exhaustive adapter parity, and broader CI matrices. These join the interface only after a demonstrated failure shows the explicit-release plus `doctor` model is insufficient.
-
-Any future temporal-claim design is bound by one invariant from the accepted architecture: a claim is never released or ignored solely because a heartbeat was missed or a TTL elapsed. Takeover requires explicit release, or positive owner-liveness confirmation plus a recorded takeover handshake.
+The deferred-hardening list, the demonstrated-need bar for adding any of it, and the invariant binding any future temporal-claim design are defined once in the governing design's ["Coordination module" section](../specs/2026-08-02-repository-collaboration-architecture-design.md#coordination-module) and are not restated here.
