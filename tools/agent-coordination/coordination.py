@@ -505,10 +505,11 @@ class _Lock:
             # PermissionError: Windows reports ERROR_ACCESS_DENIED when the
             # lockfile is in pending-delete (holder mid-os.remove) — that is
             # contention, not a permissions problem, so retry it too.
-            except (FileExistsError, PermissionError):
+            except (FileExistsError, PermissionError) as exc:
                 if time.monotonic() >= deadline:
                     raise RegistryError(
-                        f"registry lock held: {self.lock_path}. If the holder "
+                        f"registry lock held: {self.lock_path} "
+                        f"(last error: {exc!r}). If the holder "
                         "is dead, remove the lock file manually (doctor "
                         "reports it); automatic reaping is deliberately absent."
                     )
