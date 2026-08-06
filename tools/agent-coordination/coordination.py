@@ -358,10 +358,12 @@ _PS_WRITE_CMDLETS = {
     "set-content", "add-content", "clear-content", "out-file", "new-item",
     "remove-item", "move-item", "rename-item", "set-item", "clear-item",
     "tee-object", "export-csv", "export-clixml",
-    # pwsh 7 aliases only; `sc` is deliberately absent (not an alias
-    # there, and it would false-deny `sc query` service control).
-    "ac", "clc", "ni", "ri", "del", "erase", "rd", "rmdir", "move", "mi",
-    "ren", "rni", "tee",
+    # `sc` is Set-Content under Windows PowerShell 5.1 (gone in pwsh 7,
+    # where it would shadow sc.exe). Kept: a false-denied `sc query` on
+    # main is deny-safe; dropping it is a 5.1 bypass. Bash payloads are
+    # unaffected — the cmdlet layer is PowerShell-gated.
+    "sc", "ac", "clc", "ni", "ri", "del", "erase", "rd", "rmdir",
+    "move", "mi", "ren", "rni", "tee",
 }
 _PS_COPY_CMDLETS = {"copy-item", "cpi", "copy"}
 _PS_PATH_PARAMS = {"-path", "-literalpath", "-filepath", "-destination",
@@ -417,6 +419,10 @@ def _ps_write_targets(argv):
     if cmd in _PS_COPY_CMDLETS:
         dests = [v for k, v in flagged if k == "-destination"]
         return dests or positional[-1:]
+    if cmd in ("set-item", "si", "clear-item", "cli"):
+        # Second positional is the item's VALUE (`Set-Item Env:FOO bar`),
+        # never a path.
+        return [v for _, v in flagged] + positional[:1]
     return [v for _, v in flagged] + positional
 
 
@@ -541,6 +547,13 @@ def _shell_events(command, cwd, ps=False):
                 # the adapter's contract (#17). Git hooks backstop write
                 # forms; delete-class targets (rm, mv sources) have no
                 # backstop, an accepted residual of failing open.
+                continue
+            if ps and re.match(r"[A-Za-z]{2,}:", target):
+                # Provider path (Env:, Variable:, Alias:, HKLM:, or a
+                # named PSDrive), not a filesystem file. Single letters
+                # stay: those are real drives. A multi-letter PSDrive
+                # mapped onto the filesystem escapes here — accepted
+                # fail-open, like unexpanded substitutions above.
                 continue
             target = os.path.expanduser(target)
             yield ("target", target if os.path.isabs(target)

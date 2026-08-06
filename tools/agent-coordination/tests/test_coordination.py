@@ -167,6 +167,20 @@ class TestMainRule(TempRepoCase):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo, ps=True), cmd)
 
+    def test_powershell_sc_alias_denied_on_main(self):
+        # `sc` is Set-Content under Windows PowerShell 5.1; dropping it
+        # would reopen the #41 gap there.
+        for cmd in ("sc README.md pwned", "sc -Path seed.txt -Value x"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=True), cmd)
+
+    def test_powershell_provider_paths_allowed_on_main(self):
+        # Env:/Variable:/Alias: targets are provider items, not files.
+        for cmd in ("Set-Item Env:FOO bar", "Clear-Item Variable:x",
+                    "Set-Content -Path Env:FOO -Value bar"):
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=True), cmd)
+
     def test_powershell_backslash_path_denied(self):
         # A Windows-separator absolute path must not be eaten by the
         # POSIX tokenizer (cold-review P1).
