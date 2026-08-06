@@ -33,7 +33,7 @@ Acceptance of Phases 1 and 2 does not carry any Civil 3D claim: contract-valid i
 
 Phase 0 was authorized by owner decisions on 2026-08-04 and accepted on 2026-08-05 (gate-change log). It was delivered under the approved [implementation plan](superpowers/plans/2026-08-04-phase-0-coordination-foundation.md); its exit-gate evidence is recorded on the work items cited in the log.
 
-No phase is active. Opening the next phase requires its own owner decision, recorded in the gate-change log.
+No phase is active. Opening the next phase requires its own owner decision, recorded in the gate-change log. Maintenance of an accepted phase's deliverables against a filed issue — bug fixes, and the documentation and test changes that accompany them — needs no new gate; new capability does.
 
 ## Delivery level
 
