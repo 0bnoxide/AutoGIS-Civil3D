@@ -1267,6 +1267,9 @@ def main(argv=None):
                 return MISUSE
             result = claim(repo, args.session, args.kind, args.value,
                            args.harness)
+            if "error" in result:
+                print(f"claim: {result['error']}", file=sys.stderr)
+                return MISUSE
             if "rejected" in result:
                 other = result["rejected"]
                 print(f"deny: {args.kind} '{args.value}' is claimed by "
