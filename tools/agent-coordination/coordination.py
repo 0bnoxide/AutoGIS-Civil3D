@@ -502,7 +502,10 @@ class _Lock:
                 )
                 os.write(self.fd, f"{os.getpid()}@{socket.gethostname()} {_now()}".encode())
                 return self
-            except FileExistsError:
+            # PermissionError: Windows reports ERROR_ACCESS_DENIED when the
+            # lockfile is in pending-delete (holder mid-os.remove) — that is
+            # contention, not a permissions problem, so retry it too.
+            except (FileExistsError, PermissionError):
                 if time.monotonic() >= deadline:
                     raise RegistryError(
                         f"registry lock held: {self.lock_path}. If the holder "
