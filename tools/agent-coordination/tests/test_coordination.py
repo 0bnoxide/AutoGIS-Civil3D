@@ -346,6 +346,100 @@ class TestMainRule(TempRepoCase):
                 coordination.deny_reason_for_git_argv(argv, self.repo_path),
                 argv)
 
+    def test_git_working_tree_plumbing_denied_on_main(self):
+        # #45: index/worktree writers with no commit backstop, and a forced
+        # switch that discards the main working tree.
+        for argv in (["git", "read-tree", "-u", "--reset", "HEAD"],
+                     ["git", "checkout-index", "-a", "-f"],
+                     ["git", "sparse-checkout", "set", "foo"],
+                     ["git", "pull"],
+                     ["git", "switch", "--discard-changes", "main"],
+                     ["git", "switch", "-f", "main"]):
+            self.assertIsNotNone(
+                coordination.deny_reason_for_git_argv(argv, self.repo_path),
+                argv)
+
+    def test_git_ref_movers_targeting_main_denied_from_any_tree(self):
+        # #45: ref movers shift the shared main ref regardless of the cwd's
+        # branch, so they deny even called from a non-repo directory.
+        for argv in (["git", "update-ref", "refs/heads/main", "HEAD~1"],
+                     ["git", "update-ref", "-d", "refs/heads/main"],
+                     ["git", "branch", "-f", "main", "HEAD~1"],
+                     ["git", "branch", "-D", "main"],
+                     ["git", "branch", "-M", "main"],
+                     ["git", "symbolic-ref", "HEAD", "refs/heads/main"]):
+            self.assertIsNotNone(
+                coordination.deny_reason_for_git_argv(argv, self.base), argv)
+
+    def test_git_safe_ref_and_switch_forms_allowed(self):
+        for argv in (["git", "switch", "feature"],
+                     ["git", "switch", "-c", "newfeature"],
+                     ["git", "branch"],
+                     ["git", "branch", "newfeature"],
+                     ["git", "branch", "-D", "oldfeature"],
+                     ["git", "sparse-checkout", "list"],
+                     ["git", "update-ref", "refs/heads/feature", "HEAD"],
+                     ["git", "symbolic-ref", "HEAD"]):
+            self.assertIsNone(
+                coordination.deny_reason_for_git_argv(argv, self.repo_path),
+                argv)
+
+    def test_prefix_wrappers_do_not_hide_mutators(self):
+        # #46: sudo/env/nice/timeout/xargs/command run the real command in
+        # their trailing argv; the argv[0]-keyed checks must see through them.
+        for cmd in ("sudo git reset --hard",
+                    "env X=1 git reset --hard",
+                    "nice git reset --hard",
+                    "nice -n 5 git reset --hard",
+                    "timeout 5 git reset --hard",
+                    "xargs git reset --hard",
+                    "command git reset --hard",
+                    "sudo rm seed.txt",
+                    "sudo bash -c 'rm seed.txt'"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo), cmd)
+
+    def test_interpreter_c_strings_are_reparsed(self):
+        # #46: bash -c / eval / sh -c wrap the real command in a quoted arg
+        # that _mask_literals blanks; recurse into it.
+        for cmd in ('bash -c "git reset --hard"',
+                    "sh -c 'rm seed.txt'",
+                    'eval "git reset --hard"'):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo), cmd)
+
+    def test_powershell_interpreter_wrappers_reparsed(self):
+        # #46, PowerShell adapter: -Command, iex, and the call-operator block.
+        for cmd in ('pwsh -Command "Remove-Item seed.txt"',
+                    'iex "Remove-Item seed.txt"',
+                    "& { Remove-Item seed.txt }"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=True), cmd)
+
+    def test_wrapper_unwrapping_does_not_over_deny(self):
+        # Benign wrapped commands, and the documented residual (a language
+        # interpreter cannot be reparsed), must stay allowed.
+        allowed = [("sudo ls", False),
+                   ('bash -c "git log"', False),
+                   ("timeout 5 echo hi", False),
+                   ("python -c \"open('seed.txt','w')\"", False),  # residual
+                   ("& { Get-Content seed.txt }", True)]
+        for cmd, ps in allowed:
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=ps), cmd)
+
+    def test_git_dry_run_and_stash_object_forms_allowed_on_main(self):
+        # #45: these touch no working tree or index, so the mutator gate
+        # over-denied them; keep them allowed on main.
+        for argv in (["git", "clean", "-n"],
+                     ["git", "clean", "--dry-run"],
+                     ["git", "mv", "-n", "a", "b"],
+                     ["git", "stash", "create"],
+                     ["git", "stash", "store", "deadbeef"]):
+            self.assertIsNone(
+                coordination.deny_reason_for_git_argv(argv, self.repo_path),
+                argv)
+
     def test_chained_dash_c_accumulates_and_work_tree_wins(self):
         nested = os.path.join(self.repo_path, "sub")
         os.makedirs(nested, exist_ok=True)
@@ -855,6 +949,30 @@ class TestPreToolUseAdapter(TempRepoCase):
     def test_malformed_payload_fails_open(self):
         rc = coordination.hook_pre_tool_use("this is not json")
         self.assertEqual(rc, coordination.ALLOW)
+
+    def test_main_routes_pre_tool_use_from_foreign_process_cwd(self):
+        # #47: when the harness runs the hook process from outside any repo,
+        # main()'s process-cwd discover() is None. pre-tool-use governs the
+        # PAYLOAD cwd, so it must still be dispatched (not fail open) — a write
+        # into the main checkout must deny. The git hooks always run in-repo,
+        # so only pre-tool-use needs this.
+        import io
+        from contextlib import redirect_stdout
+        payload = json.dumps({
+            "tool_name": "Write",
+            "tool_input": {"file_path": os.path.join(self.repo_path, "x.txt")},
+            "cwd": self.repo_path,
+        })
+        foreign = tempfile.mkdtemp(prefix="coord-foreign-")
+        self.addCleanup(shutil.rmtree, foreign, ignore_errors=True)
+        old = os.getcwd()
+        os.chdir(foreign)
+        self.addCleanup(os.chdir, old)
+        buffer = io.StringIO()
+        with mock.patch.object(sys, "stdin", io.StringIO(payload)):
+            with redirect_stdout(buffer):
+                coordination.main(["hook", "pre-tool-use"])
+        self.assertIn("deny", buffer.getvalue())
 
 
 class TestSyncMain(TempRepoCase):

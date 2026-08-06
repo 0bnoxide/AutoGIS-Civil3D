@@ -141,6 +141,11 @@ GIT_MUTATORS = {
     # rm/mv delete or displace tracked files, stash reverts the tree,
     # apply writes files directly.
     "rm", "mv", "stash", "apply",
+    # More working-tree/index writers with no commit backstop (#45):
+    # read-tree -u and checkout-index write the tree from index/objects,
+    # sparse-checkout adds/removes tracked files, pull fast-forwards the
+    # tree and ref with no commit of its own.
+    "read-tree", "checkout-index", "sparse-checkout", "pull",
 }
 REDIRECT_RE = re.compile(r"(?<![<>])>{1,2}\s*([^\s|;&<>]+)")
 
@@ -253,6 +258,37 @@ def _is_checkout_restore(sub, argv, sub_index, workdir):
     return False
 
 
+def _is_forced_switch(sub, rest):
+    """`git switch` overwriting the working tree: --discard-changes/-f/--force
+    throw away uncommitted work with no commit, so no hook fires — the switch
+    analog of the checkout-restore case. Bare `switch <branch>` and
+    `switch -c` stay allowed (#45)."""
+    return sub == "switch" and any(
+        t in ("--discard-changes", "-f", "--force") for t in rest)
+
+
+def _ref_move_targets_main(sub, rest):
+    """A ref-moving command aimed at `main`. Unlike working-tree mutators
+    these move, delete, or repoint the shared `main` ref from ANY worktree,
+    so they are gated on the target ref, not the cwd's tree (#45) — the same
+    shape as the `push` handler. Safe forms carry no main target: listing
+    branches, creating/deleting a feature branch, reading a symbolic ref.
+
+    `branch` is dual-use, so it is only destructive with a force/delete/move
+    flag; the check then fails toward deny if `main` appears at all (the sole
+    over-deny, `branch -f x main` using main as a start-point, is obscure and
+    safe-direction)."""
+    main_refs = (MAIN_BRANCH, f"refs/heads/{MAIN_BRANCH}")
+    if sub == "branch":
+        destructive = {"-f", "--force", "-d", "-D", "--delete",
+                       "-m", "-M", "--move", "-c", "-C", "--copy"}
+        if not any(t in destructive for t in rest):
+            return False
+    elif sub not in ("update-ref", "symbolic-ref"):
+        return False
+    return any(t in main_refs for t in rest if not t.startswith("-"))
+
+
 def deny_reason_for_git_argv(argv, cwd):
     """Deny git commands that mutate main or push to remote main."""
     if not argv or argv[0] != "git":
@@ -268,11 +304,22 @@ def deny_reason_for_git_argv(argv, cwd):
                         "goes through pull requests only.")
         return None
     rest = argv[sub_index + 1:]
-    # Read-only forms of the worktree mutators. `stash list/show` is
-    # matched on the FIRST token only — `stash push -m "list"` must not
-    # slip through on its message text. `apply --check/--stat/--numstat`
-    # writes nothing unless --apply forces it; `rm --dry-run` likewise.
-    if sub == "stash" and rest[:1] and rest[0] in ("list", "show"):
+    # Ref movers (update-ref/symbolic-ref/destructive branch) shift the shared
+    # `main` ref from any worktree, so they are denied by target ref, not by
+    # the cwd's tree (#45) — the same treatment as push above.
+    if _ref_move_targets_main(sub, rest):
+        return (f"git {sub} moves '{MAIN_BRANCH}'. main is read-only: "
+                "integration goes through pull requests only.")
+    # Read-only / dry-run / object-only forms of the worktree mutators.
+    # `stash list/show` is matched on the FIRST token only — `stash push -m
+    # "list"` must not slip through on its message text; `stash create/store`
+    # touch no tree or index. `apply --check/--stat/--numstat` writes nothing
+    # unless --apply forces it; `rm/clean/mv --dry-run` and `sparse-checkout
+    # list` likewise.
+    if sub == "stash" and rest[:1] \
+            and rest[0] in ("list", "show", "create", "store"):
+        return None
+    if sub == "sparse-checkout" and rest[:1] and rest[0] == "list":
         return None
     if sub == "apply" and "--apply" not in rest \
             and not any(a.startswith("--build-fake-ancestor") for a in rest) \
@@ -280,10 +327,12 @@ def deny_reason_for_git_argv(argv, cwd):
                     for a in rest):
         # --build-fake-ancestor writes a file even under --check.
         return None
-    if sub == "rm" and any(a in ("-n", "--dry-run") for a in rest):
+    if sub in ("rm", "clean", "mv") \
+            and any(a in ("-n", "--dry-run") for a in rest):
         return None
-    is_mutator = sub in GIT_MUTATORS or _is_checkout_restore(
-        sub, argv, sub_index, _git_effective_workdir(argv, cwd))
+    is_mutator = sub in GIT_MUTATORS or _is_forced_switch(sub, rest) \
+        or _is_checkout_restore(
+            sub, argv, sub_index, _git_effective_workdir(argv, cwd))
     if is_mutator:
         tree = tree_containing(workdir or ".")
         if tree and branch_of_tree(tree) == MAIN_BRANCH:
@@ -459,7 +508,75 @@ def _mask_literals(command):
     return masked
 
 
-def _shell_events(command, cwd, ps=False):
+# Command wrappers that run the REAL command given in their trailing argv.
+# Peeling them exposes the wrapped command to the argv[0]-keyed checks (#46).
+_CMD_PREFIXES = {"sudo", "doas", "env", "nice", "ionice", "chrt", "nohup",
+                 "setsid", "stdbuf", "time", "timeout", "watch", "command",
+                 "builtin", "exec", "xargs"}
+_SH_DASH_C = {"bash", "sh", "zsh", "dash", "ksh"}
+_PS_DASH_C = {"pwsh", "powershell"}
+_MAX_UNWRAP_DEPTH = 4
+
+
+def _strip_cmd_prefixes(argv, _depth=0):
+    """Peel leading wrapper words (sudo/env/nice/timeout/xargs/...) so the
+    wrapped command surfaces (#46). Skips each wrapper's option flags,
+    `VAR=val` assignments, and numeric option-values/durations (no command is
+    a bare number). A string-valued wrapper option (`sudo -u bob`) is the
+    residual — `bob` is then read as the command — but a mis-peel only fails
+    toward today's behaviour (the wrapped command stays unchecked), never
+    toward a new over-deny."""
+    if _depth > _MAX_UNWRAP_DEPTH or not argv or argv[0].lower() \
+            not in _CMD_PREFIXES:
+        return argv
+    i = 1
+    while i < len(argv):
+        tok = argv[i]
+        if tok.startswith("-"):
+            i += 1  # the wrapper's own option flag
+        elif re.match(r"^\w+=", tok):
+            i += 1  # env VAR=val
+        elif re.match(r"^[\d.]+[smhd]?$", tok):
+            i += 1  # numeric option value or duration — never a command name
+        else:
+            break
+    return _strip_cmd_prefixes(argv[i:], _depth + 1)
+
+
+def _nested_script(argv):
+    """If argv is an interpreter invoked on an inline script string, return
+    (inner_command, ps) to re-parse; else None. Covers bash/sh/zsh/dash/ksh
+    -c, pwsh/powershell -Command/-c, cmd /c, eval, and iex (#46). Arbitrary
+    language interpreters (python -c, perl -e) and `$(...)`/backtick command
+    substitution are the structural residual — inspecting them means running
+    or parsing another language — as is the already-existing `$`/backtick
+    redirect-target fail-open below.
+    ponytail: nested shell strings only; language interpreters left to the
+    git-hook backstop and per-write claim layer."""
+    if not argv:
+        return None
+    head, rest = argv[0].lower(), argv[1:]
+
+    def after(flags, ps):
+        for j, tok in enumerate(rest):
+            if tok.lower() in flags and j + 1 < len(rest):
+                return rest[j + 1], ps
+        return None
+
+    if head in _SH_DASH_C:
+        return after({"-c"}, False)
+    if head in _PS_DASH_C:
+        return after({"-command", "-c"}, True)
+    if head in ("cmd", "cmd.exe"):
+        return after({"/c", "/k"}, False)
+    if head == "eval" and rest:
+        return " ".join(rest), False
+    if head in ("iex", "invoke-expression") and rest:
+        return rest[0], True
+    return None
+
+
+def _shell_events(command, cwd, ps=False, _depth=0):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
     One parser feeds both the stateless main rule and the claim layer, so a
@@ -508,8 +625,19 @@ def _shell_events(command, cwd, ps=False):
             if t:
                 raw_targets.append(t.group(1))
         for stage in stages:
-            argv = _argv_of(stage)
+            argv = _strip_cmd_prefixes(_argv_of(stage))
+            if ps and argv and argv[0] in ("&", ".") and argv[1:2] == ["{"]:
+                # PowerShell call/dot operator on a script block: `& { cmd }`.
+                # Drop the operator and brace tokens so the inner command is
+                # checked (#46). Top-level `;`/`&&` already split multi-command
+                # blocks into separate segments upstream.
+                argv = [t for t in argv[1:] if t not in ("{", "}")]
             if not argv:
+                continue
+            nested = _nested_script(argv)
+            if nested is not None and _depth < _MAX_UNWRAP_DEPTH:
+                yield from _shell_events(
+                    nested[0], effective_cwd, ps=nested[1], _depth=_depth + 1)
                 continue
             yield ("git", argv, effective_cwd)
             if argv[0] == "tee":
@@ -1246,6 +1374,13 @@ def main(argv=None):
     repo = discover()
     if repo is None:
         if args.command == "hook":
+            # pre-tool-use governs the payload's cwd, not the hook process's:
+            # hook_pre_tool_use does its own discover(payload cwd), so a write
+            # into the main checkout must reach it even when the harness runs
+            # the hook from outside any repository (#47). The git hooks always
+            # run in-repo, so their foreign-context short-circuit is sound.
+            if args.event == "pre-tool-use":
+                return hook_pre_tool_use(sys.stdin.read())
             return ALLOW  # foreign context: not governed
         print("not inside a git repository", file=sys.stderr)
         return OPFAIL
