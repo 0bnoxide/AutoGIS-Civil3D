@@ -142,6 +142,106 @@ class TestMainRule(TempRepoCase):
         self.assertIsNotNone(coordination.deny_reason_for_git_argv(
             ["git", "push", "-f", "origin", "feature:main"], self.repo_path))
 
+    def test_git_worktree_mutators_denied_on_main(self):
+        # rm/mv/stash/apply mutate the tree with no commit, so no
+        # pre-commit backstop (#42).
+        for argv in (["git", "rm", "seed.txt"],
+                     ["git", "mv", "seed.txt", "other.txt"],
+                     ["git", "stash"],
+                     ["git", "apply", "p.patch"]):
+            self.assertIsNotNone(
+                coordination.deny_reason_for_git_argv(argv, self.repo_path),
+                argv)
+
+    def test_powershell_write_cmdlets_denied_on_main(self):
+        # PowerShell write forms reach the same rule as POSIX ones (#41).
+        for cmd in ("Set-Content -Path seed.txt -Value pwned",
+                    "Remove-Item seed.txt",
+                    "'x' | Out-File seed.txt",
+                    "New-Item -ItemType File -Force seed.txt",
+                    "Copy-Item other.txt seed.txt",
+                    "Move-Item seed.txt ../elsewhere.txt",
+                    "Rename-Item seed.txt pwned.md",
+                    "'x' | Tee-Object seed.txt",
+                    "rd seed.txt"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=True), cmd)
+
+    def test_powershell_sc_alias_denied_on_main(self):
+        # `sc` is Set-Content under Windows PowerShell 5.1; dropping it
+        # would reopen the #41 gap there.
+        for cmd in ("sc README.md pwned", "sc -Path seed.txt -Value x"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=True), cmd)
+
+    def test_powershell_provider_paths_allowed_on_main(self):
+        # Env:/Variable:/Alias: targets are provider items, not files.
+        for cmd in ("Set-Item Env:FOO bar", "Clear-Item Variable:x",
+                    "Set-Content -Path Env:FOO -Value bar"):
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=True), cmd)
+
+    def test_powershell_backslash_path_denied(self):
+        # A Windows-separator absolute path must not be eaten by the
+        # POSIX tokenizer (cold-review P1).
+        target = os.path.join(self.repo_path, "seed.txt").replace("/", "\\")
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"Set-Content -Path {target} -Value pwned",
+            self.repo_path, self.repo, ps=True))
+
+    def test_powershell_colon_binding_denied(self):
+        # `-Path:file` carries its value inline (cold-review P1).
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            "Set-Content -Path:seed.txt -Value pwned",
+            self.repo_path, self.repo, ps=True))
+
+    def test_powershell_cmdlets_ignored_for_bash_payloads(self):
+        # `sc`, `copy`, `del`... are legitimate command names under other
+        # shells; the cmdlet layer applies to PowerShell payloads only.
+        for cmd in ("sc query eventlog", "del something", "ni hello"):
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo), cmd)
+
+    def test_git_apply_build_fake_ancestor_denied(self):
+        # --build-fake-ancestor writes a file even under --check.
+        self.assertIsNotNone(coordination.deny_reason_for_git_argv(
+            ["git", "apply", "--check", "--build-fake-ancestor", "out",
+             "p.patch"], self.repo_path))
+
+    def test_git_read_only_forms_allowed_on_main(self):
+        for argv in (["git", "stash", "list"],
+                     ["git", "stash", "show"],
+                     ["git", "apply", "--check", "p.patch"],
+                     ["git", "apply", "--stat", "p.patch"],
+                     ["git", "rm", "--dry-run", "seed.txt"],
+                     ["git", "rm", "-n", "seed.txt"]):
+            self.assertIsNone(
+                coordination.deny_reason_for_git_argv(argv, self.repo_path),
+                argv)
+
+    def test_git_read_only_lookalikes_still_denied_on_main(self):
+        # A stash message naming "list" is still a push; --apply forces
+        # an apply despite --check-style flags.
+        for argv in (["git", "stash", "push", "-m", "list"],
+                     ["git", "apply", "--stat", "--apply", "p.patch"]):
+            self.assertIsNotNone(
+                coordination.deny_reason_for_git_argv(argv, self.repo_path),
+                argv)
+
+    def test_powershell_unmodeled_switch_does_not_swallow_path(self):
+        # -NoNewline is not modeled; the unknown-parameter default must
+        # fail toward deny, not consume the path token.
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            "Out-File -NoNewline seed.txt", self.repo_path, self.repo,
+            ps=True))
+
+    def test_powershell_copy_from_main_allowed(self):
+        # Copy-class cmdlets write only their destination; reading a file
+        # off main is not a mutation.
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            "Copy-Item seed.txt ~/coord-test-elsewhere.txt",
+            self.repo_path, self.repo, ps=True))
+
     def test_shell_redirect_onto_main_denied(self):
         reason = coordination.deny_reason_for_shell(
             "echo boom > seed.txt", self.repo_path, self.repo)
@@ -585,6 +685,53 @@ class TestClaims(TempRepoCase):
         leftovers = [n for n in os.listdir(os.path.dirname(self.repo.registry_path))
                      if n.endswith(".tmp") or n.endswith(".lock")]
         self.assertEqual(leftovers, [])
+
+    def test_lock_retries_through_windows_delete_pending(self):
+        # Windows reports a delete-pending lock file as PermissionError, not
+        # FileExistsError. Contention must retry, not surface a traceback.
+        real_open = os.open
+        denials = [PermissionError(13, "Permission denied")]
+
+        def flaky_open(path, flags, *args):
+            if str(path).endswith(coordination.LOCK_SUFFIX) and denials:
+                raise denials.pop()
+            return real_open(path, flags, *args)
+
+        with mock.patch.object(os, "open", flaky_open):
+            record = coordination.claim(
+                self.repo, "s1", "branch", "feature")["claimed"]
+        self.assertEqual(record["value"], "feature")
+        self.assertEqual(denials, [])
+
+    def test_lock_reports_a_persistent_permission_error(self):
+        # A denial that outlives the deadline is an unwritable state
+        # directory, not contention: say so instead of blaming a holder.
+        def always_denied(path, flags, *args):
+            raise PermissionError(13, "Permission denied")
+
+        with mock.patch.object(os, "open", always_denied):
+            with self.assertRaises(coordination.RegistryError) as caught:
+                with coordination._Lock(self.repo.registry_path, timeout=0.0):
+                    pass
+        self.assertIn("Permission denied", str(caught.exception))
+        self.assertIn("not creatable", str(caught.exception))
+
+    def test_lock_does_not_retry_a_failure_after_it_holds_the_lock(self):
+        # A write failure means this process already holds the lock:
+        # retrying would make it contend with its own lock file.
+        def failing_write(fd, data):
+            raise PermissionError(13, "Permission denied")
+
+        with mock.patch.object(os, "write", failing_write):
+            with self.assertRaises(coordination.RegistryError) as caught:
+                with coordination._Lock(self.repo.registry_path, timeout=5.0):
+                    pass
+        # RegistryError is not an OSError, and main() catches only the
+        # former: a bare OSError here would crash the CLI (#54 review).
+        self.assertIsInstance(caught.exception.__cause__, PermissionError)
+        # ...and it must not leave the lock file behind for nobody to release.
+        self.assertFalse(
+            os.path.exists(self.repo.registry_path + coordination.LOCK_SUFFIX))
 
 
 class TestAdrAllocation(TempRepoCase):

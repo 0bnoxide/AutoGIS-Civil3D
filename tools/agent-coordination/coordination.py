@@ -137,6 +137,10 @@ def tree_containing(path):
 GIT_MUTATORS = {
     "commit", "merge", "rebase", "cherry-pick", "revert", "reset", "am",
     "restore", "clean",
+    # Working-tree mutators with no commit, so no hook backstop (#42):
+    # rm/mv delete or displace tracked files, stash reverts the tree,
+    # apply writes files directly.
+    "rm", "mv", "stash", "apply",
 }
 REDIRECT_RE = re.compile(r"(?<![<>])>{1,2}\s*([^\s|;&<>]+)")
 
@@ -263,6 +267,21 @@ def deny_reason_for_git_argv(argv, cwd):
                 return (f"push targets remote '{MAIN_BRANCH}'. Integration "
                         "goes through pull requests only.")
         return None
+    rest = argv[sub_index + 1:]
+    # Read-only forms of the worktree mutators. `stash list/show` is
+    # matched on the FIRST token only — `stash push -m "list"` must not
+    # slip through on its message text. `apply --check/--stat/--numstat`
+    # writes nothing unless --apply forces it; `rm --dry-run` likewise.
+    if sub == "stash" and rest[:1] and rest[0] in ("list", "show"):
+        return None
+    if sub == "apply" and "--apply" not in rest \
+            and not any(a.startswith("--build-fake-ancestor") for a in rest) \
+            and any(a in ("--check", "--stat", "--numstat", "--summary")
+                    for a in rest):
+        # --build-fake-ancestor writes a file even under --check.
+        return None
+    if sub == "rm" and any(a in ("-n", "--dry-run") for a in rest):
+        return None
     is_mutator = sub in GIT_MUTATORS or _is_checkout_restore(
         sub, argv, sub_index, _git_effective_workdir(argv, cwd))
     if is_mutator:
@@ -273,14 +292,16 @@ def deny_reason_for_git_argv(argv, cwd):
     return None
 
 
-def deny_reason_for_shell(command, cwd, repo_hint=None):
+def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False):
     """Deny shell commands that write files on main or run git mutators there.
 
     ponytail: tokenizes each `&&`/`;`-separated segment and checks git
     commands plus common write forms (>, >>, tee, sed -i, dd of=, truncate).
     A full shell parser is deferred until a bypass is demonstrated.
+    `ps` marks a PowerShell payload: cmdlet write forms apply and
+    backslash paths are preserved.
     """
-    for event in _shell_events(command, cwd):
+    for event in _shell_events(command, cwd, ps=ps):
         if event[0] == "git":
             reason = deny_reason_for_git_argv(event[1], event[2])
         else:
@@ -329,6 +350,82 @@ def _copy_move_operands(argv):
     return None, []
 
 
+# PowerShell write cmdlets and their aliases (#41). Matching is
+# case-insensitive, like PowerShell itself. Copy-class cmdlets write only
+# their destination; the rest treat every path operand as written or
+# removed (Move-Item removes its sources, like mv).
+_PS_WRITE_CMDLETS = {
+    "set-content", "add-content", "clear-content", "out-file", "new-item",
+    "remove-item", "move-item", "rename-item", "set-item", "clear-item",
+    "tee-object", "export-csv", "export-clixml",
+    # `sc` is Set-Content under Windows PowerShell 5.1 (gone in pwsh 7,
+    # where it would shadow sc.exe). Kept: a false-denied `sc query` on
+    # main is deny-safe; dropping it is a 5.1 bypass. Bash payloads are
+    # unaffected — the cmdlet layer is PowerShell-gated.
+    "sc", "ac", "clc", "ni", "ri", "del", "erase", "rd", "rmdir",
+    "move", "mi", "ren", "rni", "tee",
+}
+_PS_COPY_CMDLETS = {"copy-item", "cpi", "copy"}
+_PS_PATH_PARAMS = {"-path", "-literalpath", "-filepath", "-destination",
+                   "-target"}
+# Parameters known to consume a non-path value. Every OTHER dashed
+# parameter is treated as a boolean switch: an unmodeled value-taker can
+# only ADD a spurious target (deny direction), whereas the inverse
+# default would let an unmodeled switch swallow the path token and
+# bypass the rule (`Out-File -NoNewline seed.txt`) — and PowerShell
+# writes have no git-hook backstop.
+_PS_VALUE_PARAMS = {"-itemtype", "-value", "-encoding", "-filter",
+                    "-include", "-exclude", "-newname", "-stream",
+                    "-credential", "-erroraction", "-warningaction",
+                    "-errorvariable", "-warningvariable", "-outvariable",
+                    "-outbuffer", "-delimiter", "-width"}
+
+
+def _ps_operands(argv):
+    """Split a PowerShell cmdlet argv into path-parameter values and
+    positional operands. `-Path a,b` claims both."""
+    flagged, positional, i = [], [], 1
+    while i < len(argv):
+        tok = argv[i]
+        low = tok.lower()
+        if low.startswith("-") and ":" in tok:
+            # Colon binding: `-Path:file` carries its value inline. An
+            # unknown parameter's inline value is kept as a positional so
+            # the unmodeled case still fails toward deny.
+            param, _, value = tok.partition(":")
+            param = param.lower()
+            if param in _PS_PATH_PARAMS:
+                flagged += [(param, v) for v in value.split(",")]
+            elif param not in _PS_VALUE_PARAMS:
+                positional += value.split(",")
+            i += 1
+        elif low.startswith("-"):
+            if low in _PS_PATH_PARAMS and i + 1 < len(argv):
+                flagged += [(low, v) for v in argv[i + 1].split(",")]
+                i += 2
+            elif low in _PS_VALUE_PARAMS and i + 1 < len(argv):
+                i += 2  # known value that is not a path
+            else:
+                i += 1  # switch, or unknown: fail toward deny
+        else:
+            positional += tok.split(",")
+            i += 1
+    return flagged, positional
+
+
+def _ps_write_targets(argv):
+    cmd = argv[0].lower()
+    flagged, positional = _ps_operands(argv)
+    if cmd in _PS_COPY_CMDLETS:
+        dests = [v for k, v in flagged if k == "-destination"]
+        return dests or positional[-1:]
+    if cmd in ("set-item", "si", "clear-item", "cli"):
+        # Second positional is the item's VALUE (`Set-Item Env:FOO bar`),
+        # never a path.
+        return [v for _, v in flagged] + positional[:1]
+    return [v for _, v in flagged] + positional
+
+
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
@@ -362,13 +459,19 @@ def _mask_literals(command):
     return masked
 
 
-def _shell_events(command, cwd):
+def _shell_events(command, cwd, ps=False):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
     One parser feeds both the stateless main rule and the claim layer, so a
     write form covered by one is covered by the other.
     """
     effective_cwd = cwd
+    if ps:
+        # PowerShell's escape character is the backtick, never the
+        # backslash, so flipping separators is semantics-preserving and
+        # keeps `C:\repo\file` from being eaten by the POSIX tokenizer
+        # (which would silently drop the write target).
+        command = command.replace("\\", "/")
     masked_all = _mask_literals(command)
     cuts = [m.span() for m in re.finditer(r"&&|\|\||;|\n", masked_all)]
     cuts.append((len(command), len(command)))
@@ -421,6 +524,13 @@ def _shell_events(command, cwd):
                 # A deletion never reaches a commit, so no hook can restore
                 # it; the adapter is the only layer that sees it.
                 raw_targets += [a for a in argv[1:] if not a.startswith("-")]
+            low = argv[0].lower()
+            if ps and (low in _PS_WRITE_CMDLETS or low in _PS_COPY_CMDLETS):
+                # PowerShell payloads only: `copy`, `move`, `del`, `ni`
+                # are legitimate command names under other shells.
+                # Remove-Item and Move-Item sources are the same
+                # no-backstop delete class as rm/mv above.
+                raw_targets += _ps_write_targets(argv)
             if argv[0] in ("cp", "mv", "install"):
                 dest, sources = _copy_move_operands(argv)
                 if dest:
@@ -438,13 +548,21 @@ def _shell_events(command, cwd):
                 # forms; delete-class targets (rm, mv sources) have no
                 # backstop, an accepted residual of failing open.
                 continue
+            if ps and re.match(r"[A-Za-z]{2,}:", target):
+                # Provider path (Env:, Variable:, Alias:, HKLM:, or a
+                # named PSDrive), not a filesystem file. Single letters
+                # stay: those are real drives. A multi-letter PSDrive
+                # mapped onto the filesystem escapes here — accepted
+                # fail-open, like unexpanded substitutions above.
+                continue
             target = os.path.expanduser(target)
             yield ("target", target if os.path.isabs(target)
                    else os.path.join(effective_cwd or ".", target))
 
 
-def shell_write_targets(command, cwd):
-    return [e[1] for e in _shell_events(command, cwd) if e[0] == "target"]
+def shell_write_targets(command, cwd, ps=False):
+    return [e[1] for e in _shell_events(command, cwd, ps=ps)
+            if e[0] == "target"]
 
 
 # --------------------------------------------------------------------------
@@ -497,23 +615,52 @@ class _Lock:
         os.makedirs(os.path.dirname(self.lock_path), exist_ok=True)
         while True:
             try:
+                # Only the exclusive create is retryable. A failure after it
+                # succeeds means this process holds the lock, and retrying
+                # would make it contend with its own lock file.
                 self.fd = os.open(
                     self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY
                 )
-                os.write(self.fd, f"{os.getpid()}@{socket.gethostname()} {_now()}".encode())
-                return self
-            # PermissionError: Windows reports ERROR_ACCESS_DENIED when the
-            # lockfile is in pending-delete (holder mid-os.remove) — that is
-            # contention, not a permissions problem, so retry it too.
-            except (FileExistsError, PermissionError) as exc:
+            except (FileExistsError, PermissionError) as err:
+                # Contention shows up as FileExistsError while the holder's
+                # lock file exists, and as PermissionError on Windows in the
+                # window around its removal, where a sharing violation maps to
+                # errno 13. Same contention, different errno: retry, never
+                # steal. A denial that outlives the deadline is reported
+                # verbatim, because then it is an unwritable state directory
+                # rather than contention.
                 if time.monotonic() >= deadline:
+                    if os.path.exists(self.lock_path):
+                        raise RegistryError(
+                            f"registry lock held: {self.lock_path}. If the "
+                            "holder is dead, remove the lock file manually "
+                            "(doctor reports it); automatic reaping is "
+                            "deliberately absent."
+                        )
+                    # No lock file to blame: the state directory itself is
+                    # refusing the create, so say that instead of sending
+                    # the caller after a lock that does not exist.
                     raise RegistryError(
-                        f"registry lock held: {self.lock_path} "
-                        f"(last error: {exc!r}). If the holder "
-                        "is dead, remove the lock file manually (doctor "
-                        "reports it); automatic reaping is deliberately absent."
+                        f"registry lock not creatable: {self.lock_path}. "
+                        f"The state directory refused the write: {err}"
                     )
                 time.sleep(0.1)
+            else:
+                try:
+                    os.write(self.fd,
+                             f"{os.getpid()}@{socket.gethostname()} {_now()}".encode())
+                except OSError as err:
+                    # Holding a lock nobody can release is worse than the
+                    # failure itself: drop it first. Report it as a registry
+                    # error, since RegistryError is not an OSError and a bare
+                    # one escapes main() as the traceback this fix removes.
+                    self.__exit__()
+                    self.fd = None
+                    raise RegistryError(
+                        f"registry lock acquired but not writable: "
+                        f"{self.lock_path}. The lock was released: {err}"
+                    ) from err
+                return self
 
     def __exit__(self, *exc):
         if self.fd is not None:
@@ -1042,7 +1189,8 @@ def hook_pre_tool_use(payload_text):
                             reason = str(exc)
         elif tool == "Bash" or tool == "PowerShell":
             command = tool_input.get("command", "")
-            reason = deny_reason_for_shell(command, cwd, repo)
+            ps = tool == "PowerShell"
+            reason = deny_reason_for_shell(command, cwd, repo, ps=ps)
             if reason is None and repo is not None:
                 # Shell write forms get the same claim layer as Edit/Write.
                 session = payload.get("session_id") \
@@ -1051,7 +1199,7 @@ def hook_pre_tool_use(payload_text):
                     try:
                         reason = claim_denial(
                             list_claims(repo), session,
-                            shell_write_targets(command, cwd))
+                            shell_write_targets(command, cwd, ps=ps))
                     except RegistryError as exc:
                         reason = str(exc)
         if reason:

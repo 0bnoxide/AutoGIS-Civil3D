@@ -23,7 +23,7 @@ public sealed class DiagnosticsCommands
 
         Editor editor = document.Editor;
 
-        WriteHeader(editor, "AutoGIS Civil 3D Diagnostics 0.1.1");
+        WriteHeader(editor, "AutoGIS Civil 3D Diagnostics 0.1.2");
         WriteLine(editor, "LOAD", "PASS - the managed plug-in loaded and the command started.");
         WriteLine(editor, "SAFETY", "Read-only command: no drawing, file, registry, network, or subprocess changes.");
         WriteLine(editor, "PRIVACY", "Output can contain drawing, plug-in, and trusted-path locations. Redact paths before external sharing.");

@@ -18,7 +18,7 @@ INSTALL_SCRIPT = ROOT / "scripts" / "Install-CurrentUser.ps1"
 UNINSTALL_SCRIPT = ROOT / "scripts" / "Uninstall-CurrentUser.ps1"
 UTILITIES_SCRIPT = ROOT / "scripts" / "Utilities.ps1"
 WINDOWS_SCRIPT_TEST = ROOT / "tests" / "validate_windows_scripts.py"
-EXPECTED_VERSION = "0.1.1"
+EXPECTED_VERSION = "0.1.2"
 
 
 def require(condition: bool, message: str) -> None:
