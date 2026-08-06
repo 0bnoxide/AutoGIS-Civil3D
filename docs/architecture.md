@@ -3,7 +3,9 @@
 The repository-level dependency and module map. The LandXML contract seam —
 producer rules, package shape, validator behavior, and the future adapter —
 is detailed in [docs/architecture-handoff.md](architecture-handoff.md) and
-not duplicated here.
+not duplicated here. The pre-repository handoff that seeded this project is
+preserved verbatim in
+[docs/reference/2026-08-02-architecture-handoff.md](reference/2026-08-02-architecture-handoff.md).
 
 ## Modules
 

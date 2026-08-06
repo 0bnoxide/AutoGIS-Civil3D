@@ -125,27 +125,13 @@ Generated skill copies remain checked in so a fresh or remote checkout has the r
 
 ### Capability level
 
-`docs/roadmap.md` identifies the anticipated product arc and each phase's integration gate:
-
-| Phase | Capability | Exit-gate outcome |
-|---|---|---|
-| 0 | Repository and collaboration foundation | Governance, agent tooling, local protection, CI, diagnostics preservation plan, and GitHub workflow established |
-| 1 | Language-neutral handoff contract v1 | ZIP shape, JSON Schema, LandXML rules, safety limits, issue-code policy, and contract fixtures approved |
-| 2 | Pure .NET 8 validator and CLI | Restore, build, and tests pass without Autodesk; deterministic valid and invalid fixtures prove the contract |
-| 3 | AutoGIS producer adoption | AutoGIS emits conforming packages and passes cross-repository compatibility checks |
-| 4 | Autodesk adapter foundation | Adapter seam approved; .NET Windows targeting and AutoCAD/Civil 3D SDK discovery established |
-| 5 | Read-only Civil 3D integration | A contract-valid package can be inspected or imported without unapproved drawing mutation, with live evidence |
-| 6 | Controlled Civil 3D automation | Authorized writes have explicit transaction, rollback, idempotency, and audit behavior |
-| 7 | Packaging and compatibility | Supported Civil 3D versions, bundle packaging, installation, security, and upgrades are validated |
-| 8 | Operational qualification and release | Authorized workstation qualification, sanitized evidence, support runbook, and release gate are complete |
-
-Potential alignments, profiles, corridors, pipe networks, multiple surfaces, bidirectional exchange, and other unapproved capabilities remain in an identified-capabilities parking lot. They have no implementation authority or sequence until explicitly reviewed.
+[`docs/roadmap.md`](../../roadmap.md) identifies the anticipated product arc: the phase-by-phase capability table with each phase's exit-gate outcome, and the identified-capabilities parking lot. Per the single-copy rule the roadmap is the only copy of both; they are not restated here. Parking-lot capabilities have no implementation authority or sequence until explicitly reviewed.
 
 ### Delivery level
 
 Only the active phase and the immediately next phase receive detailed slices, dependencies, test evidence, live gates, and acceptance criteria. One phase owns the integration gate at a time. Disjoint slices inside that phase may run in parallel when separately claimed; later phases remain closed.
 
-Roadmap status uses explicit values such as `Identified`, `Authorized`, `In Progress`, `Blocked`, `Accepted`, and `Deferred`. Only an explicit user decision may authorize, advance, reorder, or reopen a phase. The decision is recorded in the roadmap gate-change log; changes to ordering or architecture also receive an ADR.
+Roadmap status uses the decision-state vocabulary defined in [`docs/roadmap.md`](../../roadmap.md). Only an explicit user decision may authorize, advance, reorder, or reopen a phase. The decision is recorded in the roadmap gate-change log; changes to ordering or architecture also receive an ADR.
 
 The tracked LandXML implementation plan does not authorize execution by its presence. Phase 0 is established first, then the owner explicitly opens the appropriate contract phase.
 

@@ -6,12 +6,10 @@ This file is the authoritative record of capabilities, sequence, gate state, and
 
 `Identified` — named in the capability map; no implementation authority.
 `Authorized` — the owner has explicitly opened the phase; work may be claimed.
-`In Progress` — authorized work is underway on a branch or PR.
-`Blocked` — authorized work cannot proceed; the blocker is recorded on the work item.
 `Accepted` — the phase's exit gate has been met and the owner has accepted the evidence.
 `Deferred` — explicitly postponed by owner decision.
 
-Only an explicit owner decision may authorize, advance, reorder, or reopen a phase. Every such decision is appended to the gate-change log below. A change to phase ordering or architecture also requires an ADR.
+Each status records an owner decision, not live progress: whether authorized work is underway or blocked is live status and belongs to GitHub issues and pull requests. Only an explicit owner decision may authorize, advance, reorder, or reopen a phase. Every such decision is appended to the gate-change log below. A change to phase ordering or architecture also requires an ADR.
 
 ## Capability level
 
@@ -39,7 +37,7 @@ No phase is active. Opening the next phase requires its own owner decision, reco
 
 Per the two-level rule, only the active phase and the immediately next phase carry delivery detail. With Phase 0 accepted and no phase active, only Phase 3 (next) carries it. Later phases remain closed regardless of any plan document that mentions them.
 
-The Phase 0 governing design ([`2026-08-02-repository-collaboration-architecture-design.md`](superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md), decision record [ADR-0002](adr/0002-agent-collaboration-and-main-protection.md)) remains the authority on the coordination model, including the deferred-hardening list and the invariant that a claim is never released or ignored solely because a heartbeat was missed or a TTL elapsed.
+The Phase 0 governing design ([`2026-08-02-repository-collaboration-architecture-design.md`](superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md), decision record [ADR-0002](adr/0002-agent-collaboration-and-main-protection.md)) remains the authority on the coordination model, including its blocking-core/deferred-hardening scope split and its claim-lifecycle invariants; they are not restated here.
 
 ### Next: Phase 3 — AutoGIS producer adoption
 
