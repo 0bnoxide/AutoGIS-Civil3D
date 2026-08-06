@@ -31,18 +31,13 @@ Acceptance of Phases 1 and 2 does not carry any Civil 3D claim: contract-valid i
 
 Phase 0 was authorized by owner decisions on 2026-08-04 and accepted on 2026-08-05 (gate-change log). It was delivered under the approved [implementation plan](superpowers/plans/2026-08-04-phase-0-coordination-foundation.md); its exit-gate evidence is recorded on the work items cited in the log.
 
-No phase is active. Opening the next phase requires its own owner decision, recorded in the gate-change log. Maintenance of an accepted phase's deliverables against a filed issue — bug fixes, and the documentation and test changes that accompany them — needs no new gate; new capability does.
+Opening a phase requires its own owner decision, recorded in the gate-change log. Maintenance of an accepted phase's deliverables against a filed issue — bug fixes, and the documentation and test changes that accompany them — needs no new gate; new capability does.
 
 ## Delivery level
 
-Per the two-level rule, only the active phase and the immediately next phase carry delivery detail. With Phase 0 accepted and no phase active, only Phase 3 (next) carries it. Later phases remain closed regardless of any plan document that mentions them.
+Per the two-level rule, only the active phase — one whose Status is `Authorized` — and the immediately next phase in the capability sequence carry delivery detail. That detail is a link to the governing design and plan under `docs/superpowers/`, never a restatement, so a phase transition changes only the Status column, the appended log row, and at most one delivery link. Later phases remain closed regardless of any plan document that mentions them.
 
 The Phase 0 governing design ([`2026-08-02-repository-collaboration-architecture-design.md`](superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md), decision record [ADR-0002](adr/0002-agent-collaboration-and-main-protection.md)) remains the authority on the coordination model, including its blocking-core/deferred-hardening scope split and its claim-lifecycle invariants; they are not restated here.
-
-### Next: Phase 3 — AutoGIS producer adoption
-
-Identified only, with no implementation authority. Sequenced next because Phases 1 and 2 are accepted; opening it requires its own owner decision. Its gate is cross-repository: AutoGIS emits packages that this repository's validator accepts, proven by compatibility checks run against contract v1 rather than by either repository asserting conformance alone.
-
 ## Parking lot
 
 Identified capabilities with no implementation authority and no sequence: alignments, profiles, corridors, pipe networks, multiple surfaces per package, bidirectional exchange, machine-readable CLI output, package signing or encryption, coordinate or datum transformation. Moving any item out of the parking lot is a gate-change-log decision.

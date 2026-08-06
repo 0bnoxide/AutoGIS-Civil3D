@@ -20,7 +20,7 @@ Each step is one commit or a small group, independently verifiable, and leaves t
 
 ## Global constraints
 
-- Claim lifecycle follows the [governing design](../specs/2026-08-02-repository-collaboration-architecture-design.md)'s non-expiry invariant (its Claim registry section): `doctor` marks stale-suspect; only owner-authorized `release --force <id> --reason ...` clears an orphan.
+- Claim lifecycle — stale-suspect marking, owner-authorized orphan clearing, no automatic expiry — follows the Claim registry section of the [governing design](../specs/2026-08-02-repository-collaboration-architecture-design.md) and is not restated here.
 - The main-protection rule is stateless and evaluated independently of the registry. A corrupt, missing, or locked registry must never turn a `main` write into an allow. This is a test, not a comment.
 - Repair preserves damaged state. Nothing in this plan deletes claim state; it quarantines.
 - The coordination module is a guardrail, not a security boundary. Repository permissions and GitHub remain the external authority.
