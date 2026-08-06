@@ -254,6 +254,13 @@ class TestMainRule(TempRepoCase):
             self.assertIsNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo), cmd)
 
+    def test_cd_into_unexpanded_var_skips_relative_targets(self):
+        # #56: `cd "$D"` sets an unresolvable effective cwd; a later plain
+        # relative target (no `$` of its own) must not be measured as a bogus
+        # repo-relative path and false-denied as out of file scope.
+        self.assertEqual(coordination.shell_write_targets(
+            'cd "$D"\nprintf x > Bad.cs', self.repo_path), [])
+
     def test_quoted_literal_redirect_still_denied(self):
         for cmd in ('echo x > "seed.txt"', "echo x > 'seed.txt'"):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
@@ -821,6 +828,19 @@ class TestClaims(TempRepoCase):
                     pass
         self.assertIn("Permission denied", str(caught.exception))
         self.assertIn("not creatable", str(caught.exception))
+
+    def test_lock_deadline_trusts_exception_over_racy_probe(self):
+        # #57: a final contention failure (FileExistsError) must be reported as
+        # contention even when the lock file no longer exists at the
+        # post-deadline probe — the holder removed it in the race window.
+        def contended_open(path, flags, *args):
+            raise FileExistsError(17, "File exists")
+
+        with mock.patch.object(os, "open", contended_open):
+            with self.assertRaises(coordination.RegistryError) as caught:
+                with coordination._Lock(self.repo.registry_path, timeout=0.0):
+                    pass
+        self.assertIn("lock held", str(caught.exception))
 
     def test_lock_does_not_retry_a_failure_after_it_holds_the_lock(self):
         # A write failure means this process already holds the lock:

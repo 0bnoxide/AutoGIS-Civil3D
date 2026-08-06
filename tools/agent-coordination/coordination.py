@@ -698,8 +698,16 @@ def _shell_events(command, cwd, ps=False, _depth=0):
                 # fail-open, like unexpanded substitutions above.
                 continue
             target = os.path.expanduser(target)
-            yield ("target", target if os.path.isabs(target)
-                   else os.path.join(effective_cwd or ".", target))
+            resolved = target if os.path.isabs(target) \
+                else os.path.join(effective_cwd or ".", target)
+            if "$" in resolved or "`" in resolved:
+                # The effective cwd carries an unexpanded var — `cd "$D"` then
+                # a plain relative target (#56). The raw-target skip above
+                # missed it because the `$` entered via the cwd, not the
+                # token. The real location is unknowable, so skip rather than
+                # measure a bogus repo-relative path and false-deny.
+                continue
+            yield ("target", resolved)
 
 
 def shell_write_targets(command, cwd, ps=False):
@@ -772,7 +780,14 @@ class _Lock:
                 # verbatim, because then it is an unwritable state directory
                 # rather than contention.
                 if time.monotonic() >= deadline:
-                    if os.path.exists(self.lock_path):
+                    # Decide from the exception captured at the final attempt,
+                    # not a filesystem probe that races the holder's removal
+                    # (#57): a FileExistsError *is* contention, whether or not
+                    # the lock still exists a moment later. PermissionError is
+                    # ambiguous — Windows sharing-violation contention vs an
+                    # unwritable directory — so it falls back to the probe.
+                    if isinstance(err, FileExistsError) \
+                            or os.path.exists(self.lock_path):
                         raise RegistryError(
                             f"registry lock held: {self.lock_path}. If the "
                             "holder is dead, remove the lock file manually "
