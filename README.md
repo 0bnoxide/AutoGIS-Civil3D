@@ -25,4 +25,4 @@ valid package that requires vertical-datum review, and `3` for usage or
 operational failures. Exit `2` is not approval to import: resolve the vertical
 datum before Civil 3D use.
 
-See the [v1 contract](contract/v1/README.md), [architecture handoff](docs/architecture-handoff.md), [ADR-0001](docs/adr/0001-handoff-contract-ownership.md), [fixtures](fixtures/v1/README.md), and the approved design under `docs/superpowers/specs/`.
+See the [v1 contract](contract/v1/README.md), [roadmap](docs/roadmap.md), [architecture handoff](docs/architecture-handoff.md), [ADR-0001](docs/adr/0001-handoff-contract-ownership.md), [fixtures](fixtures/v1/README.md), the [live Civil 3D 2025 diagnostic run](docs/diagnostics/2026-08-04-live-run-civil3d-2025.md), and the approved design under `docs/superpowers/specs/`.

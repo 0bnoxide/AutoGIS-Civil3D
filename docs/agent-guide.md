@@ -19,7 +19,10 @@ states a rule that conflicts with this file, this file wins.
 Never write live status (who is working on what, what is in progress) into a
 document — GitHub carries it. Never restate another document's list, table,
 or count — link it. If two documents disagree, the one in the table above
-wins for its row's concern; file an issue for the mismatch.
+wins for its row's concern; file an issue for the mismatch. Authority flows
+only downward from the table: a fact recorded in an evidence or derived doc
+(README, `docs/diagnostics/`) is input to an owner decision, never a license
+to widen a claim elsewhere.
 
 ## The rules
 
