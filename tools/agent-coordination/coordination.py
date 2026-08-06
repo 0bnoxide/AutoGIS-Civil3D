@@ -620,12 +620,21 @@ class _Lock:
                 )
                 os.write(self.fd, f"{os.getpid()}@{socket.gethostname()} {_now()}".encode())
                 return self
-            except FileExistsError:
+            except (FileExistsError, PermissionError) as err:
+                # Windows raises PermissionError, not FileExistsError, while
+                # the holder's lock file sits in the delete-pending state
+                # between its unlink and the last handle closing. Same
+                # contention, different errno: retry, never steal. A denial
+                # that outlives the deadline is reported verbatim, because
+                # then it is an unwritable state directory, not contention.
                 if time.monotonic() >= deadline:
+                    detail = ("" if isinstance(err, FileExistsError)
+                              else f" Last error: {err}.")
                     raise RegistryError(
                         f"registry lock held: {self.lock_path}. If the holder "
                         "is dead, remove the lock file manually (doctor "
                         "reports it); automatic reaping is deliberately absent."
+                        + detail
                     )
                 time.sleep(0.1)
 

@@ -686,6 +686,35 @@ class TestClaims(TempRepoCase):
                      if n.endswith(".tmp") or n.endswith(".lock")]
         self.assertEqual(leftovers, [])
 
+    def test_lock_retries_through_windows_delete_pending(self):
+        # Windows reports a delete-pending lock file as PermissionError, not
+        # FileExistsError. Contention must retry, not surface a traceback.
+        real_open = os.open
+        denials = [PermissionError(13, "Permission denied")]
+
+        def flaky_open(path, flags, *args):
+            if str(path).endswith(coordination.LOCK_SUFFIX) and denials:
+                raise denials.pop()
+            return real_open(path, flags, *args)
+
+        with mock.patch.object(os, "open", flaky_open):
+            record = coordination.claim(
+                self.repo, "s1", "branch", "feature")["claimed"]
+        self.assertEqual(record["value"], "feature")
+        self.assertEqual(denials, [])
+
+    def test_lock_reports_a_persistent_permission_error(self):
+        # A denial that outlives the deadline is an unwritable state
+        # directory, not contention: say so instead of blaming a holder.
+        def always_denied(path, flags, *args):
+            raise PermissionError(13, "Permission denied")
+
+        with mock.patch.object(os, "open", always_denied):
+            with self.assertRaises(coordination.RegistryError) as caught:
+                with coordination._Lock(self.repo.registry_path, timeout=0.0):
+                    pass
+        self.assertIn("Permission denied", str(caught.exception))
+
 
 class TestAdrAllocation(TempRepoCase):
     def setUp(self):
