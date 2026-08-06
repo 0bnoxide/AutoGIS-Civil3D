@@ -686,6 +686,53 @@ class TestClaims(TempRepoCase):
                      if n.endswith(".tmp") or n.endswith(".lock")]
         self.assertEqual(leftovers, [])
 
+    def test_lock_retries_through_windows_delete_pending(self):
+        # Windows reports a delete-pending lock file as PermissionError, not
+        # FileExistsError. Contention must retry, not surface a traceback.
+        real_open = os.open
+        denials = [PermissionError(13, "Permission denied")]
+
+        def flaky_open(path, flags, *args):
+            if str(path).endswith(coordination.LOCK_SUFFIX) and denials:
+                raise denials.pop()
+            return real_open(path, flags, *args)
+
+        with mock.patch.object(os, "open", flaky_open):
+            record = coordination.claim(
+                self.repo, "s1", "branch", "feature")["claimed"]
+        self.assertEqual(record["value"], "feature")
+        self.assertEqual(denials, [])
+
+    def test_lock_reports_a_persistent_permission_error(self):
+        # A denial that outlives the deadline is an unwritable state
+        # directory, not contention: say so instead of blaming a holder.
+        def always_denied(path, flags, *args):
+            raise PermissionError(13, "Permission denied")
+
+        with mock.patch.object(os, "open", always_denied):
+            with self.assertRaises(coordination.RegistryError) as caught:
+                with coordination._Lock(self.repo.registry_path, timeout=0.0):
+                    pass
+        self.assertIn("Permission denied", str(caught.exception))
+        self.assertIn("not creatable", str(caught.exception))
+
+    def test_lock_does_not_retry_a_failure_after_it_holds_the_lock(self):
+        # A write failure means this process already holds the lock:
+        # retrying would make it contend with its own lock file.
+        def failing_write(fd, data):
+            raise PermissionError(13, "Permission denied")
+
+        with mock.patch.object(os, "write", failing_write):
+            with self.assertRaises(coordination.RegistryError) as caught:
+                with coordination._Lock(self.repo.registry_path, timeout=5.0):
+                    pass
+        # RegistryError is not an OSError, and main() catches only the
+        # former: a bare OSError here would crash the CLI (#54 review).
+        self.assertIsInstance(caught.exception.__cause__, PermissionError)
+        # ...and it must not leave the lock file behind for nobody to release.
+        self.assertFalse(
+            os.path.exists(self.repo.registry_path + coordination.LOCK_SUFFIX))
+
 
 class TestAdrAllocation(TempRepoCase):
     def setUp(self):
