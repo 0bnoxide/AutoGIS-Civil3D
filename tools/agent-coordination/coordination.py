@@ -274,9 +274,11 @@ def deny_reason_for_git_argv(argv, cwd):
     # writes nothing unless --apply forces it; `rm --dry-run` likewise.
     if sub == "stash" and rest[:1] and rest[0] in ("list", "show"):
         return None
-    if sub == "apply" and "--apply" not in rest and any(
-            a in ("--check", "--stat", "--numstat", "--summary")
-            for a in rest):
+    if sub == "apply" and "--apply" not in rest \
+            and not any(a.startswith("--build-fake-ancestor") for a in rest) \
+            and any(a in ("--check", "--stat", "--numstat", "--summary")
+                    for a in rest):
+        # --build-fake-ancestor writes a file even under --check.
         return None
     if sub == "rm" and any(a in ("-n", "--dry-run") for a in rest):
         return None
@@ -290,14 +292,16 @@ def deny_reason_for_git_argv(argv, cwd):
     return None
 
 
-def deny_reason_for_shell(command, cwd, repo_hint=None):
+def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False):
     """Deny shell commands that write files on main or run git mutators there.
 
     ponytail: tokenizes each `&&`/`;`-separated segment and checks git
     commands plus common write forms (>, >>, tee, sed -i, dd of=, truncate).
     A full shell parser is deferred until a bypass is demonstrated.
+    `ps` marks a PowerShell payload: cmdlet write forms apply and
+    backslash paths are preserved.
     """
-    for event in _shell_events(command, cwd):
+    for event in _shell_events(command, cwd, ps=ps):
         if event[0] == "git":
             reason = deny_reason_for_git_argv(event[1], event[2])
         else:
@@ -352,8 +356,12 @@ def _copy_move_operands(argv):
 # removed (Move-Item removes its sources, like mv).
 _PS_WRITE_CMDLETS = {
     "set-content", "add-content", "clear-content", "out-file", "new-item",
-    "remove-item", "move-item", "sc", "ac", "clc", "ni", "ri", "del",
-    "erase", "move", "mi",
+    "remove-item", "move-item", "rename-item", "set-item", "clear-item",
+    "tee-object", "export-csv", "export-clixml",
+    # pwsh 7 aliases only; `sc` is deliberately absent (not an alias
+    # there, and it would false-deny `sc query` service control).
+    "ac", "clc", "ni", "ri", "del", "erase", "rd", "rmdir", "move", "mi",
+    "ren", "rni", "tee",
 }
 _PS_COPY_CMDLETS = {"copy-item", "cpi", "copy"}
 _PS_PATH_PARAMS = {"-path", "-literalpath", "-filepath", "-destination",
@@ -378,7 +386,18 @@ def _ps_operands(argv):
     while i < len(argv):
         tok = argv[i]
         low = tok.lower()
-        if low.startswith("-"):
+        if low.startswith("-") and ":" in tok:
+            # Colon binding: `-Path:file` carries its value inline. An
+            # unknown parameter's inline value is kept as a positional so
+            # the unmodeled case still fails toward deny.
+            param, _, value = tok.partition(":")
+            param = param.lower()
+            if param in _PS_PATH_PARAMS:
+                flagged += [(param, v) for v in value.split(",")]
+            elif param not in _PS_VALUE_PARAMS:
+                positional += value.split(",")
+            i += 1
+        elif low.startswith("-"):
             if low in _PS_PATH_PARAMS and i + 1 < len(argv):
                 flagged += [(low, v) for v in argv[i + 1].split(",")]
                 i += 2
@@ -434,13 +453,19 @@ def _mask_literals(command):
     return masked
 
 
-def _shell_events(command, cwd):
+def _shell_events(command, cwd, ps=False):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
     One parser feeds both the stateless main rule and the claim layer, so a
     write form covered by one is covered by the other.
     """
     effective_cwd = cwd
+    if ps:
+        # PowerShell's escape character is the backtick, never the
+        # backslash, so flipping separators is semantics-preserving and
+        # keeps `C:\repo\file` from being eaten by the POSIX tokenizer
+        # (which would silently drop the write target).
+        command = command.replace("\\", "/")
     masked_all = _mask_literals(command)
     cuts = [m.span() for m in re.finditer(r"&&|\|\||;|\n", masked_all)]
     cuts.append((len(command), len(command)))
@@ -494,7 +519,9 @@ def _shell_events(command, cwd):
                 # it; the adapter is the only layer that sees it.
                 raw_targets += [a for a in argv[1:] if not a.startswith("-")]
             low = argv[0].lower()
-            if low in _PS_WRITE_CMDLETS or low in _PS_COPY_CMDLETS:
+            if ps and (low in _PS_WRITE_CMDLETS or low in _PS_COPY_CMDLETS):
+                # PowerShell payloads only: `copy`, `move`, `del`, `ni`
+                # are legitimate command names under other shells.
                 # Remove-Item and Move-Item sources are the same
                 # no-backstop delete class as rm/mv above.
                 raw_targets += _ps_write_targets(argv)
@@ -520,8 +547,9 @@ def _shell_events(command, cwd):
                    else os.path.join(effective_cwd or ".", target))
 
 
-def shell_write_targets(command, cwd):
-    return [e[1] for e in _shell_events(command, cwd) if e[0] == "target"]
+def shell_write_targets(command, cwd, ps=False):
+    return [e[1] for e in _shell_events(command, cwd, ps=ps)
+            if e[0] == "target"]
 
 
 # --------------------------------------------------------------------------
@@ -1115,7 +1143,8 @@ def hook_pre_tool_use(payload_text):
                             reason = str(exc)
         elif tool == "Bash" or tool == "PowerShell":
             command = tool_input.get("command", "")
-            reason = deny_reason_for_shell(command, cwd, repo)
+            ps = tool == "PowerShell"
+            reason = deny_reason_for_shell(command, cwd, repo, ps=ps)
             if reason is None and repo is not None:
                 # Shell write forms get the same claim layer as Edit/Write.
                 session = payload.get("session_id") \
@@ -1124,7 +1153,7 @@ def hook_pre_tool_use(payload_text):
                     try:
                         reason = claim_denial(
                             list_claims(repo), session,
-                            shell_write_targets(command, cwd))
+                            shell_write_targets(command, cwd, ps=ps))
                     except RegistryError as exc:
                         reason = str(exc)
         if reason:

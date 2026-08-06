@@ -160,9 +160,39 @@ class TestMainRule(TempRepoCase):
                     "'x' | Out-File seed.txt",
                     "New-Item -ItemType File -Force seed.txt",
                     "Copy-Item other.txt seed.txt",
-                    "Move-Item seed.txt ../elsewhere.txt"):
+                    "Move-Item seed.txt ../elsewhere.txt",
+                    "Rename-Item seed.txt pwned.md",
+                    "'x' | Tee-Object seed.txt",
+                    "rd seed.txt"):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=True), cmd)
+
+    def test_powershell_backslash_path_denied(self):
+        # A Windows-separator absolute path must not be eaten by the
+        # POSIX tokenizer (cold-review P1).
+        target = os.path.join(self.repo_path, "seed.txt").replace("/", "\\")
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"Set-Content -Path {target} -Value pwned",
+            self.repo_path, self.repo, ps=True))
+
+    def test_powershell_colon_binding_denied(self):
+        # `-Path:file` carries its value inline (cold-review P1).
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            "Set-Content -Path:seed.txt -Value pwned",
+            self.repo_path, self.repo, ps=True))
+
+    def test_powershell_cmdlets_ignored_for_bash_payloads(self):
+        # `sc`, `copy`, `del`... are legitimate command names under other
+        # shells; the cmdlet layer applies to PowerShell payloads only.
+        for cmd in ("sc query eventlog", "del something", "ni hello"):
+            self.assertIsNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo), cmd)
+
+    def test_git_apply_build_fake_ancestor_denied(self):
+        # --build-fake-ancestor writes a file even under --check.
+        self.assertIsNotNone(coordination.deny_reason_for_git_argv(
+            ["git", "apply", "--check", "--build-fake-ancestor", "out",
+             "p.patch"], self.repo_path))
 
     def test_git_read_only_forms_allowed_on_main(self):
         for argv in (["git", "stash", "list"],
@@ -188,14 +218,15 @@ class TestMainRule(TempRepoCase):
         # -NoNewline is not modeled; the unknown-parameter default must
         # fail toward deny, not consume the path token.
         self.assertIsNotNone(coordination.deny_reason_for_shell(
-            "Out-File -NoNewline seed.txt", self.repo_path, self.repo))
+            "Out-File -NoNewline seed.txt", self.repo_path, self.repo,
+            ps=True))
 
     def test_powershell_copy_from_main_allowed(self):
         # Copy-class cmdlets write only their destination; reading a file
         # off main is not a mutation.
         self.assertIsNone(coordination.deny_reason_for_shell(
             "Copy-Item seed.txt ~/coord-test-elsewhere.txt",
-            self.repo_path, self.repo))
+            self.repo_path, self.repo, ps=True))
 
     def test_shell_redirect_onto_main_denied(self):
         reason = coordination.deny_reason_for_shell(
