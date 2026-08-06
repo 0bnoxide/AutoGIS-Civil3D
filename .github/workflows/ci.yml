@@ -38,7 +38,10 @@ jobs:
       - name: Test
         run: dotnet test AutoGIS.Civil3D.sln -c Release --no-build
       - name: Formatting
-        run: dotnet format AutoGIS.Civil3D.sln --verify-no-changes --no-restore
+        # No --no-restore: dotnet format loads its own MSBuildWorkspace, and
+        # skipping restore makes that load depend on prior steps' on-disk state,
+        # which races on windows-latest (issue #49: exit 1, green on rerun).
+        run: dotnet format AutoGIS.Civil3D.sln --verify-no-changes
       - name: Diagnostic package validation
         run: python diagnostics/AutoGIS.Civil3D.Diagnostics/tests/validate_package.py
       - name: Diagnostic Windows wrapper validation
