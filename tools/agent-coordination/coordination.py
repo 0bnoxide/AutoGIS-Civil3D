@@ -258,13 +258,22 @@ def _is_checkout_restore(sub, argv, sub_index, workdir):
     return False
 
 
+def _short_flags(tok):
+    """The letters of a bundled short-flag group (`-Df` -> "Df"); empty for a
+    long option or a non-flag. Git bundles single-letter flags, so a
+    destructive flag can hide inside a group and must not be matched by exact
+    token equality (#45 cold review)."""
+    return tok[1:] if tok.startswith("-") and not tok.startswith("--") else ""
+
+
 def _is_forced_switch(sub, rest):
     """`git switch` overwriting the working tree: --discard-changes/-f/--force
-    throw away uncommitted work with no commit, so no hook fires — the switch
-    analog of the checkout-restore case. Bare `switch <branch>` and
-    `switch -c` stay allowed (#45)."""
+    — including a bundled group like -fq — throw away uncommitted work with no
+    commit, so no hook fires. Bare `switch <branch>` and `switch -c` stay
+    allowed (#45)."""
     return sub == "switch" and any(
-        t in ("--discard-changes", "-f", "--force") for t in rest)
+        t in ("--discard-changes", "--force") or "f" in _short_flags(t).lower()
+        for t in rest)
 
 
 def _ref_move_targets_main(sub, rest):
@@ -274,17 +283,22 @@ def _ref_move_targets_main(sub, rest):
     shape as the `push` handler. Safe forms carry no main target: listing
     branches, creating/deleting a feature branch, reading a symbolic ref.
 
-    `branch` is dual-use, so it is only destructive with a force/delete/move
-    flag; the check then fails toward deny if `main` appears at all (the sole
-    over-deny, `branch -f x main` using main as a start-point, is obscure and
-    safe-direction)."""
+    `branch` is dual-use, so it is only destructive with a force/delete/move/
+    copy flag (long or bundled short); the check then fails toward deny if
+    `main` appears at all (the sole over-deny, `branch -f x main` using main as
+    a start-point, is obscure and safe-direction). `update-ref --stdin` reads
+    its ref from stdin, unparseable here, so it is denied outright."""
     main_refs = (MAIN_BRANCH, f"refs/heads/{MAIN_BRANCH}")
     if sub == "branch":
-        destructive = {"-f", "--force", "-d", "-D", "--delete",
-                       "-m", "-M", "--move", "-c", "-C", "--copy"}
-        if not any(t in destructive for t in rest):
+        long_destructive = {"--force", "--delete", "--move", "--copy"}
+        if not any(t in long_destructive
+                   or set(_short_flags(t).lower()) & set("fdmc")
+                   for t in rest):
             return False
-    elif sub not in ("update-ref", "symbolic-ref"):
+    elif sub == "update-ref":
+        if "--stdin" in rest:
+            return True
+    elif sub != "symbolic-ref":
         return False
     return any(t in main_refs for t in rest if not t.startswith("-"))
 

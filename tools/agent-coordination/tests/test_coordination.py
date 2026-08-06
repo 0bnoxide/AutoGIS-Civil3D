@@ -354,7 +354,10 @@ class TestMainRule(TempRepoCase):
                      ["git", "sparse-checkout", "set", "foo"],
                      ["git", "pull"],
                      ["git", "switch", "--discard-changes", "main"],
-                     ["git", "switch", "-f", "main"]):
+                     ["git", "switch", "-f", "main"],
+                     # bundled short flags must not hide the force (cold review)
+                     ["git", "switch", "-fq", "main"],
+                     ["git", "switch", "-qf", "main"]):
             self.assertIsNotNone(
                 coordination.deny_reason_for_git_argv(argv, self.repo_path),
                 argv)
@@ -367,16 +370,25 @@ class TestMainRule(TempRepoCase):
                      ["git", "branch", "-f", "main", "HEAD~1"],
                      ["git", "branch", "-D", "main"],
                      ["git", "branch", "-M", "main"],
-                     ["git", "symbolic-ref", "HEAD", "refs/heads/main"]):
+                     ["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+                     # bundled short flags hide the destructive letter, and
+                     # update-ref --stdin carries the ref out of argv entirely
+                     # (cold review P1/P2):
+                     ["git", "branch", "-Df", "main"],
+                     ["git", "branch", "-fD", "main"],
+                     ["git", "branch", "-Mf", "main"],
+                     ["git", "update-ref", "--stdin"]):
             self.assertIsNotNone(
                 coordination.deny_reason_for_git_argv(argv, self.base), argv)
 
     def test_git_safe_ref_and_switch_forms_allowed(self):
         for argv in (["git", "switch", "feature"],
                      ["git", "switch", "-c", "newfeature"],
+                     ["git", "switch", "-q", "feature"],  # quiet, no force
                      ["git", "branch"],
                      ["git", "branch", "newfeature"],
                      ["git", "branch", "-D", "oldfeature"],
+                     ["git", "branch", "-av"],  # list all/verbose bundle
                      ["git", "sparse-checkout", "list"],
                      ["git", "update-ref", "refs/heads/feature", "HEAD"],
                      ["git", "symbolic-ref", "HEAD"]):
