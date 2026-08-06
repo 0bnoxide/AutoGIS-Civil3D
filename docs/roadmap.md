@@ -17,7 +17,7 @@ Only an explicit owner decision may authorize, advance, reorder, or reopen a pha
 
 | Phase | Capability | Exit-gate outcome | Status |
 |---|---|---|---|
-| 0 | Repository and collaboration foundation | Governance, agent tooling, local protection, CI, diagnostics preservation plan, and GitHub workflow established | Authorized |
+| 0 | Repository and collaboration foundation | Governance, agent tooling, local protection, CI, diagnostics preservation plan, and GitHub workflow established | Accepted |
 | 1 | Language-neutral handoff contract v1 | ZIP shape, JSON Schema, LandXML rules, safety limits, issue-code policy, and contract fixtures approved | Accepted |
 | 2 | Pure .NET 8 validator and CLI | Restore, build, and tests pass without Autodesk; deterministic valid and invalid fixtures prove the contract | Accepted |
 | 3 | AutoGIS producer adoption | AutoGIS emits conforming packages and passes cross-repository compatibility checks | Identified |
@@ -31,17 +31,15 @@ Phases 1 and 2 ran ahead of Phase 0 by explicit owner decision (gate-change log,
 
 Acceptance of Phases 1 and 2 does not carry any Civil 3D claim: contract-valid is not equivalent to Civil 3D import-tested, and the live import gate belongs to Phase 5.
 
+Phase 0 was authorized by owner decisions on 2026-08-04 and accepted on 2026-08-05 (gate-change log). It was delivered under the approved [implementation plan](superpowers/plans/2026-08-04-phase-0-coordination-foundation.md); its exit-gate evidence is recorded on the work items cited in the log.
+
+No phase is active. Opening the next phase requires its own owner decision, recorded in the gate-change log.
+
 ## Delivery level
 
-Per the two-level rule, only the active phase and the immediately next phase carry delivery pointers: Phase 0 (active, integration-gate owner) and Phase 3 (next). Later phases remain closed regardless of any plan document that mentions them. Delivery detail is a link to the governing spec or plan, never a restatement.
+Per the two-level rule, only the active phase and the immediately next phase carry delivery detail. With Phase 0 accepted and no phase active, only Phase 3 (next) carries it. Later phases remain closed regardless of any plan document that mentions them. Delivery detail is a link to the governing spec or plan, never a restatement.
 
-### Active: Phase 0 — repository and collaboration foundation
-
-- Governing design: [`2026-08-02-repository-collaboration-architecture-design.md`](superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md), accepted at head `ed22ac6`, merged as `59cf551`. Decision record: [ADR-0002](adr/0002-agent-collaboration-and-main-protection.md).
-- Delivery decomposition: the approved [implementation plan](superpowers/plans/2026-08-04-phase-0-coordination-foundation.md).
-- Scope split (blocking core vs deferred hardening) and the temporal-claim invariant: the governing design's "Coordination module" section is the single copy.
-- Exit gate: the "Phase 0 acceptance criteria" list in the governing design; that list is authoritative and may be amended there.
-- Scheduling weight: the demonstrated need recorded in [ADR-0003](adr/0003-contract-slice-precedes-phase-0.md).
+The Phase 0 governing design ([`2026-08-02-repository-collaboration-architecture-design.md`](superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md), decision record [ADR-0002](adr/0002-agent-collaboration-and-main-protection.md)) remains the authority on the coordination model, including the deferred-hardening list and the invariant that a claim is never released or ignored solely because a heartbeat was missed or a TTL elapsed.
 
 ### Next: Phase 3 — AutoGIS producer adoption
 
@@ -63,4 +61,5 @@ Append-only: one row per owner decision, references only; corrections are new ro
 | 2026-08-04 | Owner accepted and merged the Phase 1–2 slice, meeting the stated gate criterion; both phases advance to Accepted. Accepted evidence: contract v1 schema and rules, safety limits, issue-code policy, the 42-package golden fixture corpus with byte-for-byte regeneration checks, diagnostics preservation with recorded hashes, and the validator and CLI with stable exit codes, building and testing with no Autodesk or ArcGIS dependency — verified on merged `main` at 0 warnings, 0 errors, 181/181 tests. Carried forward as non-blocking: issues #5 (ZIP64 agreement fixture gap; design spec lagging `contract/v1/README.md`) and #2 (trailing blank lines) | PR #3, merged `8820d7c` |
 | 2026-08-04 | Owner authorized Phase 0. The phase advances to Authorized and becomes the active integration gate; implementation remains blocked until a plan under `docs/superpowers/plans/` is approved. Authorizes no later phase | PR #7 |
 | 2026-08-04 | Owner approved the Phase 0 implementation plan and authorized implementation, directing the repository past its coordination crux for ready use by lower-tier agent sessions (owner goal directive, quoted in the PR #16 record). Phase 0 advances to In Progress. Authorizes no later phase | PR #9 (plan); PR #16 (implementation) |
-| 2026-08-05 | Status vocabulary reduced to decision-states per the audit disposition; `In Progress` and `Blocked` removed, so Phase 0's recorded state maps to Authorized. No gate state changes | issue #15 |
+| 2026-08-05 | Owner accepted the Phase 0 exit-gate evidence; the phase advances to Accepted and the repository has no active phase. Accepted evidence: the blocking core merged and green on `main` (stateless `main` protection with real Git-hook and both-adapter denial proofs in CI, explicit-release claims with their integrity controls, `init`, `doctor`, deterministic agent-asset sync, docs checks, Python test suite passing); the harness interception smoke tests recorded out of CI for both harnesses, with Codex project-hook trust verified from a recorded `/hooks` inspection and activation probe rather than file presence; SonarCloud triaged to zero open issues; and the guidance, architecture, collaboration, ADR-index, and contribution documents in agreement. Carried forward as non-blocking: issues #17, #38, and #39 | Issue #18; PR #40 |
+| 2026-08-05 | Status vocabulary reduced to decision-states per the audit disposition; `In Progress` and `Blocked` removed — live work state belongs to GitHub. No gate state changes | issue #15 |

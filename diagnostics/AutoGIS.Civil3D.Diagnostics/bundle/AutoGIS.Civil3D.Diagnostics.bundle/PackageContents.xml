@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ApplicationPackage
   SchemaVersion="1.0"
-  AppVersion="0.1.1"
+  AppVersion="0.1.2"
   ProductCode="{67778F62-3784-4FF2-A4E9-0097148812D3}"
   UpgradeCode="{6B700A42-F7DB-4D41-B51B-049E22E84016}"
   Name="AutoGIS Civil 3D Diagnostics"
@@ -11,7 +11,7 @@
   <Components>
     <ComponentEntry
       AppName="AutoGIS.Civil3D.Diagnostics"
-      Version="0.1.1"
+      Version="0.1.2"
       AppType=".Net"
       ModuleName="./Contents/2025/AutoGIS.Civil3D.Diagnostics.dll"
       AppDescription="Read-only Civil 3D 2025 plug-in load and host diagnostic."
