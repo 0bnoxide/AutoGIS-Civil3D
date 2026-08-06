@@ -75,6 +75,18 @@ class TestSync(unittest.TestCase):
         with open(target, "rb") as fh:
             self.assertEqual(fh.read(), tampered, "--check must not write")
 
+    def test_crlf_only_difference_is_not_drift(self):
+        # #38: a rendered copy git smudged to CRLF on a Windows/autocrlf
+        # checkout differs from its LF blob only by line endings — not a
+        # content edit — and must not read as drift.
+        sync.run(self.root, check_only=False)
+        target = os.path.join(self.root, sync.AGENT_MD_TARGET, "pr-reviewer.md")
+        with open(target, "rb") as fh:
+            lf = fh.read()
+        with open(target, "wb") as fh:
+            fh.write(lf.replace(b"\n", b"\r\n"))
+        self.assertEqual(sync.run(self.root, check_only=True), [])
+
     def test_toml_render_carries_name_description_body(self):
         toml = sync.render_toml("pr-reviewer", (
             "---\nname: pr-reviewer\ndescription: A cold reviewer.\n---\n"
