@@ -723,9 +723,12 @@ class TestClaims(TempRepoCase):
             raise PermissionError(13, "Permission denied")
 
         with mock.patch.object(os, "write", failing_write):
-            with self.assertRaises(PermissionError):
+            with self.assertRaises(coordination.RegistryError) as caught:
                 with coordination._Lock(self.repo.registry_path, timeout=5.0):
                     pass
+        # RegistryError is not an OSError, and main() catches only the
+        # former: a bare OSError here would crash the CLI (#54 review).
+        self.assertIsInstance(caught.exception.__cause__, PermissionError)
         # ...and it must not leave the lock file behind for nobody to release.
         self.assertFalse(
             os.path.exists(self.repo.registry_path + coordination.LOCK_SUFFIX))

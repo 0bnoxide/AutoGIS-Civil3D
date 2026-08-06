@@ -649,12 +649,17 @@ class _Lock:
                 try:
                     os.write(self.fd,
                              f"{os.getpid()}@{socket.gethostname()} {_now()}".encode())
-                except OSError:
+                except OSError as err:
                     # Holding a lock nobody can release is worse than the
-                    # failure itself: drop it, then let the caller see why.
+                    # failure itself: drop it first. Report it as a registry
+                    # error, since RegistryError is not an OSError and a bare
+                    # one escapes main() as the traceback this fix removes.
                     self.__exit__()
                     self.fd = None
-                    raise
+                    raise RegistryError(
+                        f"registry lock acquired but not writable: "
+                        f"{self.lock_path}. The lock was released: {err}"
+                    ) from err
                 return self
 
     def __exit__(self, *exc):
