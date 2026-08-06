@@ -6,12 +6,10 @@ This file is the authoritative record of capabilities, sequence, gate state, and
 
 `Identified` — named in the capability map; no implementation authority.
 `Authorized` — the owner has explicitly opened the phase; work may be claimed.
-`In Progress` — authorized work is underway on a branch or PR.
-`Blocked` — authorized work cannot proceed; the blocker is recorded on the work item.
 `Accepted` — the phase's exit gate has been met and the owner has accepted the evidence.
 `Deferred` — explicitly postponed by owner decision.
 
-Only an explicit owner decision may authorize, advance, reorder, or reopen a phase. Every such decision is appended to the gate-change log below. A change to phase ordering or architecture also requires an ADR.
+Each status records an owner decision, not live progress: whether authorized work is underway or blocked is live status and belongs to GitHub issues and pull requests. Only an explicit owner decision may authorize, advance, reorder, or reopen a phase. Every such decision is appended to the gate-change log below. A change to phase ordering or architecture also requires an ADR.
 
 ## Capability level
 
@@ -33,18 +31,13 @@ Acceptance of Phases 1 and 2 does not carry any Civil 3D claim: contract-valid i
 
 Phase 0 was authorized by owner decisions on 2026-08-04 and accepted on 2026-08-05 (gate-change log). It was delivered under the approved [implementation plan](superpowers/plans/2026-08-04-phase-0-coordination-foundation.md); its exit-gate evidence is recorded on the work items cited in the log.
 
-No phase is active. Opening the next phase requires its own owner decision, recorded in the gate-change log. Maintenance of an accepted phase's deliverables against a filed issue — bug fixes, and the documentation and test changes that accompany them — needs no new gate; new capability does.
+Opening a phase requires its own owner decision, recorded in the gate-change log. Maintenance of an accepted phase's deliverables against a filed issue — bug fixes, and the documentation and test changes that accompany them — needs no new gate; new capability does.
 
 ## Delivery level
 
-Per the two-level rule, only the active phase and the immediately next phase carry delivery detail. With Phase 0 accepted and no phase active, only Phase 3 (next) carries it. Later phases remain closed regardless of any plan document that mentions them.
+Per the two-level rule, only the active phase — one whose Status is `Authorized` — and the immediately next phase in the capability sequence carry delivery detail. That detail is a link to the governing design and plan under `docs/superpowers/`, never a restatement, so a phase transition changes only the Status column, the appended log row, and at most one delivery link. Later phases remain closed regardless of any plan document that mentions them.
 
-The Phase 0 governing design ([`2026-08-02-repository-collaboration-architecture-design.md`](superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md), decision record [ADR-0002](adr/0002-agent-collaboration-and-main-protection.md)) remains the authority on the coordination model, including the deferred-hardening list and the invariant that a claim is never released or ignored solely because a heartbeat was missed or a TTL elapsed.
-
-### Next: Phase 3 — AutoGIS producer adoption
-
-Identified only, with no implementation authority. Sequenced next because Phases 1 and 2 are accepted; opening it requires its own owner decision. Its gate is cross-repository: AutoGIS emits packages that this repository's validator accepts, proven by compatibility checks run against contract v1 rather than by either repository asserting conformance alone.
-
+The Phase 0 governing design ([`2026-08-02-repository-collaboration-architecture-design.md`](superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md), decision record [ADR-0002](adr/0002-agent-collaboration-and-main-protection.md)) remains the authority on the coordination model, including its blocking-core/deferred-hardening scope split and its claim-lifecycle invariants; they are not restated here.
 ## Parking lot
 
 Identified capabilities with no implementation authority and no sequence: alignments, profiles, corridors, pipe networks, multiple surfaces per package, bidirectional exchange, machine-readable CLI output, package signing or encryption, coordinate or datum transformation. Moving any item out of the parking lot is a gate-change-log decision.
@@ -60,3 +53,4 @@ Identified capabilities with no implementation authority and no sequence: alignm
 | 2026-08-04 | Owner authorized Phase 0. The phase advances to Authorized and becomes the active integration gate; implementation remains blocked until a plan under `docs/superpowers/plans/` is approved. Authorizes no later phase | PR #7 |
 | 2026-08-04 | Owner approved the Phase 0 implementation plan and authorized implementation, directing the repository past its coordination crux for ready use by lower-tier agent sessions (owner goal directive, quoted in the PR #16 record). Phase 0 advances to In Progress. Authorizes no later phase | PR #9 (plan); PR #16 (implementation) |
 | 2026-08-05 | Owner accepted the Phase 0 exit-gate evidence; the phase advances to Accepted and the repository has no active phase. Accepted evidence: the blocking core merged and green on `main` (stateless `main` protection with real Git-hook and both-adapter denial proofs in CI, explicit-release claims with their integrity controls, `init`, `doctor`, deterministic agent-asset sync, docs checks, Python test suite passing); the harness interception smoke tests recorded out of CI for both harnesses, with Codex project-hook trust verified from a recorded `/hooks` inspection and activation probe rather than file presence; SonarCloud triaged to zero open issues; and the guidance, architecture, collaboration, ADR-index, and contribution documents in agreement. Carried forward as non-blocking: issues #17, #38, and #39 | Issue #18; PR #40 |
+| 2026-08-05 | Roadmap refactored per the process audit: status vocabulary reduced to decision-states, live progress left to GitHub, and each duplicated fact reduced to one owning file with links (single-copy rule) | Issue #15; PR #52 |
