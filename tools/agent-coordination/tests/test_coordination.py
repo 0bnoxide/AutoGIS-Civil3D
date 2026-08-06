@@ -714,6 +714,21 @@ class TestClaims(TempRepoCase):
                 with coordination._Lock(self.repo.registry_path, timeout=0.0):
                     pass
         self.assertIn("Permission denied", str(caught.exception))
+        self.assertIn("not creatable", str(caught.exception))
+
+    def test_lock_does_not_retry_a_failure_after_it_holds_the_lock(self):
+        # A write failure means this process already holds the lock:
+        # retrying would make it contend with its own lock file.
+        def failing_write(fd, data):
+            raise PermissionError(13, "Permission denied")
+
+        with mock.patch.object(os, "write", failing_write):
+            with self.assertRaises(PermissionError):
+                with coordination._Lock(self.repo.registry_path, timeout=5.0):
+                    pass
+        # ...and it must not leave the lock file behind for nobody to release.
+        self.assertFalse(
+            os.path.exists(self.repo.registry_path + coordination.LOCK_SUFFIX))
 
 
 class TestAdrAllocation(TempRepoCase):

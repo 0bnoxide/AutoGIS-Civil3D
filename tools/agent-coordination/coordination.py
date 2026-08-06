@@ -615,28 +615,47 @@ class _Lock:
         os.makedirs(os.path.dirname(self.lock_path), exist_ok=True)
         while True:
             try:
+                # Only the exclusive create is retryable. A failure after it
+                # succeeds means this process holds the lock, and retrying
+                # would make it contend with its own lock file.
                 self.fd = os.open(
                     self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY
                 )
-                os.write(self.fd, f"{os.getpid()}@{socket.gethostname()} {_now()}".encode())
-                return self
             except (FileExistsError, PermissionError) as err:
-                # Windows raises PermissionError, not FileExistsError, while
-                # the holder's lock file sits in the delete-pending state
-                # between its unlink and the last handle closing. Same
-                # contention, different errno: retry, never steal. A denial
-                # that outlives the deadline is reported verbatim, because
-                # then it is an unwritable state directory, not contention.
+                # Contention shows up as FileExistsError while the holder's
+                # lock file exists, and as PermissionError on Windows in the
+                # window around its removal, where a sharing violation maps to
+                # errno 13. Same contention, different errno: retry, never
+                # steal. A denial that outlives the deadline is reported
+                # verbatim, because then it is an unwritable state directory
+                # rather than contention.
                 if time.monotonic() >= deadline:
-                    detail = ("" if isinstance(err, FileExistsError)
-                              else f" Last error: {err}.")
+                    if os.path.exists(self.lock_path):
+                        raise RegistryError(
+                            f"registry lock held: {self.lock_path}. If the "
+                            "holder is dead, remove the lock file manually "
+                            "(doctor reports it); automatic reaping is "
+                            "deliberately absent."
+                        )
+                    # No lock file to blame: the state directory itself is
+                    # refusing the create, so say that instead of sending
+                    # the caller after a lock that does not exist.
                     raise RegistryError(
-                        f"registry lock held: {self.lock_path}. If the holder "
-                        "is dead, remove the lock file manually (doctor "
-                        "reports it); automatic reaping is deliberately absent."
-                        + detail
+                        f"registry lock not creatable: {self.lock_path}. "
+                        f"The state directory refused the write: {err}"
                     )
                 time.sleep(0.1)
+            else:
+                try:
+                    os.write(self.fd,
+                             f"{os.getpid()}@{socket.gethostname()} {_now()}".encode())
+                except OSError:
+                    # Holding a lock nobody can release is worse than the
+                    # failure itself: drop it, then let the caller see why.
+                    self.__exit__()
+                    self.fd = None
+                    raise
+                return self
 
     def __exit__(self, *exc):
         if self.fd is not None:
