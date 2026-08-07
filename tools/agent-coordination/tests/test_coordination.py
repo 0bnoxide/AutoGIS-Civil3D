@@ -416,7 +416,11 @@ class TestMainRule(TempRepoCase):
         # that _mask_literals blanks; recurse into it.
         for cmd in ('bash -c "git reset --hard"',
                     "sh -c 'rm seed.txt'",
-                    'eval "git reset --hard"'):
+                    'eval "git reset --hard"',
+                    # combined short-flag clusters ending in c (cold review)
+                    'bash -lc "git reset --hard"',
+                    "sh -ec 'rm seed.txt'",
+                    'zsh -xc "git reset --hard"'):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo), cmd)
 
@@ -424,7 +428,11 @@ class TestMainRule(TempRepoCase):
         # #46, PowerShell adapter: -Command, iex, and the call-operator block.
         for cmd in ('pwsh -Command "Remove-Item seed.txt"',
                     'iex "Remove-Item seed.txt"',
-                    "& { Remove-Item seed.txt }"):
+                    "& { Remove-Item seed.txt }",
+                    # fused braces / no surrounding space (cold review)
+                    "&{Remove-Item seed.txt}",
+                    "& {Remove-Item seed.txt}",
+                    ". { Remove-Item seed.txt }"):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo, ps=True), cmd)
 

@@ -285,9 +285,11 @@ def _ref_move_targets_main(sub, rest):
 
     `branch` is dual-use, so it is only destructive with a force/delete/move/
     copy flag (long or bundled short); the check then fails toward deny if
-    `main` appears at all (the sole over-deny, `branch -f x main` using main as
-    a start-point, is obscure and safe-direction). `update-ref --stdin` reads
-    its ref from stdin, unparseable here, so it is denied outright."""
+    `main` appears in ANY positional. That is intentionally broad and
+    over-denies the obscure safe cases where main is a start-point rather than
+    the operated ref (`branch -f x main`) — safe-direction by design.
+    `update-ref --stdin` reads its ref from stdin, unparseable here, so it is
+    denied outright."""
     main_refs = (MAIN_BRANCH, f"refs/heads/{MAIN_BRANCH}")
     if sub == "branch":
         long_destructive = {"--force", "--delete", "--move", "--copy"}
@@ -537,10 +539,11 @@ def _strip_cmd_prefixes(argv, _depth=0):
     wrapped command surfaces (#46). Skips each wrapper's option flags,
     `VAR=val` assignments, and numeric option-values/durations (no command is
     a bare number). A string-valued wrapper option (`sudo -u bob`) is the
-    residual — `bob` is then read as the command — but a mis-peel only fails
-    toward today's behaviour (the wrapped command stays unchecked), never
-    toward a new over-deny."""
-    if _depth > _MAX_UNWRAP_DEPTH or not argv or argv[0].lower() \
+    residual: `bob` is then read as the command, which usually just leaves the
+    wrapped command unchecked (fail toward today's behaviour) and, in the rare
+    case the value matches a mutator name (`sudo -u rm …`), over-denies in the
+    safe direction. Neither outcome is a silent new bypass."""
+    if _depth >= _MAX_UNWRAP_DEPTH or not argv or argv[0].lower() \
             not in _CMD_PREFIXES:
         return argv
     i = 1
@@ -571,23 +574,47 @@ def _nested_script(argv):
         return None
     head, rest = argv[0].lower(), argv[1:]
 
-    def after(flags, ps):
+    def after(match, ps):
         for j, tok in enumerate(rest):
-            if tok.lower() in flags and j + 1 < len(rest):
+            if match(tok.lower()) and j + 1 < len(rest):
                 return rest[j + 1], ps
         return None
 
     if head in _SH_DASH_C:
-        return after({"-c"}, False)
+        # A combined short-flag cluster ending in c (-lc, -ec, -xc) carries
+        # the script string just like a bare -c; login/error-exit shells make
+        # these the common form (cold review).
+        return after(lambda t: bool(re.fullmatch(r"-[a-z]*c", t)), False)
     if head in _PS_DASH_C:
-        return after({"-command", "-c"}, True)
+        return after(lambda t: t in ("-command", "-c"), True)
     if head in ("cmd", "cmd.exe"):
-        return after({"/c", "/k"}, False)
+        return after(lambda t: t in ("/c", "/k"), False)
     if head == "eval" and rest:
         return " ".join(rest), False
     if head in ("iex", "invoke-expression") and rest:
         return rest[0], True
     return None
+
+
+def _strip_ps_call_block(argv):
+    """PowerShell call/dot operator on a script block — `& { cmd }`, `&{cmd}`,
+    `. {cmd}`. Strip a leading &/. operator (even when fused to `{`) and all
+    brace characters so the inner command reaches the cmdlet checks (#46).
+    Top-level `;`/`&&` already split a multi-command block upstream. A leading
+    `.\\script.ps1` (dot with no brace) is left untouched."""
+    if not argv:
+        return argv
+    first = argv[0]
+    if not (first in ("&", ".") or (first[:1] in ("&", ".") and "{" in first)):
+        return argv
+    stripped = []
+    for i, tok in enumerate(argv):
+        if i == 0 and tok[:1] in ("&", "."):
+            tok = tok[1:]
+        tok = tok.replace("{", "").replace("}", "")
+        if tok:
+            stripped.append(tok)
+    return stripped
 
 
 def _shell_events(command, cwd, ps=False, _depth=0):
@@ -640,12 +667,8 @@ def _shell_events(command, cwd, ps=False, _depth=0):
                 raw_targets.append(t.group(1))
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage))
-            if ps and argv and argv[0] in ("&", ".") and argv[1:2] == ["{"]:
-                # PowerShell call/dot operator on a script block: `& { cmd }`.
-                # Drop the operator and brace tokens so the inner command is
-                # checked (#46). Top-level `;`/`&&` already split multi-command
-                # blocks into separate segments upstream.
-                argv = [t for t in argv[1:] if t not in ("{", "}")]
+            if ps:
+                argv = _strip_ps_call_block(argv)
             if not argv:
                 continue
             nested = _nested_script(argv)
