@@ -684,28 +684,23 @@ def _shell_events(command, cwd, ps=False, _depth=0):
             # Redirect targets are cut from raw text, so quotes survive;
             # argv-derived ones already had theirs stripped by shlex.
             target = target.strip("\"'")
-            if "$" in target or "`" in target:
-                # Unexpanded substitution: not evaluable here. Fail open —
-                # the adapter's contract (#17). Git hooks backstop write
-                # forms; delete-class targets (rm, mv sources) have no
-                # backstop, an accepted residual of failing open.
-                continue
             if ps and re.match(r"[A-Za-z]{2,}:", target):
                 # Provider path (Env:, Variable:, Alias:, HKLM:, or a
                 # named PSDrive), not a filesystem file. Single letters
                 # stay: those are real drives. A multi-letter PSDrive
                 # mapped onto the filesystem escapes here — accepted
-                # fail-open, like unexpanded substitutions above.
+                # fail-open, like the unexpanded substitutions below.
                 continue
             target = os.path.expanduser(target)
             resolved = target if os.path.isabs(target) \
                 else os.path.join(effective_cwd or ".", target)
             if "$" in resolved or "`" in resolved:
-                # The effective cwd carries an unexpanded var — `cd "$D"` then
-                # a plain relative target (#56). The raw-target skip above
-                # missed it because the `$` entered via the cwd, not the
-                # token. The real location is unknowable, so skip rather than
-                # measure a bogus repo-relative path and false-deny.
+                # Unexpanded substitution — a `$`/backtick in the token itself,
+                # or introduced via the effective cwd (`cd "$D"` then a plain
+                # relative target, #56). Checking the RESOLVED path catches both
+                # entry paths in one place. Not evaluable here: fail open per
+                # the adapter contract (#17) — git hooks backstop write forms;
+                # delete-class targets (rm, mv sources) are an accepted residual.
                 continue
             yield ("target", resolved)
 

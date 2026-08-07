@@ -836,7 +836,10 @@ class TestClaims(TempRepoCase):
         def contended_open(path, flags, *args):
             raise FileExistsError(17, "File exists")
 
-        with mock.patch.object(os, "open", contended_open):
+        # Force the racy probe to disagree with the exception: exists()==False
+        # would have said "not creatable" under the old probe-based logic.
+        with mock.patch.object(os, "open", contended_open), \
+                mock.patch.object(os.path, "exists", return_value=False):
             with self.assertRaises(coordination.RegistryError) as caught:
                 with coordination._Lock(self.repo.registry_path, timeout=0.0):
                     pass
