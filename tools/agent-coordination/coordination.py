@@ -707,22 +707,25 @@ def _shell_events(command, cwd, ps=False, _depth=0):
             # Redirect targets are cut from raw text, so quotes survive;
             # argv-derived ones already had theirs stripped by shlex.
             target = target.strip("\"'")
-            if "$" in target or "`" in target:
-                # Unexpanded substitution: not evaluable here. Fail open —
-                # the adapter's contract (#17). Git hooks backstop write
-                # forms; delete-class targets (rm, mv sources) have no
-                # backstop, an accepted residual of failing open.
-                continue
             if ps and re.match(r"[A-Za-z]{2,}:", target):
                 # Provider path (Env:, Variable:, Alias:, HKLM:, or a
                 # named PSDrive), not a filesystem file. Single letters
                 # stay: those are real drives. A multi-letter PSDrive
                 # mapped onto the filesystem escapes here — accepted
-                # fail-open, like unexpanded substitutions above.
+                # fail-open, like the unexpanded substitutions below.
                 continue
             target = os.path.expanduser(target)
-            yield ("target", target if os.path.isabs(target)
-                   else os.path.join(effective_cwd or ".", target))
+            resolved = target if os.path.isabs(target) \
+                else os.path.join(effective_cwd or ".", target)
+            if "$" in resolved or "`" in resolved:
+                # Unexpanded substitution — a `$`/backtick in the token itself,
+                # or introduced via the effective cwd (`cd "$D"` then a plain
+                # relative target, #56). Checking the RESOLVED path catches both
+                # entry paths in one place. Not evaluable here: fail open per
+                # the adapter contract (#17) — git hooks backstop write forms;
+                # delete-class targets (rm, mv sources) are an accepted residual.
+                continue
+            yield ("target", resolved)
 
 
 def shell_write_targets(command, cwd, ps=False):
@@ -795,7 +798,14 @@ class _Lock:
                 # verbatim, because then it is an unwritable state directory
                 # rather than contention.
                 if time.monotonic() >= deadline:
-                    if os.path.exists(self.lock_path):
+                    # Decide from the exception captured at the final attempt,
+                    # not a filesystem probe that races the holder's removal
+                    # (#57): a FileExistsError *is* contention, whether or not
+                    # the lock still exists a moment later. PermissionError is
+                    # ambiguous — Windows sharing-violation contention vs an
+                    # unwritable directory — so it falls back to the probe.
+                    if isinstance(err, FileExistsError) \
+                            or os.path.exists(self.lock_path):
                         raise RegistryError(
                             f"registry lock held: {self.lock_path}. If the "
                             "holder is dead, remove the lock file manually "
