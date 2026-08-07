@@ -99,8 +99,9 @@ def render_toml(name, md_text):
 def _normalize_eol(data):
     """Line-ending-insensitive view for drift comparison.
 
-    Sync writes LF, but git smudges a rendered copy to CRLF on any Windows
-    `autocrlf` checkout — its blob is still LF and git treats the two as
+    The canonical sources are LF in the repo and the rendered agent files are
+    written LF, but git smudges the checked-out copies to CRLF on any Windows
+    `autocrlf` checkout — the blob stays LF and git treats the two as
     equivalent (`git add --renormalize` stages nothing). That is a checkout
     artifact, not a hand-edit, yet a byte-exact compare flagged all seven
     assets as drift on every Windows working tree (#38). Normalizing CRLF and
