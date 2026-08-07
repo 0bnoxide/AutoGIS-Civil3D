@@ -13,7 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -584,6 +584,18 @@ class TestClaims(TempRepoCase):
         for bad in ("src/*.cs", "src/test*", "**/x", "a?b"):
             result = coordination.claim(self.repo, "s1", "file_glob", bad)
             self.assertIn("error", result, bad)
+
+    def test_claim_cli_rejected_glob_exits_misuse(self):
+        # #39: the claim CLI branch must surface claim()'s {"error": ...} as a
+        # MISUSE exit with the message, not crash with KeyError on "claimed".
+        buffer = io.StringIO()
+        with mock.patch.object(coordination, "discover", return_value=self.repo):
+            with redirect_stderr(buffer):
+                rc = coordination.main(
+                    ["claim", "--session", "s1",
+                     "--kind", "file_glob", "--value", "docs/**"])
+        self.assertEqual(rc, coordination.MISUSE)
+        self.assertIn("literal path", buffer.getvalue())
 
     def test_adapter_denies_shell_redirect_into_claimed_glob(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)

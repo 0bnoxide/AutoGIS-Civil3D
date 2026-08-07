@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-04
 
-**Status:** Proposed — requires owner approval before implementation may be claimed
+**Status:** Accepted
 
 **Governing design:** [`2026-08-02-repository-collaboration-architecture-design.md`](../specs/2026-08-02-repository-collaboration-architecture-design.md), accepted at `ed22ac6`, merged `59cf551`. Decisions: [ADR-0002](../../adr/0002-agent-collaboration-and-main-protection.md), [ADR-0004](../../adr/0004-one-adversarial-review-proportioned-to-risk.md).
 

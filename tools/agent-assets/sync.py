@@ -96,20 +96,34 @@ def render_toml(name, md_text):
     )
 
 
+def _normalize_eol(data):
+    """Line-ending-insensitive view for drift comparison.
+
+    The canonical sources are LF in the repo and the rendered agent files are
+    written LF, but git smudges the checked-out copies to CRLF on any Windows
+    `autocrlf` checkout — the blob stays LF and git treats the two as
+    equivalent (`git add --renormalize` stages nothing). That is a checkout
+    artifact, not a hand-edit, yet a byte-exact compare flagged all seven
+    assets as drift on every Windows working tree (#38). Normalizing CRLF and
+    lone CR to LF ignores that artifact; a genuine content edit still differs.
+    """
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def _tree_manifest(root):
     manifest = {}
     for dirpath, _dirs, files in os.walk(root):
         for name in files:
             path = os.path.join(dirpath, name)
             with open(path, "rb") as fh:
-                manifest[os.path.relpath(path, root)] = fh.read()
+                manifest[os.path.relpath(path, root)] = _normalize_eol(fh.read())
     return manifest
 
 
 def _trees_equal(a, b):
-    # Byte comparison, deliberately not filecmp's stat heuristic: on a fresh
-    # checkout mtimes are checkout-time accidents, and a size-equal CRLF/LF
-    # difference must count as drift.
+    # Content comparison, deliberately not filecmp's stat heuristic: on a fresh
+    # checkout mtimes are checkout-time accidents. Line endings are normalized
+    # first (see _normalize_eol) so a CRLF checkout does not read as drift.
     return _tree_manifest(a) == _tree_manifest(b)
 
 
@@ -117,7 +131,7 @@ def _files_equal(path, content):
     if not os.path.exists(path):
         return False
     with open(path, "rb") as fh:
-        return fh.read() == content.encode("utf-8")
+        return _normalize_eol(fh.read()) == _normalize_eol(content.encode("utf-8"))
 
 
 def _sync_skill_target(target_rel, target_root, skills, check_only, drift):
