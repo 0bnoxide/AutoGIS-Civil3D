@@ -1135,6 +1135,7 @@ def cmd_doctor(repo):
     for hook in ("pre-commit", "pre-push"):
         if not os.path.exists(os.path.join(repo.worktree_root, GITHOOKS_DIR, hook)):
             findings.append(f".githooks/{hook} missing in this worktree")
+    snapshot = _pid_snapshot()
     lock = repo.registry_path + LOCK_SUFFIX
     if os.path.exists(lock):
         findings.append(f"registry lock present: {lock} — verify the holder "
@@ -1142,12 +1143,24 @@ def cmd_doctor(repo):
     try:
         claims = list_claims(repo)
         now = _dt.datetime.now(_dt.timezone.utc)
+        local_host = socket.gethostname()
         for record in claims:
+            if record["kind"] == "adr":
+                continue  # ADR reservations are meant to outlive their process
             created = _dt.datetime.strptime(
                 record["created_utc"], "%Y-%m-%dT%H:%M:%SZ"
             ).replace(tzinfo=_dt.timezone.utc)
             age_h = (now - created).total_seconds() / 3600
-            if record["kind"] != "adr" and age_h > STALE_SUSPECT_HOURS:
+            if (record.get("host") == local_host
+                    and _pid_alive(record.get("pid"), snapshot) is False):
+                findings.append(
+                    f"orphaned claim {record['id']} ({record['kind']}="
+                    f"{record['value']}, session {record['session']}) — "
+                    f"pid {record['pid']} is dead on this host; "
+                    f"release --force --id {record['id']} --reason ... "
+                    "to clear"
+                )
+            elif age_h > STALE_SUSPECT_HOURS:
                 findings.append(
                     f"stale-suspect claim {record['id']} ({record['kind']}="
                     f"{record['value']}, session {record['session']}, "

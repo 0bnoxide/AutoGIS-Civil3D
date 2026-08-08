@@ -50,6 +50,13 @@ class TempRepoCase(unittest.TestCase):
         self.repo = coordination.discover(self.repo_path)
         self.assertIsNotNone(self.repo)
 
+    def doctor_output(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            rc = coordination.cmd_doctor(self.repo)
+        self.assertEqual(rc, coordination.ALLOW)
+        return buffer.getvalue()
+
 
 class TestCodexHookTrust(TempRepoCase):
     def write_hook_trust_evidence(self, content):
@@ -59,13 +66,6 @@ class TestCodexHookTrust(TempRepoCase):
         with open(os.path.join(evidence_dir, "codex-project-hook-trust.md"),
                   "w", encoding="utf-8") as fh:
             fh.write(content)
-
-    def doctor_output(self):
-        buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            rc = coordination.cmd_doctor(self.repo)
-        self.assertEqual(rc, coordination.ALLOW)
-        return buffer.getvalue()
 
     def test_doctor_reports_valid_hook_trust_evidence_as_verified(self):
         self.write_hook_trust_evidence(
@@ -1069,6 +1069,17 @@ class TestDoctorLiveness(TempRepoCase):
         proc.wait()
         return proc.pid
 
+    def write_claim(self, **overrides):
+        record = {"id": "abc123def456", "session": "sess-1", "harness": "",
+                  "pid": os.getpid(), "host": socket.gethostname(),
+                  "kind": "branch", "value": "feature-x",
+                  "created_utc": coordination._now()}
+        record.update(overrides)
+        data = coordination._empty_registry()
+        data["claims"].append(record)
+        os.makedirs(os.path.dirname(self.repo.registry_path), exist_ok=True)
+        coordination._save(self.repo.registry_path, data)
+
     def test_pid_alive_true_for_own_process(self):
         snapshot = coordination._pid_snapshot()
         self.assertIs(coordination._pid_alive(os.getpid(), snapshot), True)
@@ -1077,6 +1088,34 @@ class TestDoctorLiveness(TempRepoCase):
         self.assertIsNone(coordination._pid_alive("garbage", None))
         self.assertIsNone(coordination._pid_alive(-4, set()))
         self.assertIsNone(coordination._pid_alive(None, {1, 2}))
+
+    def test_same_host_dead_pid_claim_reported_orphaned(self):
+        self.write_claim(pid=self.dead_pid())
+        out = self.doctor_output()
+        self.assertIn("orphaned claim abc123def456", out)
+        self.assertIn("release --force --id abc123def456", out)
+
+    def test_live_claim_not_reported_orphaned(self):
+        self.write_claim()  # own pid, own host
+        self.assertNotIn("orphaned claim", self.doctor_output())
+
+    def test_foreign_host_dead_pid_not_reported_orphaned(self):
+        self.write_claim(pid=self.dead_pid(), host="elsewhere")
+        self.assertNotIn("orphaned claim", self.doctor_output())
+
+    def test_adr_claim_exempt_from_orphan_check(self):
+        self.write_claim(kind="adr", value="0099", pid=self.dead_pid())
+        self.assertNotIn("orphaned claim", self.doctor_output())
+
+    def test_probe_unknown_falls_back_to_age_only(self):
+        old = (_dt.datetime.now(_dt.timezone.utc)
+               - _dt.timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.write_claim(pid=self.dead_pid(), created_utc=old)
+        with mock.patch.object(coordination, "_pid_alive",
+                               return_value=None):
+            out = self.doctor_output()
+        self.assertNotIn("orphaned claim", out)
+        self.assertIn("stale-suspect claim", out)
 
 
 if __name__ == "__main__":
