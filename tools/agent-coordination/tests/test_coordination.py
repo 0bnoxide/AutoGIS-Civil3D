@@ -1123,6 +1123,16 @@ class TestDoctorLiveness(TempRepoCase):
         self.assertNotIn("orphaned claim", out)
         self.assertIn("stale-suspect claim", out)
 
+    def test_cli_claim_not_reported_orphaned(self):
+        proc = subprocess.run(
+            [sys.executable, coordination.__file__, "claim",
+             "--session", "cli-sess", "--kind", "branch",
+             "--value", "feature-cli"],
+            capture_output=True, text=True, cwd=self.repo_path, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(coordination.list_claims(self.repo)), 1)
+        self.assertNotIn("orphaned claim", self.doctor_output())
+
     def test_lock_with_dead_local_holder_reported_removable(self):
         pid = self.dead_pid()
         self.write_lock(f"{pid}@{socket.gethostname()} 2026-08-07T00:00:00Z")
