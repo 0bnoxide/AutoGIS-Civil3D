@@ -1085,6 +1085,123 @@ def _lock_finding(lock_path, snapshot):
     return neutral
 
 
+_TRANSIENT_ANCESTORS = ("bash", "sh", "dash", "zsh", "fish", "cmd",
+                        "pwsh", "powershell", "conhost")
+
+
+def _process_table_windows():
+    import ctypes
+    from ctypes import wintypes
+
+    TH32CS_SNAPPROCESS = 0x00000002
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = (
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_void_p),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        )
+
+    kernel32 = ctypes.windll.kernel32
+    # Without restype, the 64-bit HANDLE comes back truncated to int and
+    # the INVALID_HANDLE_VALUE comparison can never match.
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = (
+        wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+    kernel32.Process32NextW.argtypes = (
+        wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snapshot in (None, ctypes.c_void_p(-1).value):
+        return None
+    table = {}
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while ok:
+            name = entry.szExeFile.lower()
+            if name.endswith(".exe"):
+                name = name[:-4]
+            table[int(entry.th32ProcessID)] = (
+                int(entry.th32ParentProcessID), name)
+            ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return table or None
+
+
+def _process_table_posix():
+    proc = subprocess.run(
+        ["ps", "-Ao", "pid=,ppid=,comm="],
+        capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=30,
+    )
+    if proc.returncode != 0:
+        return None
+    table = {}
+    for line in proc.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        table[pid] = (ppid, os.path.basename(parts[2].strip()).lower())
+    return table or None
+
+
+def _process_table():
+    """pid -> (ppid, exe basename lowercased, `.exe` stripped) for every
+    live process, or None when the snapshot fails."""
+    if os.name == "nt":
+        return _process_table_windows()
+    return _process_table_posix()
+
+
+def _first_app_ancestor(pid, table):
+    """Nearest ancestor of `pid` that is not a transient interpreter or
+    shell (python*/py*, bash, cmd, pwsh, ...), or None when the chain is
+    all-transient, leaves the table, or cycles (pid reuse can loop a
+    ppid chain)."""
+    seen = set()
+    while pid in table and pid not in seen:
+        seen.add(pid)
+        ppid, name = table[pid]
+        if not (name.startswith("py") or name in _TRANSIENT_ANCESTORS):
+            return pid
+        pid = ppid
+    return None
+
+
+def _session_pid():
+    """Pid of the nearest long-lived ancestor — the harness app process
+    (claude/node, codex, or a human's terminal) — or None when unknowable.
+
+    Claims outlive the transient coordination.py process that records
+    them; stamping os.getpid() here made doctor's orphan probe flag every
+    claim as dead moments later (#36). A None pid is stored as JSON null
+    and probes as unknown -> age-only reporting.
+    """
+    try:
+        table = _process_table()
+        if not table:
+            return None
+        return _first_app_ancestor(os.getpid(), table)
+    except Exception:
+        # Deliberately broad: claim must keep working on any platform
+        # quirk, degrading to age-only reporting, never a wrong pid.
+        return None
+
+
 def list_claims(repo):
     return _load(repo.registry_path)["claims"]
 

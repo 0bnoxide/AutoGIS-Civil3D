@@ -1147,5 +1147,33 @@ class TestDoctorLiveness(TempRepoCase):
                       self.doctor_output())
 
 
+class TestSessionPid(unittest.TestCase):
+    def test_walk_skips_transients_to_app_ancestor(self):
+        table = {10: (20, "python"), 20: (30, "bash"),
+                 30: (40, "node"), 40: (0, "explorer")}
+        self.assertEqual(coordination._first_app_ancestor(10, table), 30)
+
+    def test_walk_all_transient_chain_returns_none(self):
+        table = {10: (20, "pythonw"), 20: (0, "pwsh")}
+        self.assertIsNone(coordination._first_app_ancestor(10, table))
+
+    def test_walk_start_pid_missing_returns_none(self):
+        self.assertIsNone(
+            coordination._first_app_ancestor(99, {1: (0, "node")}))
+
+    def test_walk_cyclic_table_returns_none(self):
+        table = {10: (20, "python"), 20: (10, "cmd")}
+        self.assertIsNone(coordination._first_app_ancestor(10, table))
+
+    def test_session_pid_live_resolves_alive_non_cli_pid(self):
+        pid = coordination._session_pid()
+        if pid is None:
+            self.skipTest("no resolvable app ancestor on this host")
+        self.assertNotEqual(pid, os.getpid())
+        self.assertIs(
+            coordination._pid_alive(pid, coordination._pid_snapshot()),
+            True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
