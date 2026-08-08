@@ -17,8 +17,8 @@ Two invariants hold everywhere:
   corruption, absence, or lock contention can never turn a main write into
   an allow.
 - Claims never expire and are never reaped automatically. `doctor` reports
-  stale-suspect claims; only an explicit `release --force <id> --reason ...`
-  clears an orphan.
+  stale-suspect claims and same-host dead-pid orphans; only an explicit
+  `release --force <id> --reason ...` clears an orphan.
 """
 
 from __future__ import annotations
