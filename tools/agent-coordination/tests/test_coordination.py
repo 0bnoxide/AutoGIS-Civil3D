@@ -4,10 +4,12 @@ Standard library unittest only. Every test builds disposable repositories
 under a temp directory — the real primary worktree is never a target.
 """
 
+import datetime as _dt
 import json
 import io
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -1058,6 +1060,23 @@ class TestSyncMain(TempRepoCase):
         os.remove(os.path.join(self.repo_path, "dirty.txt"))
         self.assertEqual(coordination.cmd_sync_main(self.repo),
                          coordination.ALLOW)
+
+
+class TestDoctorLiveness(TempRepoCase):
+    @staticmethod
+    def dead_pid():
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        return proc.pid
+
+    def test_pid_alive_true_for_own_process(self):
+        snapshot = coordination._pid_snapshot()
+        self.assertIs(coordination._pid_alive(os.getpid(), snapshot), True)
+
+    def test_pid_alive_unknown_for_garbage_pid(self):
+        self.assertIsNone(coordination._pid_alive("garbage", None))
+        self.assertIsNone(coordination._pid_alive(-4, set()))
+        self.assertIsNone(coordination._pid_alive(None, {1, 2}))
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ Two invariants hold everywhere:
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as _dt
 import fnmatch
 import json
@@ -1002,6 +1003,63 @@ def release(repo, claim_id, session=None, force=False, reason=""):
         return {"error": f"no claim with id {claim_id}"}
 
     return mutate_registry(repo, apply)
+
+
+def _pid_snapshot():
+    """Windows: the set of live pids from one `tasklist` call, or None if
+    the snapshot could not be taken. POSIX: always None — os.kill probes
+    each pid directly, no snapshot needed."""
+    if os.name != "nt":
+        return None
+    try:
+        proc = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    pids = set()
+    for row in csv.reader(proc.stdout.splitlines()):
+        if len(row) < 2:
+            continue
+        try:
+            pids.add(int(row[1]))
+        except ValueError:
+            continue
+    # An empty set means the parse found no processes at all — impossible
+    # on a live system, so treat it as a failed snapshot, not "all dead".
+    return pids or None
+
+
+def _pid_alive(pid, snapshot):
+    """Liveness of a local pid: True, False, or None (unknown).
+
+    Windows answers only from the tasklist snapshot — os.kill(pid, 0)
+    maps to TerminateProcess there and would kill a live holder.
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        # ponytail: a recycled pid makes a dead holder look alive; the
+        # STALE_SUSPECT_HOURS age check still catches it eventually.
+        # Upgrade path: OpenProcess + process creation-time comparison.
+        return None if snapshot is None else pid in snapshot
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
 
 
 def list_claims(repo):
