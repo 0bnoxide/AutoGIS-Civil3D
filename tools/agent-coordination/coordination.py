@@ -1062,6 +1062,29 @@ def _pid_alive(pid, snapshot):
     return True
 
 
+def _lock_finding(lock_path, snapshot):
+    """Describe a present registry lock, naming holder liveness when the
+    lock records a parseable same-host holder; otherwise stay neutral."""
+    neutral = (f"registry lock present: {lock_path} — verify the holder "
+               "is alive before removing manually")
+    try:
+        with open(lock_path, encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return neutral
+    match = re.match(r"(\d+)@(\S+) ", content)
+    if not match or match.group(2) != socket.gethostname():
+        return neutral
+    alive = _pid_alive(int(match.group(1)), snapshot)
+    if alive is False:
+        return (f"registry lock present: {lock_path} — holder pid "
+                f"{match.group(1)} is dead on this host; safe to remove")
+    if alive is True:
+        return (f"registry lock present: {lock_path} — holder pid "
+                f"{match.group(1)} appears alive; hands off")
+    return neutral
+
+
 def list_claims(repo):
     return _load(repo.registry_path)["claims"]
 
@@ -1138,8 +1161,7 @@ def cmd_doctor(repo):
     snapshot = _pid_snapshot()
     lock = repo.registry_path + LOCK_SUFFIX
     if os.path.exists(lock):
-        findings.append(f"registry lock present: {lock} — verify the holder "
-                        "is alive before removing manually")
+        findings.append(_lock_finding(lock, snapshot))
     try:
         claims = list_claims(repo)
         now = _dt.datetime.now(_dt.timezone.utc)

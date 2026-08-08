@@ -1069,6 +1069,12 @@ class TestDoctorLiveness(TempRepoCase):
         proc.wait()
         return proc.pid
 
+    def write_lock(self, content):
+        lock = self.repo.registry_path + coordination.LOCK_SUFFIX
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        with open(lock, "w", encoding="utf-8") as fh:
+            fh.write(content)
+
     def write_claim(self, **overrides):
         record = {"id": "abc123def456", "session": "sess-1", "harness": "",
                   "pid": os.getpid(), "host": socket.gethostname(),
@@ -1116,6 +1122,29 @@ class TestDoctorLiveness(TempRepoCase):
             out = self.doctor_output()
         self.assertNotIn("orphaned claim", out)
         self.assertIn("stale-suspect claim", out)
+
+    def test_lock_with_dead_local_holder_reported_removable(self):
+        pid = self.dead_pid()
+        self.write_lock(f"{pid}@{socket.gethostname()} 2026-08-07T00:00:00Z")
+        self.assertIn(
+            f"holder pid {pid} is dead on this host; safe to remove",
+            self.doctor_output())
+
+    def test_lock_with_live_local_holder_reported_alive(self):
+        self.write_lock(
+            f"{os.getpid()}@{socket.gethostname()} 2026-08-07T00:00:00Z")
+        self.assertIn(f"holder pid {os.getpid()} appears alive; hands off",
+                      self.doctor_output())
+
+    def test_lock_with_garbage_content_keeps_neutral_wording(self):
+        self.write_lock("not a holder line")
+        self.assertIn("verify the holder is alive before removing manually",
+                      self.doctor_output())
+
+    def test_lock_on_foreign_host_keeps_neutral_wording(self):
+        self.write_lock(f"{self.dead_pid()}@elsewhere 2026-08-07T00:00:00Z")
+        self.assertIn("verify the holder is alive before removing manually",
+                      self.doctor_output())
 
 
 if __name__ == "__main__":
