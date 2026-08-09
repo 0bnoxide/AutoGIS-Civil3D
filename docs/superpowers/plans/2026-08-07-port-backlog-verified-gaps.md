@@ -26,11 +26,11 @@ Excluded only when the capability is already covered here (restatement / redunda
 | 3 | PR-review monitor | Polls 3 comment surfaces, dedups by id, no silent fail | **PORT — P3** (patch: wire self-check to CI) |
 | 6 | Post-edit / post-push feedback hooks | Faster edit→failure loop; PR URL after push | **PORT — P4** (patch: shared neutral script) |
 | 2a | ADR-numbering invariant test | Catches a hand-edit the allocator can't | Port — low (fold into `docs_checks.py`) |
-| 5 | `/pr-doctor` | Diagnoses a stuck PR from checks/reviews/logs | Port — low (prompt skill) |
+| 5b | `/pr-doctor` | Diagnoses a stuck PR from checks/reviews/logs | Port — low (prompt skill) |
 | 4 | Graph-nav agent + `/graph` | Marginal — capability reachable via MCP already | Follow-up |
 | 2d | Shipped examples executed by CI | No shipped examples beyond fixtures today | Follow-up |
 | 2b | Frontmatter via real YAML loader | None — conflicts with `sync.py` design | Excluded |
-| 5 | `/ship`, `/new-issue` | Redundant with stronger enforcement / a convention | Excluded |
+| 5a | `/ship`, `/new-issue` | Redundant with stronger enforcement / a convention | Excluded |
 | 7 | Documentation durability contract | Substance already distributed here | Excluded |
 | 8 | Daily agent-decision logs | Convention; ADRs + roadmap already carry decisions | Excluded |
 
@@ -54,7 +54,7 @@ Excluded only when the capability is already covered here (restatement / redunda
 
 **Advantage.** [ADR-0004](../../adr/0004-one-adversarial-review-proportioned-to-risk.md) sets the merge bar at "one *substantial* adversarial review" but never defines *substantial*. `tools/agent-assets/agents/pr-reviewer.md` encodes review rules but no structured probe pass. The five probes supply the missing definition.
 
-**Design ported.** `BOUNDARY_SHAPE`, `CONTRACT_REACHABILITY`, `IDENTITY_PROVENANCE`, `SIDE_EFFECT_SAFETY`, `ENVIRONMENT_SEAM` — each classified PASS/FAIL/N-A with evidence, plus the teeth rule *"a green suite is not evidence for a probe the suite bypasses."* Fold into the canonical `tools/agent-assets/agents/pr-reviewer.md` (edit the canonical source, then `python tools/agent-assets/sync.py` — never the rendered `.claude`/`.codex` copies), framed as the content of a full-tier review; ADR-0004 keeps the *when*, the probes supply the *what*, joined by a single pointer, not a duplicated tier table.
+**Design ported.** `BOUNDARY_SHAPE`, `CONTRACT_REACHABILITY`, `IDENTITY_PROVENANCE`, `SIDE_EFFECT_SAFETY`, `ENVIRONMENT_SEAM` — each classified PASS, FAIL, or N/A with evidence, plus the teeth rule *"a green suite is not evidence for a probe the suite bypasses."* Fold into the canonical `tools/agent-assets/agents/pr-reviewer.md` (edit the canonical source, then `python tools/agent-assets/sync.py` — never the rendered `.claude`/`.codex` copies), framed as the content of a full-tier review; ADR-0004 keeps the *when*, the probes supply the *what*, joined by a single pointer, not a duplicated tier table.
 
 **Patch on the way in.** Do not port AutoGIS's `pr-review-failure-mode-audit.md` wholesale — its 267-comment derivation is AutoGIS history. Adapt the probe definitions to this repo's vocabulary (handoff manifest, issue codes, validator seam). Add an invariant test that parses `pr-reviewer.md` and asserts the five probe IDs are present, so a prompt cleanup cannot silently delete the framework — using the existing stdlib `parse_frontmatter`, **no YAML dependency** (this is the salvageable half of candidate #2b).
 
@@ -96,7 +96,7 @@ Excluded only when the capability is already covered here (restatement / redunda
 ## Port — low priority
 
 - **2a — ADR-numbering invariant test.** The allocator (`claim --kind adr`) prevents session collisions (the `0005` index gap is a deliberate consumed allocation, not a clash), but nothing catches a *hand-edited* duplicate prefix or an `H1 ≠ filename` mismatch. A few lines in `tools/checks/docs_checks.py`, which already lints docs. Cheap; land when convenient.
-- **5 — `/pr-doctor`.** A prompt skill that diagnoses a stuck PR from comments, reviews, checks, and failed-run logs. Genuinely new and useful when a PR stalls; unenforceable convenience. Port if the manual version recurs.
+- **5b — `/pr-doctor`.** A prompt skill that diagnoses a stuck PR from comments, reviews, checks, and failed-run logs. Genuinely new and useful when a PR stalls; unenforceable convenience. Port if the manual version recurs.
 
 ## Follow-up — recorded, not built now
 
@@ -106,7 +106,7 @@ Excluded only when the capability is already covered here (restatement / redunda
 ## Excluded — with reasons
 
 - **2b — Frontmatter via real YAML loader.** Conflicts with `sync.py`'s deliberate stdlib-only `parse_frontmatter` (documented S8786 rationale). The one useful half — pinning probe IDs — is folded into **P2** with no new dependency.
-- **5 — `/ship`, `/new-issue`.** `/ship`'s refuse-push-from-`main` is redundant with strictly stronger enforcement (`.githooks/pre-push` + PreToolUse). `/new-issue` restates the always-open-an-issue convention already in the agent guide.
+- **5a — `/ship`, `/new-issue`.** `/ship`'s refuse-push-from-`main` is redundant with strictly stronger enforcement (`.githooks/pre-push` + PreToolUse). `/new-issue` restates the always-open-an-issue convention already in the agent guide.
 - **7 — Documentation durability contract.** The substance already lives here, distributed: the `agent-guide.md` sources-of-truth table + `docs_checks.py`'s `LIVING_DOCS` set (durable-authoritative vs. dated-record, enforced). A fourth doc classifying docs restates authority already encoded.
 - **8 — Daily agent-decision logs.** A logging convention with no verification; ADRs and the roadmap already carry durable decisions with revisit triggers. YAGNI until an auditable per-day trail is a demonstrated need.
 
