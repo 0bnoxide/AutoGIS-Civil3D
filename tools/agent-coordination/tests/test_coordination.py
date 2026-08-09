@@ -4,10 +4,12 @@ Standard library unittest only. Every test builds disposable repositories
 under a temp directory — the real primary worktree is never a target.
 """
 
+import datetime as _dt
 import json
 import io
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -48,6 +50,13 @@ class TempRepoCase(unittest.TestCase):
         self.repo = coordination.discover(self.repo_path)
         self.assertIsNotNone(self.repo)
 
+    def doctor_output(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            rc = coordination.cmd_doctor(self.repo)
+        self.assertEqual(rc, coordination.ALLOW)
+        return buffer.getvalue()
+
 
 class TestCodexHookTrust(TempRepoCase):
     def write_hook_trust_evidence(self, content):
@@ -57,13 +66,6 @@ class TestCodexHookTrust(TempRepoCase):
         with open(os.path.join(evidence_dir, "codex-project-hook-trust.md"),
                   "w", encoding="utf-8") as fh:
             fh.write(content)
-
-    def doctor_output(self):
-        buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            rc = coordination.cmd_doctor(self.repo)
-        self.assertEqual(rc, coordination.ALLOW)
-        return buffer.getvalue()
 
     def test_doctor_reports_valid_hook_trust_evidence_as_verified(self):
         self.write_hook_trust_evidence(
@@ -1058,6 +1060,129 @@ class TestSyncMain(TempRepoCase):
         os.remove(os.path.join(self.repo_path, "dirty.txt"))
         self.assertEqual(coordination.cmd_sync_main(self.repo),
                          coordination.ALLOW)
+
+
+class TestDoctorLiveness(TempRepoCase):
+    @staticmethod
+    def dead_pid():
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        return proc.pid
+
+    def write_lock(self, content):
+        lock = self.repo.registry_path + coordination.LOCK_SUFFIX
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        with open(lock, "w", encoding="utf-8") as fh:
+            fh.write(content)
+
+    def write_claim(self, **overrides):
+        record = {"id": "abc123def456", "session": "sess-1", "harness": "",
+                  "pid": os.getpid(), "host": socket.gethostname(),
+                  "kind": "branch", "value": "feature-x",
+                  "created_utc": coordination._now()}
+        record.update(overrides)
+        data = coordination._empty_registry()
+        data["claims"].append(record)
+        os.makedirs(os.path.dirname(self.repo.registry_path), exist_ok=True)
+        coordination._save(self.repo.registry_path, data)
+
+    def test_pid_alive_true_for_own_process(self):
+        snapshot = coordination._pid_snapshot()
+        self.assertIs(coordination._pid_alive(os.getpid(), snapshot), True)
+
+    def test_pid_alive_unknown_for_garbage_pid(self):
+        self.assertIsNone(coordination._pid_alive("garbage", None))
+        self.assertIsNone(coordination._pid_alive(-4, set()))
+        self.assertIsNone(coordination._pid_alive(None, {1, 2}))
+
+    def test_same_host_dead_pid_claim_reported_orphaned(self):
+        self.write_claim(pid=self.dead_pid())
+        out = self.doctor_output()
+        self.assertIn("orphaned claim abc123def456", out)
+        self.assertIn("release --force --id abc123def456", out)
+
+    def test_live_claim_not_reported_orphaned(self):
+        self.write_claim()  # own pid, own host
+        self.assertNotIn("orphaned claim", self.doctor_output())
+
+    def test_foreign_host_dead_pid_not_reported_orphaned(self):
+        self.write_claim(pid=self.dead_pid(), host="elsewhere")
+        self.assertNotIn("orphaned claim", self.doctor_output())
+
+    def test_adr_claim_exempt_from_orphan_check(self):
+        self.write_claim(kind="adr", value="0099", pid=self.dead_pid())
+        self.assertNotIn("orphaned claim", self.doctor_output())
+
+    def test_probe_unknown_falls_back_to_age_only(self):
+        old = (_dt.datetime.now(_dt.timezone.utc)
+               - _dt.timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.write_claim(pid=self.dead_pid(), created_utc=old)
+        with mock.patch.object(coordination, "_pid_alive",
+                               return_value=None):
+            out = self.doctor_output()
+        self.assertNotIn("orphaned claim", out)
+        self.assertIn("stale-suspect claim", out)
+
+    def test_cli_claim_not_reported_orphaned(self):
+        proc = subprocess.run(
+            [sys.executable, coordination.__file__, "claim",
+             "--session", "cli-sess", "--kind", "branch",
+             "--value", "feature-cli"],
+            capture_output=True, text=True, cwd=self.repo_path, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(len(coordination.list_claims(self.repo)), 1)
+        self.assertNotIn("orphaned claim", self.doctor_output())
+
+    def test_lock_with_dead_local_holder_reported_removable(self):
+        pid = self.dead_pid()
+        self.write_lock(f"{pid}@{socket.gethostname()} 2026-08-07T00:00:00Z")
+        self.assertIn(
+            f"holder pid {pid} is dead on this host; safe to remove",
+            self.doctor_output())
+
+    def test_lock_with_live_local_holder_reported_alive(self):
+        self.write_lock(
+            f"{os.getpid()}@{socket.gethostname()} 2026-08-07T00:00:00Z")
+        self.assertIn(f"holder pid {os.getpid()} appears alive; hands off",
+                      self.doctor_output())
+
+    def test_lock_with_garbage_content_keeps_neutral_wording(self):
+        self.write_lock("not a holder line")
+        self.assertIn("verify the holder is alive before removing manually",
+                      self.doctor_output())
+
+    def test_lock_on_foreign_host_keeps_neutral_wording(self):
+        self.write_lock(f"{self.dead_pid()}@elsewhere 2026-08-07T00:00:00Z")
+        self.assertIn("verify the holder is alive before removing manually",
+                      self.doctor_output())
+
+
+class TestSessionPid(unittest.TestCase):
+    def test_walk_skips_transients_to_app_ancestor(self):
+        table = {10: (20, "python"), 20: (30, "bash"),
+                 30: (40, "node"), 40: (0, "explorer")}
+        self.assertEqual(coordination._first_app_ancestor(10, table), 30)
+
+    def test_walk_all_transient_chain_returns_none(self):
+        table = {10: (20, "pythonw"), 20: (0, "pwsh")}
+        self.assertIsNone(coordination._first_app_ancestor(10, table))
+
+    def test_walk_start_pid_missing_returns_none(self):
+        self.assertIsNone(
+            coordination._first_app_ancestor(99, {1: (0, "node")}))
+
+    def test_walk_cyclic_table_returns_none(self):
+        table = {10: (20, "python"), 20: (10, "cmd")}
+        self.assertIsNone(coordination._first_app_ancestor(10, table))
+
+    def test_session_pid_live_resolves_alive_non_cli_pid(self):
+        pid = coordination._session_pid()
+        if pid is None:
+            self.skipTest("no resolvable app ancestor on this host")
+        self.assertNotEqual(pid, os.getpid())
+        self.assertIs(
+            coordination._pid_alive(pid, coordination._pid_snapshot()),
+            True)
 
 
 if __name__ == "__main__":

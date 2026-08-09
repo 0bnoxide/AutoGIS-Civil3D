@@ -17,13 +17,14 @@ Two invariants hold everywhere:
   corruption, absence, or lock contention can never turn a main write into
   an allow.
 - Claims never expire and are never reaped automatically. `doctor` reports
-  stale-suspect claims; only an explicit `release --force <id> --reason ...`
-  clears an orphan.
+  stale-suspect claims and same-host dead-pid orphans; only an explicit
+  `release --force <id> --reason ...` clears an orphan.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as _dt
 import fnmatch
 import json
@@ -933,7 +934,7 @@ def claim(repo, session, kind, value, harness=""):
             "id": uuid.uuid4().hex[:12],
             "session": session,
             "harness": harness,
-            "pid": os.getpid(),
+            "pid": _session_pid(),
             "host": socket.gethostname(),
             "kind": kind,
             "value": value,
@@ -966,7 +967,7 @@ def _allocate_adr(repo, data, session, harness):
         "id": uuid.uuid4().hex[:12],
         "session": session,
         "harness": harness,
-        "pid": os.getpid(),
+        "pid": _session_pid(),
         "host": socket.gethostname(),
         "kind": "adr",
         "value": number,
@@ -1002,6 +1003,203 @@ def release(repo, claim_id, session=None, force=False, reason=""):
         return {"error": f"no claim with id {claim_id}"}
 
     return mutate_registry(repo, apply)
+
+
+def _pid_snapshot():
+    """Windows: the set of live pids from one `tasklist` call, or None if
+    the snapshot could not be taken. POSIX: always None — os.kill probes
+    each pid directly, no snapshot needed."""
+    if os.name != "nt":
+        return None
+    try:
+        proc = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    pids = set()
+    for row in csv.reader(proc.stdout.splitlines()):
+        if len(row) < 2:
+            continue
+        try:
+            pids.add(int(row[1]))
+        except ValueError:
+            continue
+    # An empty set means the parse found no processes at all — impossible
+    # on a live system, so treat it as a failed snapshot, not "all dead".
+    return pids or None
+
+
+def _pid_alive(pid, snapshot):
+    """Liveness of a local pid: True, False, or None (unknown).
+
+    Windows answers only from the tasklist snapshot — os.kill(pid, 0)
+    maps to TerminateProcess there and would kill a live holder.
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        # ponytail: a recycled pid makes a dead holder look alive; the
+        # STALE_SUSPECT_HOURS age check still catches it eventually.
+        # Upgrade path: OpenProcess + process creation-time comparison.
+        return None if snapshot is None else pid in snapshot
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
+def _lock_finding(lock_path, snapshot):
+    """Describe a present registry lock, naming holder liveness when the
+    lock records a parseable same-host holder; otherwise stay neutral."""
+    neutral = (f"registry lock present: {lock_path} — verify the holder "
+               "is alive before removing manually")
+    try:
+        with open(lock_path, encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return neutral
+    match = re.match(r"(\d+)@(\S+) ", content)
+    if not match or match.group(2) != socket.gethostname():
+        return neutral
+    alive = _pid_alive(int(match.group(1)), snapshot)
+    if alive is False:
+        return (f"registry lock present: {lock_path} — holder pid "
+                f"{match.group(1)} is dead on this host; safe to remove")
+    if alive is True:
+        return (f"registry lock present: {lock_path} — holder pid "
+                f"{match.group(1)} appears alive; hands off")
+    return neutral
+
+
+_TRANSIENT_ANCESTORS = ("bash", "sh", "dash", "zsh", "fish", "cmd",
+                        "pwsh", "powershell", "conhost")
+
+
+def _process_table_windows():
+    import ctypes
+    from ctypes import wintypes
+
+    TH32CS_SNAPPROCESS = 0x00000002
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = (
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_void_p),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        )
+
+    kernel32 = ctypes.windll.kernel32
+    # Without restype, the 64-bit HANDLE comes back truncated to int and
+    # the INVALID_HANDLE_VALUE comparison can never match.
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = (
+        wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+    kernel32.Process32NextW.argtypes = (
+        wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snapshot in (None, ctypes.c_void_p(-1).value):
+        return None
+    table = {}
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while ok:
+            name = entry.szExeFile.lower()
+            if name.endswith(".exe"):
+                name = name[:-4]
+            table[int(entry.th32ProcessID)] = (
+                int(entry.th32ParentProcessID), name)
+            ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return table or None
+
+
+def _process_table_posix():
+    proc = subprocess.run(
+        ["ps", "-Ao", "pid=,ppid=,comm="],
+        capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=30,
+    )
+    if proc.returncode != 0:
+        return None
+    table = {}
+    for line in proc.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        table[pid] = (ppid, os.path.basename(parts[2].strip()).lower())
+    return table or None
+
+
+def _process_table():
+    """pid -> (ppid, exe basename lowercased, `.exe` stripped) for every
+    live process, or None when the snapshot fails."""
+    if os.name == "nt":
+        return _process_table_windows()
+    return _process_table_posix()
+
+
+def _first_app_ancestor(pid, table):
+    """Nearest ancestor of `pid` that is not a transient interpreter or
+    shell (python*/py*, bash, cmd, pwsh, ...), or None when the chain is
+    all-transient, leaves the table, or cycles (pid reuse can loop a
+    ppid chain)."""
+    seen = set()
+    while pid in table and pid not in seen:
+        seen.add(pid)
+        ppid, name = table[pid]
+        if not (name.startswith("py") or name in _TRANSIENT_ANCESTORS):
+            return pid
+        pid = ppid
+    return None
+
+
+def _session_pid():
+    """Pid of the nearest long-lived ancestor — the harness app process
+    (claude/node, codex, or a human's terminal) — or None when unknowable.
+
+    Claims outlive the transient coordination.py process that records
+    them; stamping os.getpid() here made doctor's orphan probe flag every
+    claim as dead moments later (#36). A None pid is stored as JSON null
+    and probes as unknown -> age-only reporting.
+    """
+    try:
+        table = _process_table()
+        if not table:
+            return None
+        return _first_app_ancestor(os.getpid(), table)
+    except Exception:
+        # Deliberately broad: claim must keep working on any platform
+        # quirk, degrading to age-only reporting, never a wrong pid.
+        return None
 
 
 def list_claims(repo):
@@ -1077,19 +1275,31 @@ def cmd_doctor(repo):
     for hook in ("pre-commit", "pre-push"):
         if not os.path.exists(os.path.join(repo.worktree_root, GITHOOKS_DIR, hook)):
             findings.append(f".githooks/{hook} missing in this worktree")
+    snapshot = _pid_snapshot()
     lock = repo.registry_path + LOCK_SUFFIX
     if os.path.exists(lock):
-        findings.append(f"registry lock present: {lock} — verify the holder "
-                        "is alive before removing manually")
+        findings.append(_lock_finding(lock, snapshot))
     try:
         claims = list_claims(repo)
         now = _dt.datetime.now(_dt.timezone.utc)
+        local_host = socket.gethostname()
         for record in claims:
+            if record["kind"] == "adr":
+                continue  # ADR reservations are meant to outlive their process
             created = _dt.datetime.strptime(
                 record["created_utc"], "%Y-%m-%dT%H:%M:%SZ"
             ).replace(tzinfo=_dt.timezone.utc)
             age_h = (now - created).total_seconds() / 3600
-            if record["kind"] != "adr" and age_h > STALE_SUSPECT_HOURS:
+            if (record.get("host") == local_host
+                    and _pid_alive(record.get("pid"), snapshot) is False):
+                findings.append(
+                    f"orphaned claim {record['id']} ({record['kind']}="
+                    f"{record['value']}, session {record['session']}) — "
+                    f"pid {record['pid']} is dead on this host; "
+                    f"release --force --id {record['id']} --reason ... "
+                    "to clear"
+                )
+            elif age_h > STALE_SUSPECT_HOURS:
                 findings.append(
                     f"stale-suspect claim {record['id']} ({record['kind']}="
                     f"{record['value']}, session {record['session']}, "
