@@ -23,6 +23,18 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$(git rev-parse --show-toplevel)/tools/agent-hooks/post_tool_use.py\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$r = git rev-parse --show-toplevel 2>$null; if ($r) { python (Join-Path $r 'tools/agent-hooks/post_tool_use.py') }\""
+          }
+        ]
+      }
     ]
   }
 }

@@ -21,6 +21,8 @@ jobs:
         run: python tools/agent-assets/sync.py --check
       - name: Documentation checks
         run: python tools/checks/docs_checks.py --root . --baseline origin/main
+      - name: PostToolUse hook self-check
+        run: python -m unittest discover -s tools/agent-hooks/tests -v
 
   test:
     runs-on: windows-latest
