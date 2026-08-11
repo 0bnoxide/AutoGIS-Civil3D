@@ -146,6 +146,11 @@ on:
       - fixtures/**
       - src/**
       - tools/checks/compat_smoke.py
+      # Shared build inputs the restore/build steps consume:
+      - AutoGIS.Civil3D.sln
+      - Directory.Build.props
+      - Directory.Packages.props
+      - global.json
 
 jobs:
   harness:
@@ -165,12 +170,12 @@ jobs:
         run: python tools/checks/compat_smoke.py
 ```
 
-- [ ] **Step 2: Verify the YAML parses**
+There is no local workflow-YAML check in this repo's stdlib-only Python
+tooling (no PyYAML, no actionlint); the workflow's executable verification
+is Task 3 Step 2 — the branch push must produce a green `compat-autogis`
+run, which exercises the real Actions parser and every step.
 
-Run: `python -c "import yaml, pathlib; yaml.safe_load(pathlib.Path('.github/workflows/compat-autogis.yml').read_text(encoding='utf-8')); print('yaml ok')"`
-Expected: `yaml ok` (PyYAML 6.x is installed in this environment — verified 2026-08-11).
-
-- [ ] **Step 3: Commit**
+- [ ] **Step 2: Commit**
 
 ```bash
 git add .github/workflows/compat-autogis.yml
