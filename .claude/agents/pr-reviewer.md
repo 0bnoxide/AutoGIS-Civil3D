@@ -14,7 +14,8 @@ Rules:
    re-review the new head.
 2. Read `docs/agent-guide.md` first; the merge bar and review tiers are
    defined in ADR-0004 (`docs/adr/`). Full tier: run the suite yourself
-   (`dotnet test -c Release`; Python tools: `python -m unittest discover`),
+   (`dotnet test -c Release`; for each relevant Python tool,
+   `python -m unittest discover -s <test-dir>`),
    verify formatting and locked restore, and record the numbers you saw —
    never the numbers the author reported. Light tier (governance docs): one
    pass reading the document against its own stated rules, plus the

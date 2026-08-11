@@ -107,6 +107,8 @@ class TestSync(unittest.TestCase):
             _frontmatter, body = sync.parse_frontmatter(fh.read())
         self.assertIn(
             "In a full-tier review, classify every probe below", body)
+        self.assertIn(
+            "python -m unittest discover -s <test-dir>", body)
         for probe in (
             "BOUNDARY_SHAPE",
             "CONTRACT_REACHABILITY",
