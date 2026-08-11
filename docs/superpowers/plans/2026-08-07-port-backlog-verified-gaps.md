@@ -44,7 +44,7 @@ Excluded only when the capability is already covered here (restatement / redunda
 
 **Patch on the way in.** `GetReferencedAssemblies()` drops declared-but-unused references. If guarding the *declaration* matters, add a second cheap scan of the restored `project.assets.json` (or `dotnet list package`) against the same set. Start with the reflection test; add the assets scan only if a declared-unused reference is a real concern.
 
-**Acceptance.** Passes on today's clean boundary; proven red by temporarily adding a banned reference before landing green; wired into the `test` CI job so a future violation blocks merge.
+**Acceptance.** Passes on today's clean boundary; proven red by temporarily flagging an assembly the closure actually references (a declared-but-unused package is dropped by the compiler and stays out of the reflection test's reach — that gap is the assets-scan deferral above, not a hole in the red proof) before landing green; wired into the `test` CI job so a future violation blocks merge.
 
 **Risk.** Low — additive test, no production-code change.
 
