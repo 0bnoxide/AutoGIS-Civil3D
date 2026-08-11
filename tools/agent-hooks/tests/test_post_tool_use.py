@@ -15,7 +15,7 @@ TOOL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, TOOL_DIR)
 
 import post_tool_use  # noqa: E402
-from post_tool_use import handle, _is_git_push  # noqa: E402
+from post_tool_use import handle, _is_git_push, _pushed_branch  # noqa: E402
 
 
 def stub(*responses):
@@ -127,8 +127,11 @@ class PostEditDotnetTests(unittest.TestCase):
 
 
 class PostPushTests(unittest.TestCase):
-    def _bash(self, command):
-        return {"tool_name": "Bash", "tool_input": {"command": command}}
+    def _bash(self, command, tool_response=None):
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+        if tool_response is not None:
+            payload["tool_response"] = tool_response
+        return payload
 
     def test_git_push_surfaces_pr_url(self):
         run = stub((is_gh_pr, (0, "https://github.com/o/r/pull/9\n")))
@@ -147,11 +150,42 @@ class PostPushTests(unittest.TestCase):
         ctx = handle(self._bash("git push"), "/root", {}, run)
         self.assertIsNone(ctx)
 
-    def test_push_mentioned_in_an_echo_is_not_a_push(self):
+    def test_push_is_the_subcommand_not_any_argument(self):
         self.assertFalse(_is_git_push("echo remember to git push later | cat"))
+        self.assertFalse(_is_git_push("git commit -m push"))
+        self.assertFalse(_is_git_push("git log --grep push"))
+        self.assertFalse(_is_git_push("gitk push"))
+        self.assertTrue(_is_git_push("git push"))
         self.assertTrue(_is_git_push("git status && git push"))
         self.assertTrue(_is_git_push("git -C repo push origin main"))
-        self.assertFalse(_is_git_push("gitk push"))
+        self.assertTrue(_is_git_push("git -c user.name=x push"))
+
+    def test_failed_push_is_not_reported(self):
+        run = stub((is_gh_pr, (0, "https://github.com/o/r/pull/9")))
+        rejected = "! [rejected]  main -> main (non-fast-forward)\nerror: failed to push"
+        self.assertIsNone(
+            handle(self._bash("git push", tool_response=rejected), "/root", {}, run))
+        self.assertIsNone(
+            handle(self._bash("git push", tool_response={"exit_code": 1}), "/root", {}, run))
+        self.assertEqual(run.calls, [])
+
+    def test_targets_the_pushed_branch_not_the_current(self):
+        run = stub((is_gh_pr, (0, "https://github.com/o/r/pull/12")))
+        handle(self._bash("git push origin HEAD:feature"), "/root", {}, run)
+        self.assertTrue(any(argv[:3] == ["gh", "pr", "view"] and "feature" in argv
+                            for argv in run.calls))
+
+    def test_dash_C_cross_repo_declines(self):
+        run = stub((is_gh_pr, (0, "https://github.com/o/r/pull/9")))
+        ctx = handle(self._bash("git -C ../other push"), "/root", {}, run)
+        self.assertIsNone(ctx)
+        self.assertEqual(run.calls, [])
+
+    def test_pushed_branch_parsing(self):
+        self.assertEqual(_pushed_branch("git push"), (None, False))
+        self.assertEqual(_pushed_branch("git push origin mybr"), ("mybr", False))
+        self.assertEqual(_pushed_branch("git push origin HEAD:feature"), ("feature", False))
+        self.assertEqual(_pushed_branch("git -C d push origin x")[1], True)
 
 
 class RobustnessTests(unittest.TestCase):

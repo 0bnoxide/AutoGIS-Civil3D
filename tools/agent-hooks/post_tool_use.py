@@ -46,15 +46,87 @@ DOTNET_MARKER = "AUTOGIS_HOOK_DOTNET"
 _MAX_LINES = 40
 
 
-def _is_git_push(command: str) -> bool:
-    # A real `git … push` at the head of some command segment — not the words
-    # "git push" buried inside an echo or a commit message. Split on shell
-    # separators, then require the segment to start with `git` and carry `push`.
+# git global options that consume the next token as their value.
+_GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                   "--exec-path", "--config-env"}
+
+
+def _git_segments(command: str):
+    """Token lists for each command segment that invokes git as its program."""
     for segment in re.split(r"[|&;\n]+", command or ""):
         tokens = segment.split()
-        if len(tokens) >= 2 and tokens[0] == "git" and "push" in tokens[1:]:
-            return True
-    return False
+        if tokens and tokens[0] == "git":
+            yield tokens
+
+
+def _git_subcommand(tokens: list):
+    """Resolve `git <global opts> <subcommand> <args>`.
+
+    Returns (subcommand, args_after_subcommand, uses_dash_C). subcommand is None
+    if the segment is only global options. This is what lets `git commit -m push`
+    or `git log --grep push` be recognized as commit/log, not push — the word
+    "push" only counts when it is the subcommand position.
+    """
+    i = 1  # skip 'git'
+    uses_dash_c = False
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "-C" or tok.startswith("-C"):
+            uses_dash_c = True
+        if tok in _GIT_VALUE_OPTS:
+            i += 2  # option plus its separate value
+            continue
+        if tok.startswith("-"):  # -Cpath, --opt=value, or a valueless flag
+            i += 1
+            continue
+        return tok, tokens[i + 1:], uses_dash_c
+    return None, [], uses_dash_c
+
+
+def _is_git_push(command: str) -> bool:
+    return any(_git_subcommand(tokens)[0] == "push"
+               for tokens in _git_segments(command))
+
+
+def _pushed_branch(command: str):
+    """Return (branch_or_None, cross_repo) for the first `git push` segment.
+
+    branch is the ref that moves on the remote — the destination side of a
+    `src:dst` refspec, else the branch positional, else None (current branch).
+    cross_repo is True when `git -C <dir>` retargets a different working tree, so
+    the caller can decline rather than surface a PR URL for the wrong repo.
+    """
+    for tokens in _git_segments(command):
+        subcommand, args, cross_repo = _git_subcommand(tokens)
+        if subcommand != "push":
+            continue
+        positionals = [a for a in args if not a.startswith("-")]
+        refspec = positionals[1] if len(positionals) >= 2 else None
+        branch = refspec.split(":")[-1].lstrip("+") if refspec else None
+        return branch, cross_repo
+    return None, False
+
+
+def _push_succeeded(tool_response) -> bool:
+    """A rejected/failed push must not be reported as pushed. Prefer a structured
+    exit code; else scan output for git's failure markers; default to reporting
+    when the response shape is unknown (never suppress a real push over a guess).
+    """
+    if isinstance(tool_response, dict):
+        for key in ("exit_code", "exitCode", "returncode"):
+            if key in tool_response:
+                return tool_response[key] == 0
+        if tool_response.get("is_error") or tool_response.get("interrupted"):
+            return False
+        text = " ".join(str(v) for v in tool_response.values())
+    elif isinstance(tool_response, str):
+        text = tool_response
+    else:
+        return True
+    lowered = text.lower()
+    markers = ("[rejected]", "failed to push", "error: failed to push",
+               "fatal:", "permission denied", "could not read from remote")
+    return not any(marker in lowered for marker in markers)
 
 
 def _tail(text: str, limit: int = _MAX_LINES) -> str:
@@ -138,10 +210,19 @@ def _dotnet_feedback(rel: str, root: str, env: dict, run: Runner) -> Optional[st
     return f".NET tests ({test_csproj}) FAILED after editing {rel}:\n{_tail(out)}"
 
 
-def _push_feedback(command: str, run: Runner) -> Optional[str]:
+def _push_feedback(command: str, tool_response, run: Runner) -> Optional[str]:
     if not _is_git_push(command):
         return None
-    rc, out = run(["gh", "pr", "view", "--json", "url", "-q", ".url"])
+    if not _push_succeeded(tool_response):
+        return None  # a rejected/failed push moved nothing
+    branch, cross_repo = _pushed_branch(command)
+    if cross_repo:
+        return None  # `git -C <dir>` targets another tree; don't guess a URL
+    args = ["gh", "pr", "view"]
+    if branch:
+        args.append(branch)  # the ref actually pushed, not the checked-out one
+    args += ["--json", "url", "-q", ".url"]
+    rc, out = run(args)
     url = out.strip().splitlines()[0] if out.strip() else ""
     if rc != 0 or not url:
         return None  # no PR yet (e.g. pushed before opening one): stay quiet
@@ -161,7 +242,8 @@ def handle(payload: dict, root: str, env: dict, run: Runner) -> Optional[str]:
         return (_python_feedback(rel, root, run)
                 or _dotnet_feedback(rel, root, env, run))
     if tool in SHELL_TOOLS:
-        return _push_feedback(tool_input.get("command", ""), run)
+        return _push_feedback(tool_input.get("command", ""),
+                              payload.get("tool_response"), run)
     return None
 
 
