@@ -15,11 +15,12 @@ namespace AutoGIS.Civil3D.Handoff.Tests;
 public sealed class ReferenceBoundaryTests
 {
     // Assembly-name prefixes that would dissolve the seam. Autodesk desktop
-    // APIs ship as Autodesk.* / Aecc* / acdbmgd / acmgd; Esri as ArcGIS* /
-    // ESRI*. acdbmgd and acmgd are lowercase, so match case-insensitively.
+    // APIs ship as Autodesk.* / Aecc* and the AutoCAD managed assemblies
+    // acdbmgd / acmgd / AcCoreMgd; Esri as ArcGIS* / ESRI*. Matched
+    // case-insensitively (the AutoCAD names vary in casing).
     private static readonly string[] BannedPrefixes =
     {
-        "Autodesk", "Aecc", "acdbmgd", "acmgd", "ArcGIS", "ESRI",
+        "Autodesk", "Aecc", "acdbmgd", "acmgd", "AcCoreMgd", "ArcGIS", "ESRI",
     };
 
     private static bool IsBanned(string assemblyName) =>
@@ -34,6 +35,7 @@ public sealed class ReferenceBoundaryTests
     [InlineData("AeccDbMgd", true)]
     [InlineData("acdbmgd", true)]
     [InlineData("acmgd", true)]
+    [InlineData("AcCoreMgd", true)]
     [InlineData("ArcGIS.Core", true)]
     [InlineData("ESRI.ArcGIS.Geodatabase", true)]
     [InlineData("JsonSchema.Net", false)]
