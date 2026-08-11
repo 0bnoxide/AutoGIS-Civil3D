@@ -359,8 +359,14 @@ def deny_reason_for_git_argv(argv, cwd):
 
 
 def _git_executable_name(token):
-    """Return the final path component for a POSIX or Windows executable."""
-    return token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    """Return the final path component for a POSIX or Windows executable.
+
+    Windows path resolution strips trailing dots and spaces, so `git.` and
+    `git ` execute as git.exe; rstrip them here so the deny check sees the
+    real target. Unconditional (not OS-gated): git-bash runs on Windows too,
+    and over-stripping only ever fails toward deny.
+    """
+    return token.replace("\\", "/").rsplit("/", 1)[-1].rstrip(". ").lower()
 
 
 def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False):
