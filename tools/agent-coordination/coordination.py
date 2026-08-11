@@ -308,7 +308,7 @@ def _ref_move_targets_main(sub, rest):
 
 def deny_reason_for_git_argv(argv, cwd):
     """Deny git commands that mutate main or push to remote main."""
-    if not argv or argv[0] != "git":
+    if not argv or _git_executable_name(argv[0]) not in ("git", "git.exe"):
         return None
     workdir = _git_effective_workdir(argv, cwd)
     sub, sub_index = _git_subcommand(argv)
@@ -358,6 +358,11 @@ def deny_reason_for_git_argv(argv, cwd):
     return None
 
 
+def _git_executable_name(token):
+    """Return the final path component for a POSIX or Windows executable."""
+    return token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+
 def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False):
     """Deny shell commands that write files on main or run git mutators there.
 
@@ -370,6 +375,11 @@ def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False):
     for event in _shell_events(command, cwd, ps=ps):
         if event[0] == "git":
             reason = deny_reason_for_git_argv(event[1], event[2])
+        elif event[0] == "opaque":
+            if repo_hint is None:
+                continue
+            return ("nested interpreter depth exceeds the parser limit; "
+                    "command is denied while repository protection applies")
         else:
             reason = deny_reason_for_target(event[1], repo_hint)
         if reason:
@@ -618,6 +628,82 @@ def _strip_ps_call_block(argv):
     return stripped
 
 
+def _shell_segments(command, masked_all):
+    """Yield non-literal command segments with aligned masked text."""
+    cuts = [m.span() for m in re.finditer(r"&&|\|\||;|\n", masked_all)]
+    cuts.append((len(command), len(command)))
+    seg_start = 0
+    for cut_start, cut_end in cuts:
+        seg_real, seg_masked = (command[seg_start:cut_start],
+                                masked_all[seg_start:cut_start])
+        seg_start = cut_end
+        pad = len(seg_real) - len(seg_real.lstrip())
+        segment = seg_real.strip()
+        seg_masked = seg_masked[pad:pad + len(segment)]
+        if segment and seg_masked.strip():
+            yield segment, seg_masked
+
+
+def _pipeline_stages(segment, segment_masked):
+    """Split a segment on unquoted pipeline separators."""
+    pipe_cuts = [m.start() for m in re.finditer(r"\|", segment_masked)] \
+        + [len(segment)]
+    stages, last = [], 0
+    for cut in pipe_cuts:
+        stages.append(segment[last:cut])
+        last = cut + 1
+    return stages
+
+
+def _redirect_targets(segment, segment_masked):
+    """Return raw redirect targets, preserving quoted filename text."""
+    targets = []
+    for match in REDIRECT_RE.finditer(segment_masked):
+        target = _REDIR_TARGET_RE.match(segment, match.start())
+        if target:
+            targets.append(target.group(1))
+    return targets
+
+
+def _argv_write_targets(argv, ps):
+    """Return raw target operands for the write form represented by argv."""
+    targets = []
+    if argv[0] == "tee":
+        targets += [arg for arg in argv[1:] if not arg.startswith("-")]
+    if argv[0] == "sed" and any(arg.startswith("-i") for arg in argv[1:]):
+        targets += [arg for arg in argv[1:] if not arg.startswith("-")][-1:]
+    if argv[0] == "dd":
+        targets += [arg[3:] for arg in argv if arg.startswith("of=")]
+    if argv[0] == "truncate":
+        targets += [arg for arg in argv[1:] if not arg.startswith("-")]
+    if argv[0] in ("rm", "unlink", "shred"):
+        targets += [arg for arg in argv[1:] if not arg.startswith("-")]
+    low = argv[0].lower()
+    if ps and (low in _PS_WRITE_CMDLETS or low in _PS_COPY_CMDLETS):
+        targets += _ps_write_targets(argv)
+    if argv[0] in ("cp", "mv", "install"):
+        dest, sources = _copy_move_operands(argv)
+        if dest:
+            targets.append(dest)
+        if argv[0] == "mv":
+            targets += sources
+    return targets
+
+
+def _target_events(raw_targets, cwd, ps):
+    """Yield resolved target events for raw shell write operands."""
+    for target in raw_targets:
+        target = target.strip("\"'")
+        if ps and re.match(r"[A-Za-z]{2,}:", target):
+            continue
+        target = os.path.expanduser(target)
+        resolved = target if os.path.isabs(target) \
+            else os.path.join(cwd or ".", target)
+        if "$" in resolved or "`" in resolved:
+            continue
+        yield ("target", resolved)
+
+
 def _shell_events(command, cwd, ps=False, _depth=0):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
@@ -632,25 +718,8 @@ def _shell_events(command, cwd, ps=False, _depth=0):
         # (which would silently drop the write target).
         command = command.replace("\\", "/")
     masked_all = _mask_literals(command)
-    cuts = [m.span() for m in re.finditer(r"&&|\|\||;|\n", masked_all)]
-    cuts.append((len(command), len(command)))
-    seg_start = 0
-    for cut_start, cut_end in cuts:
-        seg_real, seg_masked = (command[seg_start:cut_start],
-                                masked_all[seg_start:cut_start])
-        seg_start = cut_end
-        pad = len(seg_real) - len(seg_real.lstrip())
-        segment = seg_real.strip()
-        seg_masked = seg_masked[pad:pad + len(segment)]
-        if not segment or not seg_masked.strip():
-            # Fully masked segment: a heredoc body line, not a command.
-            continue
-        pipe_cuts = [m.start() for m in re.finditer(r"\|", seg_masked)] \
-            + [len(segment)]
-        stages, last = [], 0
-        for p in pipe_cuts:
-            stages.append(segment[last:p])
-            last = p + 1
+    for segment, seg_masked in _shell_segments(command, masked_all):
+        stages = _pipeline_stages(segment, seg_masked)
         first = _argv_of(stages[0])
         # `cd` moves the parent shell only outside a pipeline; inside one it
         # runs in a subshell and must NOT move later segments.
@@ -658,75 +727,33 @@ def _shell_events(command, cwd, ps=False, _depth=0):
             effective_cwd = first[1] if os.path.isabs(first[1]) \
                 else os.path.join(effective_cwd or ".", first[1])
             continue
-        # Locate redirects in the masked text (never inside quotes or
-        # heredocs), then read the target token from the real text so a
-        # quoted filename survives intact.
-        raw_targets = []
-        for m in REDIRECT_RE.finditer(seg_masked):
-            t = _REDIR_TARGET_RE.match(segment, m.start())
-            if t:
-                raw_targets.append(t.group(1))
+        raw_targets = _redirect_targets(segment, seg_masked)
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage))
+            if argv and argv[0].lower() in _CMD_PREFIXES:
+                # `_strip_cmd_prefixes` leaves a wrapper at its depth cap.
+                # That opaque remainder could hide a mutator, so surface the
+                # same fail-closed event used for nested interpreters.
+                yield ("opaque", effective_cwd)
+                continue
             if ps:
                 argv = _strip_ps_call_block(argv)
             if not argv:
                 continue
             nested = _nested_script(argv)
-            if nested is not None and _depth < _MAX_UNWRAP_DEPTH:
-                yield from _shell_events(
-                    nested[0], effective_cwd, ps=nested[1], _depth=_depth + 1)
+            if nested is not None:
+                if _depth < _MAX_UNWRAP_DEPTH:
+                    yield from _shell_events(
+                        nested[0], effective_cwd, ps=nested[1],
+                        _depth=_depth + 1)
+                    continue
+                # The opaque remainder could mutate this repository; never
+                # silently discard it at the parser depth limit.
+                yield ("opaque", effective_cwd)
                 continue
             yield ("git", argv, effective_cwd)
-            if argv[0] == "tee":
-                raw_targets += [a for a in argv[1:] if not a.startswith("-")]
-            if argv[0] == "sed" and any(a.startswith("-i") for a in argv[1:]):
-                raw_targets += [a for a in argv[1:] if not a.startswith("-")][-1:]
-            if argv[0] == "dd":
-                raw_targets += [a[3:] for a in argv if a.startswith("of=")]
-            if argv[0] == "truncate":
-                raw_targets += [a for a in argv[1:] if not a.startswith("-")]
-            if argv[0] in ("rm", "unlink", "shred"):
-                # A deletion never reaches a commit, so no hook can restore
-                # it; the adapter is the only layer that sees it.
-                raw_targets += [a for a in argv[1:] if not a.startswith("-")]
-            low = argv[0].lower()
-            if ps and (low in _PS_WRITE_CMDLETS or low in _PS_COPY_CMDLETS):
-                # PowerShell payloads only: `copy`, `move`, `del`, `ni`
-                # are legitimate command names under other shells.
-                # Remove-Item and Move-Item sources are the same
-                # no-backstop delete class as rm/mv above.
-                raw_targets += _ps_write_targets(argv)
-            if argv[0] in ("cp", "mv", "install"):
-                dest, sources = _copy_move_operands(argv)
-                if dest:
-                    raw_targets.append(dest)
-                if argv[0] == "mv":
-                    # mv removes its sources with no commit, like rm.
-                    raw_targets += sources
-        for target in raw_targets:
-            # Redirect targets are cut from raw text, so quotes survive;
-            # argv-derived ones already had theirs stripped by shlex.
-            target = target.strip("\"'")
-            if ps and re.match(r"[A-Za-z]{2,}:", target):
-                # Provider path (Env:, Variable:, Alias:, HKLM:, or a
-                # named PSDrive), not a filesystem file. Single letters
-                # stay: those are real drives. A multi-letter PSDrive
-                # mapped onto the filesystem escapes here — accepted
-                # fail-open, like the unexpanded substitutions below.
-                continue
-            target = os.path.expanduser(target)
-            resolved = target if os.path.isabs(target) \
-                else os.path.join(effective_cwd or ".", target)
-            if "$" in resolved or "`" in resolved:
-                # Unexpanded substitution — a `$`/backtick in the token itself,
-                # or introduced via the effective cwd (`cd "$D"` then a plain
-                # relative target, #56). Checking the RESOLVED path catches both
-                # entry paths in one place. Not evaluable here: fail open per
-                # the adapter contract (#17) — git hooks backstop write forms;
-                # delete-class targets (rm, mv sources) are an accepted residual.
-                continue
-            yield ("target", resolved)
+            raw_targets += _argv_write_targets(argv, ps)
+        yield from _target_events(raw_targets, effective_cwd, ps)
 
 
 def shell_write_targets(command, cwd, ps=False):
@@ -1267,6 +1294,16 @@ def codex_hook_trust_date(repo):
     return dates[0]
 
 
+def _claim_created_utc(record):
+    """Return a claim timestamp or None when its stored shape is invalid."""
+    raw = record.get("created_utc")
+    try:
+        return _dt.datetime.strptime(
+            raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_dt.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
 def cmd_doctor(repo):
     findings = []
     rc, hooks_path, _ = _git(["config", HOOKSPATH_KEY], cwd=repo.primary_root)
@@ -1284,25 +1321,39 @@ def cmd_doctor(repo):
         now = _dt.datetime.now(_dt.timezone.utc)
         local_host = socket.gethostname()
         for record in claims:
+            if not isinstance(record, dict):
+                findings.append("malformed claim record (not an object)")
+                continue
+            if "kind" not in record:
+                findings.append(
+                    f"claim {record.get('id', '<unknown>')} missing kind"
+                )
+                continue
             if record["kind"] == "adr":
                 continue  # ADR reservations are meant to outlive their process
-            created = _dt.datetime.strptime(
-                record["created_utc"], "%Y-%m-%dT%H:%M:%SZ"
-            ).replace(tzinfo=_dt.timezone.utc)
+            created = _claim_created_utc(record)
+            if created is None:
+                findings.append(
+                    f"claim {record.get('id', '<unknown>')} has unparseable "
+                    f"created_utc {record.get('created_utc')!r}"
+                )
+                continue
             age_h = (now - created).total_seconds() / 3600
             if (record.get("host") == local_host
                     and _pid_alive(record.get("pid"), snapshot) is False):
                 findings.append(
-                    f"orphaned claim {record['id']} ({record['kind']}="
-                    f"{record['value']}, session {record['session']}) — "
-                    f"pid {record['pid']} is dead on this host; "
-                    f"release --force --id {record['id']} --reason ... "
+                    f"orphaned claim {record.get('id', '<unknown>')} "
+                    f"({record.get('kind')}={record.get('value')}, session "
+                    f"{record.get('session')}) — pid {record.get('pid')} is "
+                    "dead on this host; release --force --id "
+                    f"{record.get('id', '<unknown>')} --reason ... "
                     "to clear"
                 )
             elif age_h > STALE_SUSPECT_HOURS:
                 findings.append(
-                    f"stale-suspect claim {record['id']} ({record['kind']}="
-                    f"{record['value']}, session {record['session']}, "
+                    f"stale-suspect claim {record.get('id', '<unknown>')} "
+                    f"({record.get('kind')}={record.get('value')}, session "
+                    f"{record.get('session')}, "
                     f"{age_h:.0f}h old) — NOT expired; release explicitly "
                     "if orphaned"
                 )
