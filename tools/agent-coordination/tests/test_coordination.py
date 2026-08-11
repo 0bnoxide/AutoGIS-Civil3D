@@ -8,6 +8,7 @@ import datetime as _dt
 import json
 import io
 import os
+import shlex
 import shutil
 import socket
 import subprocess
@@ -132,6 +133,15 @@ class TestMainRule(TempRepoCase):
             self.assertIsNotNone(
                 coordination.deny_reason_for_git_argv(argv, self.repo_path),
                 argv)
+
+    def test_pathed_git_executables_do_not_hide_mutators(self):
+        for executable in ("/usr/bin/git", "C:\\Program Files\\Git\\bin\\git.exe"):
+            self.assertIsNotNone(
+                coordination.deny_reason_for_git_argv(
+                    [executable, "reset", "--hard"], self.repo_path),
+                executable)
+        self.assertIsNone(coordination.deny_reason_for_git_argv(
+            ["/opt/git/git-helper", "reset", "--hard"], self.repo_path))
 
     def test_new_directory_target_under_main_denied(self):
         target = os.path.join(self.repo_path, "does", "not", "exist.txt")
@@ -432,6 +442,20 @@ class TestMainRule(TempRepoCase):
                     'zsh -xc "git reset --hard"'):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo), cmd)
+
+    def test_excessively_nested_interpreter_is_denied_on_main(self):
+        command = "git reset --hard"
+        for _ in range(coordination._MAX_UNWRAP_DEPTH + 1):
+            command = f"bash -c {shlex.quote(command)}"
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            command, self.repo_path, self.repo))
+
+    def test_excessively_nested_prefix_wrappers_are_denied_on_main(self):
+        command = "git reset --hard"
+        for _ in range(coordination._MAX_UNWRAP_DEPTH + 1):
+            command = f"sudo {command}"
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            command, self.repo_path, self.repo))
 
     def test_powershell_interpreter_wrappers_reparsed(self):
         # #46, PowerShell adapter: -Command, iex, and the call-operator block.
@@ -1122,6 +1146,19 @@ class TestDoctorLiveness(TempRepoCase):
             out = self.doctor_output()
         self.assertNotIn("orphaned claim", out)
         self.assertIn("stale-suspect claim", out)
+
+    def test_malformed_claim_timestamp_is_a_finding(self):
+        self.write_claim(created_utc="not-a-timestamp")
+        output = self.doctor_output()
+        self.assertIn("unparseable created_utc", output)
+
+    def test_claim_without_kind_is_a_finding(self):
+        self.write_claim()
+        data = coordination._load(self.repo.registry_path)
+        del data["claims"][0]["kind"]
+        coordination._save(self.repo.registry_path, data)
+        output = self.doctor_output()
+        self.assertIn("missing kind", output)
 
     def test_cli_claim_not_reported_orphaned(self):
         proc = subprocess.run(
