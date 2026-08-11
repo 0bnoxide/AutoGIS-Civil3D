@@ -123,6 +123,52 @@ class GhFetchTests(unittest.TestCase):
             items = watch_pr_reviews.gh_fetch("repos/o/r/pulls/7/comments")
         self.assertEqual([i["id"] for i in items], [1, 2, 3])
 
+    def test_missing_gh_raises_pollfailure(self):
+        # gh absent raises FileNotFoundError (an OSError), not a non-zero exit;
+        # it must surface as POLL-FAIL, not escape poll_once as a crash.
+        with mock.patch.object(watch_pr_reviews.subprocess, "run",
+                               side_effect=FileNotFoundError("gh")):
+            with self.assertRaises(PollFailure):
+                watch_pr_reviews.gh_fetch("repos/o/r/pulls/7/reviews")
+
+
+class SelfIdentityGuardTests(unittest.TestCase):
+    def _run_main(self, argv):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = watch_pr_reviews.main(argv)
+        return rc, buf.getvalue()
+
+    def test_refuses_when_identity_unresolved_and_no_self(self):
+        # A failed `gh api user` must not silently leave the self-echo filter
+        # inert; the monitor refuses instead.
+        with mock.patch.object(watch_pr_reviews, "_gh_scalar", return_value=""):
+            rc, out = self._run_main(["7", "--repo", "o/r", "--interval", "0"])
+        self.assertEqual(rc, 1)
+        self.assertIn("POLL-FAIL", out)
+        self.assertIn("--self", out)
+
+    def test_explicit_empty_self_is_allowed(self):
+        # --self "" deliberately disables the filter and must be honored.
+        with mock.patch.object(watch_pr_reviews, "gh_fetch", return_value=[]):
+            rc, out = self._run_main(
+                ["7", "--repo", "o/r", "--self", "", "--interval", "0"])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("could not resolve the authenticated", out)
+
+
+class BoundedSeenTests(unittest.TestCase):
+    def test_evicts_oldest_beyond_maxsize(self):
+        seen = watch_pr_reviews._BoundedSeen(maxsize=2)
+        seen.add(("review", 1))
+        seen.add(("comment", 2))
+        seen.add(("issue-comment", 3))  # evicts the oldest, ("review", 1)
+        self.assertNotIn(("review", 1), seen)
+        self.assertIn(("comment", 2), seen)
+        self.assertIn(("issue-comment", 3), seen)
+
 
 if __name__ == "__main__":
     unittest.main()

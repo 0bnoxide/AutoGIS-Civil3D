@@ -30,6 +30,7 @@ import json
 import subprocess
 import sys
 import time
+from collections import OrderedDict
 from typing import Callable, NamedTuple
 
 
@@ -127,10 +128,15 @@ def gh_fetch(path: str) -> list:
     exit becomes :class:`PollFailure` so the caller reports POLL-FAIL rather
     than mistaking the surface for empty.
     """
-    proc = subprocess.run(
-        ["gh", "api", "--paginate", "--slurp", path],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-    )
+    try:
+        proc = subprocess.run(
+            ["gh", "api", "--paginate", "--slurp", path],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+    except OSError as exc:
+        # gh absent or unlaunchable raises here, not a non-zero exit; poll_once
+        # only catches PollFailure, so convert it or the monitor crashes.
+        raise PollFailure(f"could not launch gh: {exc}") from exc
     if proc.returncode != 0:
         raise PollFailure(proc.stderr.strip() or f"gh exit {proc.returncode}")
     try:
@@ -147,11 +153,34 @@ def gh_fetch(path: str) -> list:
 
 
 def _gh_scalar(args: list[str]) -> str:
-    proc = subprocess.run(
-        ["gh", *args], capture_output=True, text=True,
-        encoding="utf-8", errors="replace",
-    )
+    try:
+        proc = subprocess.run(
+            ["gh", *args], capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        )
+    except OSError:
+        return ""
     return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+class _BoundedSeen:
+    """Dedup key store with an LRU cap so a long-running watcher's memory stays
+    bounded. The cap sits far above any real PR's event count, so eviction — and
+    the one stale re-report it could cause — does not happen in practice. Offers
+    the ``in`` / ``add`` interface poll_once expects, so a plain set works too.
+    """
+
+    def __init__(self, maxsize: int = 4096):
+        self._keys: OrderedDict = OrderedDict()
+        self._maxsize = maxsize
+
+    def __contains__(self, key) -> bool:
+        return key in self._keys
+
+    def add(self, key) -> None:
+        self._keys[key] = None
+        while len(self._keys) > self._maxsize:
+            self._keys.popitem(last=False)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -178,10 +207,20 @@ def main(argv: list[str] | None = None) -> int:
     if not repo:
         print("POLL-FAIL: could not resolve repository (pass --repo)", flush=True)
         return 1
-    self_login = (args.self_login if args.self_login is not None
-                  else _gh_scalar(["api", "user", "-q", ".login"]))
+    if args.self_login is not None:
+        self_login = args.self_login  # explicit; --self "" deliberately disables
+    else:
+        self_login = _gh_scalar(["api", "user", "-q", ".login"])
+        if not self_login:
+            # Without an identity the self-echo filter is inert and the monitor
+            # would report its own comments — the defect this tool exists to fix.
+            # Refuse rather than silently drop the guarantee.
+            print("POLL-FAIL: could not resolve the authenticated gh identity; "
+                  "pass --self <login> (or --self '' to disable the filter "
+                  "deliberately)", flush=True)
+            return 1
 
-    seen: set = set()
+    seen = _BoundedSeen()
     poll_once_only = args.interval <= 0
     while True:
         events, failures = poll_once(repo, args.pr, seen, self_login, gh_fetch)
