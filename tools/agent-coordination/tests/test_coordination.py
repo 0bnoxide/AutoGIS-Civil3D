@@ -143,6 +143,21 @@ class TestMainRule(TempRepoCase):
         self.assertIsNone(coordination.deny_reason_for_git_argv(
             ["/opt/git/git-helper", "reset", "--hard"], self.repo_path))
 
+    def test_windows_trailing_dot_space_git_does_not_hide_mutators(self):
+        # #76: Windows path resolution strips trailing dots and spaces, so
+        # `git.`, `git ` (trailing), and `git.exe.` all execute as git.exe,
+        # while the final path component here is a distinct token. Fail
+        # toward deny, like the pathed forms above.
+        for executable in ("git.", "git ", "git.exe.",
+                           "C:\\Program Files\\Git\\bin\\git.exe."):
+            self.assertIsNotNone(
+                coordination.deny_reason_for_git_argv(
+                    [executable, "reset", "--hard"], self.repo_path),
+                executable)
+        # End-to-end via the PowerShell adapter -- the path the issue names.
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            "git. reset --hard", self.repo_path, self.repo, ps=True))
+
     def test_new_directory_target_under_main_denied(self):
         target = os.path.join(self.repo_path, "does", "not", "exist.txt")
         reason = coordination.deny_reason_for_target(target, self.repo)
