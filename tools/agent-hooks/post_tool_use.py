@@ -88,6 +88,27 @@ def _is_git_push(command: str) -> bool:
                for tokens in _git_segments(command))
 
 
+# push options that consume the next token as their value.
+_PUSH_VALUE_OPTS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
+
+
+def _push_positionals(args: list) -> list:
+    """Positional args of a `git push`, skipping flags and value-taking options
+    so their value isn't mistaken for the remote/refspec (e.g. `-o ci.skip`)."""
+    positionals, i = [], 0
+    while i < len(args):
+        arg = args[i]
+        if arg in _PUSH_VALUE_OPTS:
+            i += 2  # option plus its separate value
+            continue
+        if arg.startswith("-"):  # valueless flag or --opt=value
+            i += 1
+            continue
+        positionals.append(arg)
+        i += 1
+    return positionals
+
+
 def _pushed_branch(command: str):
     """Return (branch_or_None, cross_repo) for the first `git push` segment.
 
@@ -100,7 +121,7 @@ def _pushed_branch(command: str):
         subcommand, args, cross_repo = _git_subcommand(tokens)
         if subcommand != "push":
             continue
-        positionals = [a for a in args if not a.startswith("-")]
+        positionals = _push_positionals(args)
         refspec = positionals[1] if len(positionals) >= 2 else None
         branch = refspec.split(":")[-1].lstrip("+") if refspec else None
         return branch, cross_repo

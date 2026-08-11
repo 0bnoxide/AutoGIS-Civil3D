@@ -185,6 +185,7 @@ class PostPushTests(unittest.TestCase):
         self.assertEqual(_pushed_branch("git push"), (None, False))
         self.assertEqual(_pushed_branch("git push origin mybr"), ("mybr", False))
         self.assertEqual(_pushed_branch("git push origin HEAD:feature"), ("feature", False))
+        self.assertEqual(_pushed_branch("git push -o ci.skip origin feat"), ("feat", False))
         self.assertEqual(_pushed_branch("git -C d push origin x")[1], True)
 
 
