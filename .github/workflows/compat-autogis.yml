@@ -1,0 +1,37 @@
+name: compat-autogis
+
+# Phase 3 cross-repository compatibility harness (gate issue #78).
+# Validator legs only until the producer leg lands: the AutoGIS checkout
+# and producer invocation are blocked on the AutoGIS-side ADR naming its
+# CLI and on the read-only deploy key (issue #75).
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/compat-autogis.yml
+      - contract/**
+      - fixtures/**
+      - src/**
+      - tools/checks/compat_smoke.py
+      # Shared build inputs the restore/build steps consume:
+      - AutoGIS.Civil3D.sln
+      - Directory.Build.props
+      - Directory.Packages.props
+      - global.json
+
+jobs:
+  harness:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+      - name: Restore
+        run: dotnet restore AutoGIS.Civil3D.sln --locked-mode
+      - name: Build
+        run: dotnet build AutoGIS.Civil3D.sln -c Release --no-restore
+      - name: Validator legs (clean / warning / negative control)
+        run: python tools/checks/compat_smoke.py
