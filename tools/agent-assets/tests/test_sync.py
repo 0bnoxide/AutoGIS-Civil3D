@@ -100,6 +100,20 @@ class TestSync(unittest.TestCase):
             '---\nname: x\ndescription: Says "hi" via C:\\path\n---\nBody\n'))
         self.assertIn('description = "Says \\"hi\\" via C:\\\\path"', toml)
 
+    def test_pr_reviewer_defines_every_full_tier_probe(self):
+        reviewer_path = os.path.join(
+            ASSETS_DIR, "agents", "pr-reviewer.md")
+        with open(reviewer_path, encoding="utf-8") as fh:
+            _frontmatter, body = sync.parse_frontmatter(fh.read())
+        for probe in (
+            "BOUNDARY_SHAPE",
+            "CONTRACT_REACHABILITY",
+            "IDENTITY_PROVENANCE",
+            "SIDE_EFFECT_SAFETY",
+            "ENVIRONMENT_SEAM",
+        ):
+            self.assertIn(probe, body)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

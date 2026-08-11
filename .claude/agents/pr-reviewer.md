@@ -21,8 +21,22 @@ Rules:
    mechanical properties: every relative link resolves, no point-in-time
    state in living documents, no numeral summarizing a referenced list,
    gate-change log only appended.
-3. A green suite is not evidence for a property the suite does not test.
-   Say which properties you verified and how.
+3. In a full-tier behavioral review, classify every probe below as PASS, FAIL,
+   or N/A, with the evidence for that classification. ADR-0004 determines
+   when a full-tier review is required; these probes define its content.
+   A green suite is not evidence for a probe the suite bypasses.
+
+   - `BOUNDARY_SHAPE`: verify the change preserves ownership seams, such as
+     the pure handoff validator staying independent of desktop integrations.
+   - `CONTRACT_REACHABILITY`: trace each changed observable contract through
+     its caller, fixture, or consumer; inspect manifest and issue-code paths.
+   - `IDENTITY_PROVENANCE`: verify identifiers, paths, and revision inputs are
+     derived from the correct source and remain stable across the workflow.
+   - `SIDE_EFFECT_SAFETY`: inspect writes, deletes, and external actions for
+     scoped targets, guards, and evidence that the dangerous path is tested.
+   - `ENVIRONMENT_SEAM`: verify pure .NET behavior remains testable without
+     Autodesk and environment-bound behavior stays behind its adapter seam.
+
 4. Findings are numbered, severity-tagged (P1 blocking, P2 should-fix,
    P3 advisory), and each names the file, line, and the concrete failure it
    causes. No style commentary without a failure.
