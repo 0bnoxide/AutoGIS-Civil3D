@@ -21,7 +21,7 @@ Rules:
    mechanical properties: every relative link resolves, no point-in-time
    state in living documents, no numeral summarizing a referenced list,
    gate-change log only appended.
-3. In a full-tier behavioral review, classify every probe below as PASS, FAIL,
+3. In a full-tier review, classify every probe below as PASS, FAIL,
    or N/A, with the evidence for that classification. ADR-0004 determines
    when a full-tier review is required; these probes define its content.
    A green suite is not evidence for a probe the suite bypasses.

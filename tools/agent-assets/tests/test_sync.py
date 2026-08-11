@@ -105,6 +105,8 @@ class TestSync(unittest.TestCase):
             ASSETS_DIR, "agents", "pr-reviewer.md")
         with open(reviewer_path, encoding="utf-8") as fh:
             _frontmatter, body = sync.parse_frontmatter(fh.read())
+        self.assertIn(
+            "In a full-tier review, classify every probe below", body)
         for probe in (
             "BOUNDARY_SHAPE",
             "CONTRACT_REACHABILITY",
