@@ -26,16 +26,28 @@ CASES = (
 def main():
     failures = 0
     for rel, expected in CASES:
-        proc = subprocess.run(
-            CLI + [str(ROOT / rel)], capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-        )
+        try:
+            proc = subprocess.run(
+                CLI + [str(ROOT / rel)], capture_output=True,
+                text=True, encoding="utf-8", errors="replace", timeout=600,
+            )
+        except subprocess.TimeoutExpired as exc:
+            failures += 1
+            print(f"FAIL: {rel} -> timed out after 600s")
+            if exc.stdout:
+                print(exc.stdout)
+            if exc.stderr:
+                print(exc.stderr, file=sys.stderr)
+            continue
         ok = proc.returncode == expected
         failures += not ok
         print(f"{'ok' if ok else 'FAIL'}: {rel} -> exit {proc.returncode}"
               f" (want {expected})")
-        if not ok and proc.stderr:
-            print(proc.stderr, file=sys.stderr)
+        if not ok:
+            if proc.stdout:
+                print(proc.stdout)
+            if proc.stderr:
+                print(proc.stderr, file=sys.stderr)
     if failures:
         return 1
     print("compat_smoke: clean")
