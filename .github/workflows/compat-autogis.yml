@@ -1,9 +1,13 @@
 name: compat-autogis
 
 # Phase 3 cross-repository compatibility harness (gate issue #78).
-# Validator legs only until the producer leg lands: the AutoGIS checkout
-# and producer invocation are blocked on the AutoGIS-side ADR naming its
-# CLI and on the read-only deploy key (issue #75).
+# Validator legs (clean / warning / negative control) plus the producer
+# leg: AutoGIS pinned at AUTOGIS_PIN is checked out read-only (deploy key,
+# issue #75), pip-installed without extras (its five required pure-Python
+# dependencies only — no arcgis/pyproj extras), and its `autogis handoff` output
+# must validate with exit 0 - zero warnings. Advancing the pin is an
+# ordinary PR editing AUTOGIS_PIN below (spec: docs/superpowers/specs/
+# 2026-08-11-phase-3-producer-adoption-design.md).
 on:
   workflow_dispatch:
   push:
@@ -13,6 +17,7 @@ on:
       - fixtures/**
       - src/**
       - tools/checks/compat_smoke.py
+      - tools/checks/compat_producer.py
       # Shared build inputs the restore/build steps consume:
       - AutoGIS.Civil3D.sln
       - Directory.Build.props
@@ -22,6 +27,9 @@ on:
 jobs:
   harness:
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+      AUTOGIS_PIN: 07a8deeac5560440b2f0b05ca8087b8b05a1fac9
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -35,3 +43,19 @@ jobs:
         run: dotnet build AutoGIS.Civil3D.sln -c Release --no-restore
       - name: Validator legs (clean / warning / negative control)
         run: python tools/checks/compat_smoke.py
+      - name: Checkout AutoGIS at the pin (read-only deploy key)
+        uses: actions/checkout@v4
+        with:
+          repository: 0bnoxide/AutoGIS
+          ref: ${{ env.AUTOGIS_PIN }}
+          ssh-key: ${{ secrets.AUTOGIS_DEPLOY_KEY }}
+          path: autogis-src
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install producer (no extras)
+        run: python -m pip install ./autogis-src
+      - name: Producer leg (emit + validate, zero warnings)
+        env:
+          AUTOGIS_RUN_HISTORY: "off"
+        run: python tools/checks/compat_producer.py

@@ -23,19 +23,32 @@ CASES = (
 )
 
 
+def _dump(stdout, stderr):
+    if stdout:
+        print(stdout)
+    if stderr:
+        print(stderr, file=sys.stderr)
+
+
 def main():
     failures = 0
     for rel, expected in CASES:
-        proc = subprocess.run(
-            CLI + [str(ROOT / rel)], capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-        )
+        try:
+            proc = subprocess.run(
+                CLI + [str(ROOT / rel)], capture_output=True,
+                text=True, encoding="utf-8", errors="replace", timeout=600,
+            )
+        except subprocess.TimeoutExpired as exc:
+            failures += 1
+            print(f"FAIL: {rel} -> timed out after 600s")
+            _dump(exc.stdout, exc.stderr)
+            continue
         ok = proc.returncode == expected
         failures += not ok
         print(f"{'ok' if ok else 'FAIL'}: {rel} -> exit {proc.returncode}"
               f" (want {expected})")
-        if not ok and proc.stderr:
-            print(proc.stderr, file=sys.stderr)
+        if not ok:
+            _dump(proc.stdout, proc.stderr)
     if failures:
         return 1
     print("compat_smoke: clean")
