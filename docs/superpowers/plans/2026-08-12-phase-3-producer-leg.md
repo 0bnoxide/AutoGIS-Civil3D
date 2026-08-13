@@ -71,11 +71,19 @@ VALIDATOR = [
 ]
 
 
-def _run(cmd):
-    return subprocess.run(
-        cmd, capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=600,
-    )
+def _run(label, cmd):
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=600,
+        )
+    except subprocess.TimeoutExpired as exc:
+        print(f"FAIL: {label} -> timed out after 600s")
+        if exc.stdout:
+            print(exc.stdout)
+        if exc.stderr:
+            print(exc.stderr, file=sys.stderr)
+        raise SystemExit(1) from None
 
 
 def _fail(label, proc):
@@ -97,7 +105,7 @@ def main():
         with zipfile.ZipFile(FIXTURE) as zf:
             source.write_bytes(zf.read("surface.landxml"))
         package = Path(tmp) / "producer-package.zip"
-        producer = _run([
+        producer = _run("producer emission", [
             sys.executable, "-m", "autogis", "handoff",
             "--input", str(source),
             "--output", str(package),
@@ -110,7 +118,8 @@ def main():
         if producer.returncode != 0:
             return _fail("producer emission", producer)
         print(f"ok: producer emitted a package at pin {pin[:12]}")
-        verdict = _run(VALIDATOR + [str(package)])
+        verdict = _run(
+            "validator on producer package", VALIDATOR + [str(package)])
         if verdict.returncode != 0:
             return _fail(
                 "validator on producer package (want 0, zero warnings)",
@@ -126,9 +135,31 @@ if __name__ == "__main__":
 
 - [ ] **Step 3: Retrofit the deferred diagnostics into `tools/checks/compat_smoke.py`**
 
-Two mechanical edits, nothing else:
+Two edits, nothing else:
 
-1. In the `subprocess.run(...)` call, add `timeout=600` after `errors="replace"`.
+1. Wrap the `subprocess.run(...)` call with the timeout and its diagnostic
+   handler — replace the existing call with:
+
+```python
+        try:
+            proc = subprocess.run(
+                CLI + [str(ROOT / rel)], capture_output=True,
+                text=True, encoding="utf-8", errors="replace", timeout=600,
+            )
+        except subprocess.TimeoutExpired as exc:
+            failures += 1
+            print(f"FAIL: {rel} -> timed out after 600s")
+            if exc.stdout:
+                print(exc.stdout)
+            if exc.stderr:
+                print(exc.stderr, file=sys.stderr)
+            continue
+```
+
+(`subprocess.run` attaches the output captured up to the kill on the
+exception, so the timeout path keeps its diagnostics — the reason these
+handlers exist.)
+
 2. In the failure branch, print stdout too — replace:
 
 ```python
@@ -193,7 +224,8 @@ Apply exactly these changes to `.github/workflows/compat-autogis.yml`:
 # Phase 3 cross-repository compatibility harness (gate issue #78).
 # Validator legs (clean / warning / negative control) plus the producer
 # leg: AutoGIS pinned at AUTOGIS_PIN is checked out read-only (deploy key,
-# issue #75), installed base-deps-only, and its `autogis handoff` output
+# issue #75), pip-installed without extras (its five required pure-Python
+# dependencies only — no arcgis/pyproj extras), and its `autogis handoff` output
 # must validate with exit 0 - zero warnings. Advancing the pin is an
 # ordinary PR editing AUTOGIS_PIN below (spec: docs/superpowers/specs/
 # 2026-08-11-phase-3-producer-adoption-design.md).
@@ -226,11 +258,11 @@ Apply exactly these changes to `.github/workflows/compat-autogis.yml`:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install producer (base dependencies only)
+      - name: Install producer (no extras)
         run: python -m pip install ./autogis-src
       - name: Producer leg (emit + validate, zero warnings)
         env:
-          AUTOGIS_RUN_HISTORY: off
+          AUTOGIS_RUN_HISTORY: "off"
         run: python tools/checks/compat_producer.py
 ```
 
