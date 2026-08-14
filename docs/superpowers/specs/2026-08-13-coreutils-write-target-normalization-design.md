@@ -1,6 +1,6 @@
 # Coreutils Write-Target Normalization — Design
 
-**Status:** Approved 2026-08-13 (owner). Resolves
+**Status:** Approved 2026-08-13 (owner). Governs the fix for
 [issue #81](https://github.com/0bnoxide/AutoGIS-Civil3D/issues/81) as a
 maintenance hardening of the accepted repository-coordination foundation.
 
