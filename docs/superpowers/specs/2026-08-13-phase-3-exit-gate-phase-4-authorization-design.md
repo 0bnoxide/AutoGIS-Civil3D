@@ -15,10 +15,12 @@ is merged under its own ADR. The authoritative
 [roadmap](../../roadmap.md) still records Phase 3 as `Authorized`, so its
 decision-state no longer reflects the evidence accepted by the owner.
 
-The owner has also authorized Phase 4 as the next active phase. The
-repository has no approved Phase 4 governing design or implementation plan,
-so authorization must not be mistaken for approval to implement the
-Autodesk adapter foundation.
+The owner has also approved the transition that would authorize Phase 4 as
+the next active phase. That authorization is prospective: it becomes
+authoritative, and Phase 4 work becomes claimable, only when the separate
+roadmap transition pull request merges. The repository has no approved Phase 4
+governing design or implementation plan, so authorization must not be mistaken
+for approval to implement the Autodesk adapter foundation.
 
 ## Decision
 
@@ -39,10 +41,11 @@ opening the next phase. Prior log rows remain byte-for-byte unchanged. The
 new rows link to issue #78 as the single evidence bundle instead of copying
 its checklist into the roadmap.
 
-Phase 4 authorization permits its design and planning work to be claimed.
-It does not authorize Phase 4 implementation, alter the capability order,
-or authorize Phase 5 or any later phase. Because no Phase 4 governing design
-exists yet, this transition adds no delivery-level link.
+Once the roadmap transition pull request merges, Phase 4 authorization will
+permit its design and planning work to be claimed. It will not authorize Phase
+4 implementation, alter the capability order, or authorize Phase 5 or any
+later phase. Because no Phase 4 governing design exists yet, this transition
+adds no delivery-level link.
 
 ## Change boundary
 
