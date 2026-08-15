@@ -4,7 +4,7 @@
 
 **Goal:** Replace the retired Phase 0 phrase-triggered global documentation gate with the approved strict, phase-scoped roadmap marker from issue #89.
 
-**Architecture:** Keep the existing `check_gate(root, baseline_ref)` seam and standard-library-only checker. First add a small parser that validates the one allowed marker slot and payload; then make `check_gate()` parse the baseline and current roadmaps, union their reservations, and match both endpoints from a NUL-delimited rename-aware Git diff.
+**Architecture:** Keep the existing `check_gate(root, baseline_ref)` seam and standard-library-only checker. First add a small parser that validates the one allowed marker slot and payload; then make `check_gate()` resolve a strict gate-specific merge base, parse that baseline roadmap and the current roadmap, union their reservations, and match both endpoints from a NUL-delimited rename-aware Git diff.
 
 **Tech Stack:** Python 3 standard library (`json`, `re`, `subprocess`, `unittest`), Git, existing repository documentation checks, .NET 8 validation suite.
 
@@ -21,7 +21,8 @@
 - A marker is valid only as the first nonblank line after the `## Capability level` table and before its explanatory prose.
 - Evaluate both merge-base and current roadmap markers and enforce the union of their phase/path reservations.
 - Collect changed names with status-aware, NUL-delimited rename detection and evaluate both source and destination of every rename.
-- Fail closed on malformed, duplicate, schema-invalid, or misplaced markers and when the baseline roadmap or changed-path diff cannot be resolved.
+- Fail closed on malformed, duplicate, schema-invalid, misplaced, or unsupported-version markers and when the merge base, baseline roadmap, or changed-path diff cannot be resolved.
+- Keep the existing lenient `_resolve_baseline()` and `_baseline_roadmap()` semantics used by the gate-change log; the phase gate gets separate strict helpers.
 - The legacy literal `may not be claimed until` has no gate behavior after this change.
 
 ---
@@ -86,6 +87,14 @@ class TestPhaseGateMarker(DocsFixture):
             "state": "blocked",
             "paths": ["src/reserved/"],
         })
+
+    def test_unsupported_marker_version_fails_closed(self):
+        marker = self.VALID.replace("phase-gate-v1", "phase-gate-v2")
+        gate, findings = docs_checks._parse_phase_gate(
+            self.placed(marker), "current"
+        )
+        self.assertIsNone(gate)
+        self.assertIn("unsupported", findings[0])
 
     def test_malformed_marker_fails_closed(self):
         marker = "<!-- docs-checks:phase-gate-v1 {not-json} -->"
@@ -178,10 +187,11 @@ Expected: FAIL because `docs_checks._parse_phase_gate` does not exist.
 
 - [ ] **Step 3: Implement the minimal strict parser**
 
-Add `import json` and add the version tag and exact-line expression beside the existing constants. Keep the retired `GATE_MARKER` constant until Task 2 so the intermediate commit leaves the existing `check_gate()` runnable. Add these helpers before `check_gate()`:
+Add `import json`, the broader namespace detector, the supported version tag, and the exact-line expression beside the existing constants. Keep the retired `GATE_MARKER` constant until Task 2 so the intermediate commit leaves the existing `check_gate()` runnable. Add these helpers before `check_gate()`:
 
 ```python
-PHASE_GATE_TAG = "docs-checks:phase-gate-v1"
+PHASE_GATE_NAMESPACE = "docs-checks:phase-gate-"
+PHASE_GATE_TAG = f"{PHASE_GATE_NAMESPACE}v1"
 PHASE_GATE_LINE = re.compile(
     rf"^<!-- {re.escape(PHASE_GATE_TAG)} (?P<payload>.+) -->$"
 )
@@ -223,7 +233,7 @@ def _parse_phase_gate(text, source):
     lines = text.splitlines()
     locations = [
         index for index, line in enumerate(lines)
-        if PHASE_GATE_TAG in line
+        if PHASE_GATE_NAMESPACE in line
     ]
     if not locations:
         return None, []
@@ -233,6 +243,8 @@ def _parse_phase_gate(text, source):
     index = locations[0]
     if index != _phase_gate_slot(lines):
         return _invalid_gate(source, "invalid phase-gate marker placement")
+    if not lines[index].startswith(f"<!-- {PHASE_GATE_TAG} "):
+        return _invalid_gate(source, "unsupported phase-gate marker version")
     match = PHASE_GATE_LINE.fullmatch(lines[index])
     if match is None:
         return _invalid_gate(source, "invalid phase-gate marker syntax")
@@ -282,12 +294,12 @@ git commit -m "feat: validate phase gate markers (#89)"
 - Modify: `tools/checks/tests/test_docs_checks.py` gate fixtures and tests
 
 **Interfaces:**
-- Consumes: `_parse_phase_gate(text, source)` from Task 1 and existing `_resolve_baseline(root, baseline_ref)` / `_baseline_roadmap(root, baseline_ref)`.
-- Produces: `_changed_paths(root, base) -> list[str] | None` and a phase-aware `check_gate(root, baseline_ref) -> list[str]`; `None` means Git diff failure and must become a blocking finding.
+- Consumes: `_parse_phase_gate(text, source)` from Task 1. The existing lenient baseline helpers remain unchanged for the gate-change log.
+- Produces: `_resolve_gate_base(root, baseline_ref) -> str | None`, `_gate_baseline_roadmap(root, base) -> str | None`, `_changed_paths(root, base) -> list[str] | None`, and a phase-aware `check_gate(root, baseline_ref) -> list[str]`; every `None` is a gate-resolution failure and must become a blocking finding.
 
 - [ ] **Step 1: Replace the retired global-gate tests with lifecycle and bypass regressions**
 
-Extend `GitDocsFixture` with small commit helpers and use the same canonical marker slot as Task 1:
+Add `from unittest import mock`, extend `GitDocsFixture` with small commit helpers, and use the same canonical marker slot as Task 1:
 
 ```python
 class GitDocsFixture(DocsFixture):
@@ -446,7 +458,28 @@ class TestGate(GitDocsFixture):
         self.commit_branch()
         findings = docs_checks.check_gate(self.root, "missing-baseline")
         self.assertTrue(findings)
-        self.assertIn("baseline roadmap", findings[0])
+        self.assertIn("merge base", findings[0])
+
+    def test_unrelated_baseline_with_roadmap_fails_closed(self):
+        git(["checkout", "-q", "--orphan", "unrelated"], self.root)
+        self.write("docs/roadmap.md", self.ROADMAP_V1)
+        self.commit("unrelated roadmap")
+        git(["checkout", "-q", "main"], self.root)
+        self.write("src/maintenance.py", "pass\n")
+        self.commit_branch()
+        findings = docs_checks.check_gate(self.root, "unrelated")
+        self.assertTrue(findings)
+        self.assertIn("merge base", findings[0])
+
+    def test_changed_path_resolution_failure_fails_closed(self):
+        self.write("docs/roadmap.md", self.roadmap_with_marker())
+        self.write("src/reserved/new.py", "pass\n")
+        self.commit_branch()
+        with mock.patch.object(
+                docs_checks, "_changed_paths", return_value=None):
+            findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertTrue(findings)
+        self.assertIn("changed paths could not be resolved", findings[0])
 ```
 
 - [ ] **Step 2: Run the phase-aware gate tests to verify RED**
@@ -457,19 +490,47 @@ Run:
 python tools/checks/tests/test_docs_checks.py TestGate -v
 ```
 
-Expected: FAIL for the legacy-phrase retirement, current-only and baseline-only reservations, rename endpoints, union, and unavailable-baseline cases because `check_gate()` still implements the old current-roadmap phrase switch.
+Expected: FAIL for the legacy-phrase retirement, current-only and baseline-only reservations, rename endpoints, union, unavailable or unrelated merge bases, and forced changed-path failure because `check_gate()` still implements the old current-roadmap phrase switch.
 
-- [ ] **Step 3: Decode status-aware changed paths**
+- [ ] **Step 3: Add strict gate baseline resolution and decode status-aware changed paths**
 
-Add this helper immediately before `check_gate()`:
+Add these gate-specific helpers immediately before `check_gate()`. Do not change `_resolve_baseline()` or `_baseline_roadmap()`; their lenient fallback remains the gate-change-log contract.
 
 ```python
+def _resolve_gate_base(root, baseline_ref):
+    try:
+        proc = subprocess.run(
+            ["git", "merge-base", baseline_ref, "HEAD"],
+            cwd=root, capture_output=True, text=True, encoding="utf-8",
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    base = proc.stdout.strip()
+    return base or None
+
+
+def _gate_baseline_roadmap(root, base):
+    try:
+        proc = subprocess.run(
+            ["git", "show", f"{base}:docs/roadmap.md"],
+            cwd=root, capture_output=True, text=True, encoding="utf-8",
+        )
+    except OSError:
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
 def _changed_paths(root, base):
-    proc = subprocess.run(
-        ["git", "diff", "--name-status", "-z", "--find-renames",
-         f"{base}...HEAD"],
-        cwd=root, capture_output=True, text=True, encoding="utf-8",
-    )
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--name-status", "-z", "--find-renames",
+             f"{base}...HEAD"],
+            cwd=root, capture_output=True, text=True, encoding="utf-8",
+        )
+    except OSError:
+        return None
     if proc.returncode != 0:
         return None
     fields = proc.stdout.split("\0")
@@ -498,16 +559,21 @@ Then replace `check_gate()` with:
 
 ```python
 def check_gate(root, baseline_ref):
+    base = _resolve_gate_base(root, baseline_ref)
+    if base is None:
+        return [f"gate: merge base could not be resolved from "
+                f"{baseline_ref}; phase reservations cannot be evaluated"]
+
+    baseline = _gate_baseline_roadmap(root, base)
+    if baseline is None:
+        return [f"gate: baseline roadmap could not be resolved from "
+                f"{base}; phase reservations cannot be evaluated"]
+
     path = os.path.join(root, "docs", "roadmap.md")
     current = ""
     if os.path.exists(path):
         with open(path, encoding="utf-8") as fh:
             current = fh.read()
-
-    baseline = _baseline_roadmap(root, baseline_ref)
-    if baseline is None:
-        return [f"gate: baseline roadmap could not be resolved from "
-                f"{baseline_ref}; phase reservations cannot be evaluated"]
 
     baseline_gate, baseline_findings = _parse_phase_gate(
         baseline, "baseline"
@@ -524,7 +590,6 @@ def check_gate(root, baseline_ref):
     if not reservations:
         return []
 
-    base = _resolve_baseline(root, baseline_ref)
     changed = _changed_paths(root, base)
     if changed is None:
         return ["gate: changed paths could not be resolved; phase "
@@ -571,6 +636,7 @@ git commit -m "feat: enforce phase-aware documentation gate (#89)"
 ```powershell
 python -m unittest discover -s tools/checks/tests -p "test_*.py" -v
 python -m unittest discover -s tools/agent-coordination/tests -p "test_*.py" -v
+python -m unittest discover -s tools/agent-assets/tests -p "test_*.py" -v
 ```
 
 - [ ] Restore and run the .NET suite without introducing dependency changes:
@@ -578,13 +644,14 @@ python -m unittest discover -s tools/agent-coordination/tests -p "test_*.py" -v
 ```powershell
 dotnet restore AutoGIS.Civil3D.sln --locked-mode
 dotnet test AutoGIS.Civil3D.sln -c Release --no-restore
+dotnet format AutoGIS.Civil3D.sln --verify-no-changes
 ```
 
 - [ ] Verify the exact change boundary and whitespace:
 
 ```powershell
-git diff --check main...HEAD
-git diff --name-status main...HEAD
+git diff --check origin/main...HEAD
+git diff --name-status origin/main...HEAD
 ```
 
 Expected changed files exactly:
