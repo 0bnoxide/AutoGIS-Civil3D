@@ -22,8 +22,10 @@ Replace the phrase-triggered global gate with a strict machine marker owned by
 the authoritative roadmap. The infrastructure remains inactive until an
 owner-approved phase design reserves concrete implementation path prefixes.
 
-The marker is a single-line HTML comment placed beside the capability table,
-outside the append-only gate-change log:
+The marker is a single-line HTML comment in the `## Capability level`
+section. When present, it must be the first nonblank line after that section's
+table and before its explanatory prose, keeping it outside the append-only
+gate-change log:
 
 ```html
 <!-- docs-checks:phase-gate-v1 {"phase":4,"state":"blocked","paths":["src/AutoGIS.Civil3D.Adapter/","tests/AutoGIS.Civil3D.Adapter.Tests/"]} -->
@@ -48,7 +50,9 @@ Paths are matched against Git's repository-relative changed filenames.
 The roadmap may contain zero or one marker. Zero means that no mechanically
 reserved phase implementation surface is active. Duplicate markers,
 unrecognized fields, invalid JSON, or an invalid field value are blocking
-documentation findings rather than reasons to disable the gate.
+documentation findings rather than reasons to disable the gate. A marker in
+any other location, including a fenced example or the gate-change log, is also
+a blocking finding.
 
 ## Lifecycle
 
@@ -73,6 +77,10 @@ not rewrite the gate-change log.
 The checker evaluates both the merge-base roadmap and the current roadmap.
 It parses each marker before examining the diff and enforces the union of
 reserved paths from both versions.
+
+Changed paths come from a status-aware, rename-detecting diff (for example,
+`git diff --name-status -z --find-renames`). Both the source and destination
+of every detected rename are evaluated against the reserved prefixes.
 
 That union closes three same-change bypasses:
 
@@ -108,14 +116,21 @@ path is added by the infrastructure change.
 Tests must prove:
 
 - no marker leaves unrelated changes unaffected;
+- the legacy literal `may not be claimed until` in the roadmap does not block
+  an unrelated non-documentation change;
 - a documentation-only marker addition passes;
+- marker addition plus a matching reserved-path change in the same branch is
+  blocked;
 - a matching reserved-path change is blocked with a phase-specific message;
 - unrelated non-documentation maintenance passes while the marker is active;
 - documentation-only marker removal passes;
 - marker removal plus a reserved-path change in the same branch is blocked;
+- renaming a reserved file outside its prefix is blocked while the marker is
+  active and when the same branch removes the marker;
 - changing reserved paths enforces the union of baseline and current paths;
 - an already-removed marker permits later implementation changes;
-- malformed, duplicate, and schema-invalid markers fail closed; and
+- malformed, duplicate, schema-invalid, and misplaced markers fail closed;
+  and
 - an unavailable baseline fails closed.
 
 The complete documentation-check suite, repository-proportioned Python and
@@ -129,7 +144,10 @@ requires its separate approved design.
   path. The checker never invents or expands prefixes.
 - **Gate-removal bypass:** Baseline/current union enforcement prevents code
   from riding with marker removal.
+- **Rename bypass:** Status-aware diff parsing checks both rename endpoints.
 - **Malformed policy disables enforcement:** Strict parsing fails closed.
+- **Marker placement drift:** The capability-table slot is validated; marker
+  text elsewhere is rejected.
 - **Maintenance blockage:** Only explicitly reserved prefixes are blocked;
   all unlisted paths remain available.
 - **Roadmap authority drift:** The marker lives in the roadmap, while the
