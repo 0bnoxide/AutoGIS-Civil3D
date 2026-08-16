@@ -9,8 +9,7 @@ Checks:
 2. transience— living documents carry no session-state or deixis.
 3. count     — living documents never numerically summarize a referenced list.
 4. gatelog   — the roadmap gate-change log only grows at the bottom.
-5. gate      — while the roadmap says Phase 0 implementation is unclaimable,
-               a change may not leave docs/ (the paper gate, made real).
+5. gate      — roadmap markers reserve phase-scoped implementation paths.
 
 Exit 0 clean, 1 findings, 3 operational failure.
 """
@@ -56,7 +55,6 @@ COUNT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-GATE_MARKER = "may not be claimed until"
 PHASE_GATE_NAMESPACE = "docs-checks:phase-gate-"
 PHASE_GATE_TAG = f"{PHASE_GATE_NAMESPACE}v1"
 PHASE_GATE_LINE = re.compile(
@@ -264,31 +262,106 @@ def _parse_phase_gate(text, source):
     return payload, []
 
 
-def check_gate(root, baseline_ref):
-    path = os.path.join(root, "docs", "roadmap.md")
-    if not os.path.exists(path):
-        return []
-    with open(path, encoding="utf-8") as fh:
-        roadmap = fh.read()
-    if GATE_MARKER not in roadmap:
-        return []
-    base = _resolve_baseline(root, baseline_ref)
-    proc = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}...HEAD"],
-        cwd=root, capture_output=True, text=True, encoding='utf-8',
-    )
+def _resolve_gate_base(root, baseline_ref):
+    try:
+        proc = subprocess.run(
+            ["git", "merge-base", baseline_ref, "HEAD"],
+            cwd=root, capture_output=True, text=True, encoding="utf-8",
+        )
+    except OSError:
+        return None
     if proc.returncode != 0:
-        return []  # no baseline: gate not evaluable here
-    outside = [
-        f for f in proc.stdout.splitlines()
-        if f and not f.startswith("docs/")
+        return None
+    base = proc.stdout.strip()
+    return base or None
+
+
+def _gate_baseline_roadmap(root, base):
+    try:
+        proc = subprocess.run(
+            ["git", "show", f"{base}:docs/roadmap.md"],
+            cwd=root, capture_output=True, text=True, encoding="utf-8",
+        )
+    except OSError:
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _changed_paths(root, base):
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--name-status", "-z", "--find-renames",
+             f"{base}...HEAD"],
+            cwd=root, capture_output=True, text=True, encoding="utf-8",
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    fields = proc.stdout.split("\0")
+    paths = []
+    index = 0
+    while index < len(fields) and fields[index]:
+        status = fields[index]
+        index += 1
+        count = 2 if status.startswith("R") else 1
+        if index + count > len(fields):
+            return None
+        paths.extend(fields[index:index + count])
+        index += count
+    return list(dict.fromkeys(path for path in paths if path))
+
+
+def check_gate(root, baseline_ref):
+    base = _resolve_gate_base(root, baseline_ref)
+    if base is None:
+        return [f"gate: merge base could not be resolved from "
+                f"{baseline_ref}; phase reservations cannot be evaluated"]
+
+    baseline = _gate_baseline_roadmap(root, base)
+    if baseline is None:
+        return [f"gate: baseline roadmap could not be resolved from "
+                f"{base}; phase reservations cannot be evaluated"]
+
+    path = os.path.join(root, "docs", "roadmap.md")
+    current = ""
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as fh:
+            current = fh.read()
+
+    baseline_gate, baseline_findings = _parse_phase_gate(
+        baseline, "baseline"
+    )
+    current_gate, current_findings = _parse_phase_gate(current, "current")
+    findings = baseline_findings + current_findings
+    if findings:
+        return findings
+
+    reservations = {}
+    for gate in (baseline_gate, current_gate):
+        if gate is not None:
+            reservations.setdefault(gate["phase"], set()).update(gate["paths"])
+    if not reservations:
+        return []
+
+    changed = _changed_paths(root, base)
+    if changed is None:
+        return ["gate: changed paths could not be resolved; phase "
+                "reservations cannot be evaluated"]
+
+    blocked = {}
+    for phase, prefixes in reservations.items():
+        matches = [
+            path for path in changed
+            if any(path.startswith(prefix) for prefix in prefixes)
+        ]
+        if matches:
+            blocked[phase] = matches
+    return [
+        f"gate: Phase {phase} reserved paths block changed files: "
+        f"{', '.join(paths)}"
+        for phase, paths in sorted(blocked.items())
     ]
-    if outside:
-        listed = ", ".join(outside[:5])
-        return [f"gate: docs/roadmap.md states Phase 0 implementation is "
-                f"unclaimable, but this change touches non-docs paths: "
-                f"{listed}. Record the authorization in the roadmap first"]
-    return []
 
 
 def main(argv=None):
