@@ -1,6 +1,7 @@
 """Fixtures proving each docs check fails on its defect and passes clean."""
 
 import os
+import json
 import shutil
 import subprocess
 import sys
@@ -82,6 +83,134 @@ class TestCounts(DocsFixture):
                    "Exit-gate criteria are the conditions listed in the "
                    "governing design.\n")
         self.assertEqual(docs_checks.check_counts(self.root), [])
+
+
+class TestPhaseGateMarker(DocsFixture):
+    ROADMAP = (
+        "# Roadmap\n\n## Capability level\n\n"
+        "| Phase | Capability | Status |\n"
+        "|---|---|---|\n"
+        "| 4 | Adapter | Authorized |\n\n"
+        "Capability prose.\n\n"
+        "## Gate-change log\n\n"
+        "| Date | Decision | Recorded |\n|---|---|---|\n"
+        "| 2026-08-02 | first | PR #1 |\n"
+        "| 2026-08-03 | second | PR #2 |\n"
+    )
+    VALID = (
+        '<!-- docs-checks:phase-gate-v1 '
+        '{"phase":4,"state":"blocked","paths":["src/reserved/"]} -->'
+    )
+
+    def placed(self, marker):
+        return self.ROADMAP.replace(
+            "\nCapability prose.\n",
+            f"\n{marker}\n\nCapability prose.\n",
+            1,
+        )
+
+    def test_no_marker_returns_no_policy(self):
+        self.assertEqual(
+            docs_checks._parse_phase_gate(self.ROADMAP, "current"),
+            (None, []),
+        )
+
+    def test_valid_marker_returns_policy(self):
+        gate, findings = docs_checks._parse_phase_gate(
+            self.placed(self.VALID), "current"
+        )
+        self.assertEqual(findings, [])
+        self.assertEqual(gate, {
+            "phase": 4,
+            "state": "blocked",
+            "paths": ["src/reserved/"],
+        })
+
+    def test_unsupported_marker_version_fails_closed(self):
+        marker = self.VALID.replace("phase-gate-v1", "phase-gate-v2")
+        gate, findings = docs_checks._parse_phase_gate(
+            self.placed(marker), "current"
+        )
+        self.assertIsNone(gate)
+        self.assertIn("unsupported", findings[0])
+
+    def test_malformed_marker_fails_closed(self):
+        marker = "<!-- docs-checks:phase-gate-v1 {not-json} -->"
+        gate, findings = docs_checks._parse_phase_gate(
+            self.placed(marker), "current"
+        )
+        self.assertIsNone(gate)
+        self.assertIn("invalid JSON", findings[0])
+
+    def test_duplicate_markers_fail_closed(self):
+        gate, findings = docs_checks._parse_phase_gate(
+            self.placed(f"{self.VALID}\n{self.VALID}"), "current"
+        )
+        self.assertIsNone(gate)
+        self.assertIn("duplicate", findings[0])
+
+    def test_schema_invalid_markers_fail_closed(self):
+        valid = {"phase": 4, "state": "blocked", "paths": ["src/reserved/"]}
+        payloads = [
+            [],
+            {"phase": 4, "state": "blocked"},
+            {**valid, "extra": 1},
+            {**valid, "phase": 0},
+            {**valid, "phase": -1},
+            {**valid, "phase": "4"},
+            {**valid, "phase": True},
+            {**valid, "state": "open"},
+            {**valid, "state": 1},
+            {**valid, "paths": "src/reserved/"},
+            {**valid, "paths": []},
+            {**valid, "paths": ["src/reserved/", "src/reserved/"]},
+            {**valid, "paths": [1]},
+        ]
+        bad_paths = [
+            "", "src/reserved", "src//reserved/", "src/./reserved/",
+            "src/../reserved/", "src\\reserved/", "/src/reserved/",
+            "C:/src/reserved/", "src/*/", "src/?/", "src/[/",
+        ]
+        payloads.extend({**valid, "paths": [path]} for path in bad_paths)
+
+        for payload in payloads:
+            marker = (
+                "<!-- docs-checks:phase-gate-v1 "
+                f"{json.dumps(payload, separators=(',', ':'))} -->"
+            )
+            with self.subTest(payload=payload):
+                gate, findings = docs_checks._parse_phase_gate(
+                    self.placed(marker), "current"
+                )
+                self.assertIsNone(gate)
+                self.assertTrue(findings)
+
+    def test_misplaced_markers_fail_closed(self):
+        cases = {
+            "before-table": self.ROADMAP.replace(
+                "## Capability level\n\n",
+                f"## Capability level\n\n{self.VALID}\n",
+                1,
+            ),
+            "after-prose": self.ROADMAP.replace(
+                "Capability prose.",
+                f"Capability prose.\n\n{self.VALID}",
+                1,
+            ),
+            "fenced-example": self.ROADMAP + f"\n```html\n{self.VALID}\n```\n",
+            "gate-log": self.ROADMAP.replace(
+                "## Gate-change log\n\n",
+                f"## Gate-change log\n\n{self.VALID}\n",
+                1,
+            ),
+        }
+        for name, roadmap in cases.items():
+            with self.subTest(name=name):
+                gate, findings = docs_checks._parse_phase_gate(
+                    roadmap, "current"
+                )
+                self.assertIsNone(gate)
+                self.assertIn("placement", findings[0])
 
 
 class GitDocsFixture(DocsFixture):

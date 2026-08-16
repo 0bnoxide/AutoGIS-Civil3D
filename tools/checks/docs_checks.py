@@ -18,6 +18,7 @@ Exit 0 clean, 1 findings, 3 operational failure.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -56,6 +57,11 @@ COUNT_PATTERN = re.compile(
 )
 
 GATE_MARKER = "may not be claimed until"
+PHASE_GATE_NAMESPACE = "docs-checks:phase-gate-"
+PHASE_GATE_TAG = f"{PHASE_GATE_NAMESPACE}v1"
+PHASE_GATE_LINE = re.compile(
+    rf"^<!-- {re.escape(PHASE_GATE_TAG)} (?P<payload>.+) -->$"
+)
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)#\s]+)(?:#[^)]*)?\)")
 CODE_SPAN_RE = re.compile(r"`[^`]*`")
 FENCE_RE = re.compile(r"^(```|~~~)")
@@ -184,6 +190,78 @@ def check_gatelog(root, baseline_ref):
                 "or reordered — the log is append-only; corrections are new "
                 "rows"]
     return []
+
+
+def _invalid_gate(source, message):
+    return None, [f"gate: {source} docs/roadmap.md: {message}"]
+
+
+def _valid_gate_path(path):
+    if not isinstance(path, str) or not path.endswith("/"):
+        return False
+    if (path.startswith(("/", "\\")) or
+            re.match(r"^[A-Za-z]:/", path) or
+            "\\" in path or any(char in path for char in "*?[")):
+        return False
+    parts = path[:-1].split("/")
+    return bool(parts) and all(part not in ("", ".", "..") for part in parts)
+
+
+def _phase_gate_slot(lines):
+    try:
+        index = lines.index("## Capability level") + 1
+    except ValueError:
+        return None
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    table_start = index
+    while index < len(lines) and lines[index].startswith("|"):
+        index += 1
+    if index == table_start:
+        return None
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    return index
+
+
+def _parse_phase_gate(text, source):
+    lines = text.splitlines()
+    locations = [
+        index for index, line in enumerate(lines)
+        if PHASE_GATE_NAMESPACE in line
+    ]
+    if not locations:
+        return None, []
+    if len(locations) != 1:
+        return _invalid_gate(source, "duplicate phase-gate markers")
+
+    index = locations[0]
+    if index != _phase_gate_slot(lines):
+        return _invalid_gate(source, "invalid phase-gate marker placement")
+    if not lines[index].startswith(f"<!-- {PHASE_GATE_TAG} "):
+        return _invalid_gate(source, "unsupported phase-gate marker version")
+    match = PHASE_GATE_LINE.fullmatch(lines[index])
+    if match is None:
+        return _invalid_gate(source, "invalid phase-gate marker syntax")
+    try:
+        payload = json.loads(match.group("payload"))
+    except json.JSONDecodeError:
+        return _invalid_gate(source, "invalid JSON in phase-gate marker")
+
+    if not isinstance(payload, dict) or set(payload) != {
+            "phase", "state", "paths"}:
+        return _invalid_gate(source, "invalid phase-gate marker schema")
+    phase = payload["phase"]
+    paths = payload["paths"]
+    if type(phase) is not int or phase <= 0:
+        return _invalid_gate(source, "phase must be a positive integer")
+    if payload["state"] != "blocked" or type(payload["state"]) is not str:
+        return _invalid_gate(source, "state must be 'blocked'")
+    if (not isinstance(paths, list) or not paths or
+            any(not _valid_gate_path(path) for path in paths) or
+            len(set(paths)) != len(paths)):
+        return _invalid_gate(source, "paths must be unique valid prefixes")
+    return payload, []
 
 
 def check_gate(root, baseline_ref):
