@@ -143,6 +143,19 @@ class TestPhaseGateMarker(DocsFixture):
         self.assertIsNone(gate)
         self.assertIn("invalid JSON", findings[0])
 
+    def test_duplicate_json_members_fail_closed(self):
+        marker = (
+            '<!-- docs-checks:phase-gate-v1 '
+            '{"phase":4,"state":"blocked",'
+            '"paths":["src/reserved/"],'
+            '"paths":["src/other/"]} -->'
+        )
+        gate, findings = docs_checks._parse_phase_gate(
+            self.placed(marker), "current"
+        )
+        self.assertIsNone(gate)
+        self.assertIn("duplicate", findings[0])
+
     def test_duplicate_markers_fail_closed(self):
         gate, findings = docs_checks._parse_phase_gate(
             self.placed(f"{self.VALID}\n{self.VALID}"), "current"
@@ -217,17 +230,7 @@ class TestPhaseGateMarker(DocsFixture):
 class GitDocsFixture(DocsFixture):
     """Fixtures needing a git history for baseline comparisons."""
 
-    ROADMAP_V1 = (
-        "# Roadmap\n\n## Capability level\n\n"
-        "| Phase | Capability | Status |\n"
-        "|---|---|---|\n"
-        "| 4 | Adapter | Authorized |\n\n"
-        "Capability prose.\n\n"
-        "## Gate-change log\n\n"
-        "| Date | Decision | Recorded |\n|---|---|---|\n"
-        "| 2026-08-02 | first | PR #1 |\n"
-        "| 2026-08-03 | second | PR #2 |\n"
-    )
+    ROADMAP_V1 = TestPhaseGateMarker.ROADMAP
     MARKER = TestPhaseGateMarker.VALID
 
     def setUp(self):
@@ -418,6 +421,51 @@ class TestGate(GitDocsFixture):
             findings = docs_checks.check_gate(self.root, self.baseline)
         self.assertTrue(findings)
         self.assertIn("changed paths could not be resolved", findings[0])
+
+    def test_merge_base_decode_failure_fails_closed(self):
+        error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+        with mock.patch.object(docs_checks.subprocess, "run",
+                               side_effect=error):
+            findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertTrue(findings)
+        self.assertIn("merge base", findings[0])
+
+    def test_baseline_roadmap_decode_failure_fails_closed(self):
+        error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+        responses = [mock.Mock(returncode=0, stdout="base"), error]
+        with mock.patch.object(docs_checks.subprocess, "run",
+                               side_effect=responses):
+            findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertTrue(findings)
+        self.assertIn("baseline roadmap", findings[0])
+
+    def test_changed_paths_decode_failure_fails_closed(self):
+        self.write("docs/roadmap.md", self.roadmap_with_marker())
+        self.commit_branch()
+        error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+        responses = [
+            mock.Mock(returncode=0, stdout="base"),
+            mock.Mock(returncode=0, stdout=self.roadmap_with_marker()),
+            error,
+        ]
+        with mock.patch.object(docs_checks.subprocess, "run",
+                               side_effect=responses):
+            findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertTrue(findings)
+        self.assertIn("changed paths could not be resolved", findings[0])
+
+    def test_reserved_matches_are_sorted(self):
+        self.activate()
+        self.start_branch()
+        with mock.patch.object(
+                docs_checks, "_changed_paths",
+                return_value=["src/reserved/z.py", "src/reserved/a.py"]):
+            findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertEqual(
+            findings,
+            ["gate: Phase 4 reserved paths block changed files: "
+             "src/reserved/a.py, src/reserved/z.py"],
+        )
 
 
 if __name__ == "__main__":

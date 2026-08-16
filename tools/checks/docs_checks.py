@@ -241,10 +241,22 @@ def _parse_phase_gate(text, source):
     match = PHASE_GATE_LINE.fullmatch(lines[index])
     if match is None:
         return _invalid_gate(source, "invalid phase-gate marker syntax")
+    def reject_duplicate_members(pairs):
+        payload = {}
+        for key, value in pairs:
+            if key in payload:
+                raise ValueError("duplicate JSON member")
+            payload[key] = value
+        return payload
+
     try:
-        payload = json.loads(match.group("payload"))
+        payload = json.loads(
+            match.group("payload"), object_pairs_hook=reject_duplicate_members
+        )
     except json.JSONDecodeError:
         return _invalid_gate(source, "invalid JSON in phase-gate marker")
+    except ValueError:
+        return _invalid_gate(source, "duplicate keys in phase-gate marker")
 
     if not isinstance(payload, dict) or set(payload) != {
             "phase", "state", "paths"}:
@@ -268,7 +280,7 @@ def _resolve_gate_base(root, baseline_ref):
             ["git", "merge-base", baseline_ref, "HEAD"],
             cwd=root, capture_output=True, text=True, encoding="utf-8",
         )
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     if proc.returncode != 0:
         return None
@@ -282,7 +294,7 @@ def _gate_baseline_roadmap(root, base):
             ["git", "show", f"{base}:docs/roadmap.md"],
             cwd=root, capture_output=True, text=True, encoding="utf-8",
         )
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     return proc.stdout if proc.returncode == 0 else None
 
@@ -294,7 +306,7 @@ def _changed_paths(root, base):
              f"{base}...HEAD"],
             cwd=root, capture_output=True, text=True, encoding="utf-8",
         )
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     if proc.returncode != 0:
         return None
@@ -351,10 +363,10 @@ def check_gate(root, baseline_ref):
 
     blocked = {}
     for phase, prefixes in reservations.items():
-        matches = [
+        matches = sorted(
             path for path in changed
             if any(path.startswith(prefix) for prefix in prefixes)
-        ]
+        )
         if matches:
             blocked[phase] = matches
     return [
