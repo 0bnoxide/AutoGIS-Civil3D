@@ -520,6 +520,58 @@ class TestMainRule(TempRepoCase):
         self.assertIsNotNone(
             coordination.deny_reason_for_git_argv(argv, self.base), argv)
 
+    def test_coreutils_trailing_dot_space_targets(self):
+        cases = (
+            ("tee", ("seed.txt",), ["seed.txt"]),
+            ("sed", ("-i", "seed.txt"), ["seed.txt"]),
+            ("dd", ("of=seed.txt",), ["seed.txt"]),
+            ("truncate", ("seed.txt",), ["seed.txt"]),
+            ("rm", ("seed.txt",), ["seed.txt"]),
+            ("unlink", ("seed.txt",), ["seed.txt"]),
+            ("shred", ("seed.txt",), ["seed.txt"]),
+            ("cp", ("other.txt", "seed.txt"), ["seed.txt"]),
+            ("mv", ("other.txt", "seed.txt"),
+             ["seed.txt", "other.txt"]),
+            ("install", ("other.txt", "seed.txt"), ["seed.txt"]),
+        )
+        for command, operands, expected in cases:
+            for suffix in (".", " "):
+                with self.subTest(command=command, suffix=suffix):
+                    self.assertEqual(
+                        coordination._argv_write_targets(
+                            [command + suffix, *operands], ps=False),
+                        expected)
+
+    def test_coreutils_suffix_normalization_preserves_boundaries(self):
+        for command in ("RM.", "RM ", "/usr/bin/rm.",
+                        r"C:\Program Files\Git\usr\bin\rm."):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    coordination._argv_write_targets(
+                        [command, "seed.txt"], ps=False),
+                    [])
+
+        powershell_cases = (
+            (["DEL", "seed.txt"], ["seed.txt"]),
+            (["COPY", "other.txt", "seed.txt"], ["seed.txt"]),
+            (["del.", "seed.txt"], []),
+            (["del ", "seed.txt"], []),
+            (["copy.", "other.txt", "seed.txt"], []),
+            (["copy ", "other.txt", "seed.txt"], []),
+        )
+        for argv, expected in powershell_cases:
+            with self.subTest(argv=argv):
+                self.assertEqual(
+                    coordination._argv_write_targets(argv, ps=True),
+                    expected)
+
+    def test_coreutils_suffix_forms_denied_on_main(self):
+        for command in ("tee. seed.txt", "rm. seed.txt",
+                        "cp. other.txt seed.txt"):
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, self.repo_path, self.repo))
+
     def test_tee_in_pipeline_stage_denied(self):
         reason = coordination.deny_reason_for_shell(
             "echo boom | tee seed.txt", self.repo_path, self.repo)

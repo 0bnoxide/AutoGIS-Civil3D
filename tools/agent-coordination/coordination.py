@@ -673,25 +673,26 @@ def _redirect_targets(segment, segment_masked):
 
 def _argv_write_targets(argv, ps):
     """Return raw target operands for the write form represented by argv."""
+    cmd = argv[0].rstrip(". ")
     targets = []
-    if argv[0] == "tee":
+    if cmd == "tee":
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
-    if argv[0] == "sed" and any(arg.startswith("-i") for arg in argv[1:]):
+    if cmd == "sed" and any(arg.startswith("-i") for arg in argv[1:]):
         targets += [arg for arg in argv[1:] if not arg.startswith("-")][-1:]
-    if argv[0] == "dd":
+    if cmd == "dd":
         targets += [arg[3:] for arg in argv if arg.startswith("of=")]
-    if argv[0] == "truncate":
+    if cmd == "truncate":
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
-    if argv[0] in ("rm", "unlink", "shred"):
+    if cmd in ("rm", "unlink", "shred"):
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
     low = argv[0].lower()
     if ps and (low in _PS_WRITE_CMDLETS or low in _PS_COPY_CMDLETS):
         targets += _ps_write_targets(argv)
-    if argv[0] in ("cp", "mv", "install"):
+    if cmd in ("cp", "mv", "install"):
         dest, sources = _copy_move_operands(argv)
         if dest:
             targets.append(dest)
-        if argv[0] == "mv":
+        if cmd == "mv":
             targets += sources
     return targets
 
