@@ -43,12 +43,17 @@ to widen a claim elsewhere.
 5. **ADR numbers are allocated, never guessed:**
    `python tools/agent-coordination/coordination.py claim --session <id> --kind adr`
    prints your number. An allocated number is consumed even if unused.
-6. **Prefer indexed navigation over manual search.** Use the
-   codebase-memory MCP tools or a search subagent before file-by-file
-   grep. The index is advisory — verify anything load-bearing against the
-   files. Session-start hooks refresh it and log the outcome to
-   `~/.cache/codebase-memory-mcp/last-index.log`.
-7. **Report only what you verified.** Test counts, hashes, and check results
+6. **Use codebase-memory MCP before codebase search.** First query the
+   codebase-memory MCP tools before invoking `rg`, `grep`, `Select-String`,
+   or other file-by-file search. If the MCP is unavailable or cannot answer,
+   use a search subagent before manual search. The index is advisory — verify
+   anything load-bearing against the files. Session-start hooks refresh it
+   and log the outcome to `~/.cache/codebase-memory-mcp/last-index.log`.
+7. **Ponytail is automatic for coding tasks.** Before writing, adding,
+   refactoring, fixing, reviewing, or designing code, invoke the `ponytail`
+   skill at its default full intensity. It remains active unless the user
+   explicitly says `stop ponytail` or `normal mode`.
+8. **Report only what you verified.** Test counts, hashes, and check results
    in any record must be numbers you produced, not numbers you were told.
 
 ## Reviews
