@@ -1327,6 +1327,25 @@ def cmd_doctor(repo):
         claims = list_claims(repo)
         now = _dt.datetime.now(_dt.timezone.utc)
         local_host = socket.gethostname()
+        session_pids = {}
+        for record in claims:
+            if (not isinstance(record, dict)
+                    or record.get("host") != local_host
+                    or record.get("kind") in (None, "adr")):
+                continue
+            session = record.get("session")
+            if not isinstance(session, str) or not session:
+                continue
+            try:
+                pid = int(record.get("pid"))
+            except (TypeError, ValueError):
+                continue
+            if pid > 0:
+                session_pids.setdefault(session, set()).add(pid)
+        unreliable_pid_sessions = {
+            session for session, pids in session_pids.items()
+            if len(pids) > 1
+        }
         for record in claims:
             if not isinstance(record, dict):
                 findings.append("malformed claim record (not an object)")
@@ -1347,6 +1366,7 @@ def cmd_doctor(repo):
                 continue
             age_h = (now - created).total_seconds() / 3600
             if (record.get("host") == local_host
+                    and record.get("session") not in unreliable_pid_sessions
                     and _pid_alive(record.get("pid"), snapshot) is False):
                 findings.append(
                     f"orphaned claim {record.get('id', '<unknown>')} "

@@ -28,7 +28,7 @@
 - Consumes: claim dictionaries already returned by `list_claims(repo)` and the existing `_pid_alive(pid, snapshot) -> bool | None` probe.
 - Produces: unchanged `cmd_doctor(repo) -> int` CLI behavior, except multi-PID local sessions use the existing stale-suspect path.
 
-- [ ] **Step 1: Add a multi-claim test utility and five focused behavior tests**
+- [ ] **Step 1: Add a multi-claim test utility and six focused behavior tests**
 
 Keep `write_claim(**overrides)` as the existing one-record convenience method and add a test-only `write_claims(*overrides)` helper that writes complete claim records. Add tests named:
 
@@ -100,6 +100,17 @@ def test_pid_spread_ignores_unusable_pid(self):
     with mock.patch.object(coordination, "_pid_alive", return_value=False):
         out = self.doctor_output()
     self.assertIn("orphaned claim valid0000001", out)
+
+def test_pid_spread_ignores_adr_pid(self):
+    self.write_claims(
+        {"id": "valid0000001", "pid": 101},
+        {"id": "adr000000002", "pid": 202, "kind": "adr",
+         "value": "0005"},
+    )
+    with mock.patch.object(coordination, "_pid_alive", return_value=False):
+        out = self.doctor_output()
+    self.assertIn("orphaned claim valid0000001", out)
+    self.assertNotIn("orphaned claim adr000000002", out)
 ```
 
 The helper builds the existing complete base record, merges each override,
@@ -115,7 +126,7 @@ Run at host scope:
 python -m unittest discover -s tools/agent-coordination/tests -p test_coordination.py -k pid_spread
 ```
 
-Expected: `test_distinct_pid_spread_falls_back_to_age_only` fails because current `cmd_doctor` emits `orphaned claim spread000001`; the four scope-preservation tests pass.
+Expected: `test_distinct_pid_spread_falls_back_to_age_only` fails because current `cmd_doctor` emits `orphaned claim spread000001`; the five scope-preservation tests pass.
 
 - [ ] **Step 3: Implement the minimum session-spread guard in `cmd_doctor`**
 
@@ -160,7 +171,7 @@ Run at host scope:
 python -m unittest discover -s tools/agent-coordination/tests -p test_coordination.py -k pid_spread
 ```
 
-Expected: all five PID-spread tests pass.
+Expected: all six PID-spread tests pass.
 
 - [ ] **Step 5: Run the complete repository verification**
 
