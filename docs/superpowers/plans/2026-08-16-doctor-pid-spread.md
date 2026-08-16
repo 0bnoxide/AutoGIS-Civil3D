@@ -141,10 +141,11 @@ python -m unittest discover -s tools/agent-coordination/tests -p test_coordinati
 ```
 
 Expected on the issue baseline: the fallback test fails because current
-`cmd_doctor` emits orphan findings, while the seven scope-preservation and
-malformed-metadata tests pass. During implementation, run the malformed tests
-again whenever normalization or membership logic changes so regressions fail
-directly as uncaught test errors.
+`cmd_doctor` emits orphan findings, the non-finite-PID test errors because
+`_pid_alive()` does not catch `OverflowError`, and the remaining six tests
+pass. During implementation, run the malformed tests again whenever
+normalization or membership logic changes so regressions fail directly as
+uncaught test errors.
 
 - [ ] **Step 3: Implement the minimum session-spread guard in `cmd_doctor`**
 
