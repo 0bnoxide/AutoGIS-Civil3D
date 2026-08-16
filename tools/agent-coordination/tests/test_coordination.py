@@ -1268,22 +1268,16 @@ class TestDoctorLiveness(TempRepoCase):
 
     def test_pid_spread_ignores_unusable_session(self):
         self.write_claim(session=["bad"], pid=101)
-        try:
-            with mock.patch.object(coordination, "_pid_alive",
-                                   return_value=False):
-                out = self.doctor_output()
-        except TypeError as exc:
-            self.fail(f"doctor crashed on unusable session: {exc}")
+        with mock.patch.object(coordination, "_pid_alive",
+                               return_value=False):
+            out = self.doctor_output()
         self.assertIn("orphaned claim abc123def456", out)
 
     def test_pid_spread_ignores_nonfinite_pid(self):
         old = (_dt.datetime.now(_dt.timezone.utc)
                - _dt.timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.write_claim(pid=float("inf"), created_utc=old)
-        try:
-            out = self.doctor_output()
-        except OverflowError as exc:
-            self.fail(f"doctor crashed on non-finite pid: {exc}")
+        out = self.doctor_output()
         self.assertNotIn("orphaned claim abc123def456", out)
         self.assertIn("stale-suspect claim abc123def456", out)
 

@@ -114,21 +114,15 @@ def test_pid_spread_ignores_adr_pid(self):
 
 def test_pid_spread_ignores_unusable_session(self):
     self.write_claim(session=["bad"], pid=101)
-    try:
-        with mock.patch.object(coordination, "_pid_alive", return_value=False):
-            out = self.doctor_output()
-    except TypeError as exc:
-        self.fail(f"doctor crashed on unusable session: {exc}")
+    with mock.patch.object(coordination, "_pid_alive", return_value=False):
+        out = self.doctor_output()
     self.assertIn("orphaned claim abc123def456", out)
 
 def test_pid_spread_ignores_nonfinite_pid(self):
     old = (_dt.datetime.now(_dt.timezone.utc)
            - _dt.timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
     self.write_claim(pid=float("inf"), created_utc=old)
-    try:
-        out = self.doctor_output()
-    except OverflowError as exc:
-        self.fail(f"doctor crashed on non-finite pid: {exc}")
+    out = self.doctor_output()
     self.assertNotIn("orphaned claim abc123def456", out)
     self.assertIn("stale-suspect claim abc123def456", out)
 ```
@@ -146,7 +140,11 @@ Run at host scope:
 python -m unittest discover -s tools/agent-coordination/tests -p test_coordination.py -k pid_spread
 ```
 
-Expected: the fallback test fails because current `cmd_doctor` emits orphan findings; the malformed-session and non-finite-PID tests fail because current normalization crashes. The five scope-preservation tests pass.
+Expected on the issue baseline: the fallback test fails because current
+`cmd_doctor` emits orphan findings, while the seven scope-preservation and
+malformed-metadata tests pass. During implementation, run the malformed tests
+again whenever normalization or membership logic changes so regressions fail
+directly as uncaught test errors.
 
 - [ ] **Step 3: Implement the minimum session-spread guard in `cmd_doctor`**
 
