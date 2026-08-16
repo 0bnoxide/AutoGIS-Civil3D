@@ -28,7 +28,7 @@
 - Consumes: claim dictionaries already returned by `list_claims(repo)` and the existing `_pid_alive(pid, snapshot) -> bool | None` probe.
 - Produces: unchanged `cmd_doctor(repo) -> int` CLI behavior, except multi-PID local sessions use the existing stale-suspect path.
 
-- [ ] **Step 1: Add a multi-claim test utility and six focused behavior tests**
+- [ ] **Step 1: Add a multi-claim test utility and eight focused behavior tests**
 
 Keep `write_claim(**overrides)` as the existing one-record convenience method and add a test-only `write_claims(*overrides)` helper that writes complete claim records. Add tests named:
 
@@ -111,6 +111,26 @@ def test_pid_spread_ignores_adr_pid(self):
         out = self.doctor_output()
     self.assertIn("orphaned claim valid0000001", out)
     self.assertNotIn("orphaned claim adr000000002", out)
+
+def test_pid_spread_ignores_unusable_session(self):
+    self.write_claim(session=["bad"], pid=101)
+    try:
+        with mock.patch.object(coordination, "_pid_alive", return_value=False):
+            out = self.doctor_output()
+    except TypeError as exc:
+        self.fail(f"doctor crashed on unusable session: {exc}")
+    self.assertIn("orphaned claim abc123def456", out)
+
+def test_pid_spread_ignores_nonfinite_pid(self):
+    old = (_dt.datetime.now(_dt.timezone.utc)
+           - _dt.timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    self.write_claim(pid=float("inf"), created_utc=old)
+    try:
+        out = self.doctor_output()
+    except OverflowError as exc:
+        self.fail(f"doctor crashed on non-finite pid: {exc}")
+    self.assertNotIn("orphaned claim abc123def456", out)
+    self.assertIn("stale-suspect claim abc123def456", out)
 ```
 
 The helper builds the existing complete base record, merges each override,
@@ -126,7 +146,7 @@ Run at host scope:
 python -m unittest discover -s tools/agent-coordination/tests -p test_coordination.py -k pid_spread
 ```
 
-Expected: `test_distinct_pid_spread_falls_back_to_age_only` fails because current `cmd_doctor` emits `orphaned claim spread000001`; the five scope-preservation tests pass.
+Expected: the fallback test fails because current `cmd_doctor` emits orphan findings; the malformed-session and non-finite-PID tests fail because current normalization crashes. The five scope-preservation tests pass.
 
 - [ ] **Step 3: Implement the minimum session-spread guard in `cmd_doctor`**
 
@@ -144,7 +164,7 @@ for record in claims:
         continue
     try:
         pid = int(record.get("pid"))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         continue
     if pid > 0:
         session_pids.setdefault(session, set()).add(pid)
@@ -157,11 +177,12 @@ Add one condition to the existing orphan branch:
 
 ```python
 if (record.get("host") == local_host
-        and record.get("session") not in unreliable_pid_sessions
+        and (not isinstance(record.get("session"), str)
+             or record.get("session") not in unreliable_pid_sessions)
         and _pid_alive(record.get("pid"), snapshot) is False):
 ```
 
-Do not add a helper or change messages; falling through to the existing age branch is the feature.
+Add `OverflowError` to `_pid_alive`'s matching conversion guard as well. Do not add a helper or change messages; falling through to the existing age branch is the feature.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
@@ -171,7 +192,7 @@ Run at host scope:
 python -m unittest discover -s tools/agent-coordination/tests -p test_coordination.py -k pid_spread
 ```
 
-Expected: all six PID-spread tests pass.
+Expected: all eight PID-spread tests pass.
 
 - [ ] **Step 5: Run the complete repository verification**
 

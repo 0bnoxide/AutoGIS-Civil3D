@@ -1076,7 +1076,7 @@ def _pid_alive(pid, snapshot):
     """
     try:
         pid = int(pid)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if pid <= 0:
         return None
@@ -1338,7 +1338,7 @@ def cmd_doctor(repo):
                 continue
             try:
                 pid = int(record.get("pid"))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
             if pid > 0:
                 session_pids.setdefault(session, set()).add(pid)
@@ -1366,7 +1366,9 @@ def cmd_doctor(repo):
                 continue
             age_h = (now - created).total_seconds() / 3600
             if (record.get("host") == local_host
-                    and record.get("session") not in unreliable_pid_sessions
+                    and (not isinstance(record.get("session"), str)
+                         or record.get("session")
+                         not in unreliable_pid_sessions)
                     and _pid_alive(record.get("pid"), snapshot) is False):
                 findings.append(
                     f"orphaned claim {record.get('id', '<unknown>')} "
