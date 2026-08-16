@@ -28,11 +28,24 @@
 - Consumes: claim dictionaries already returned by `list_claims(repo)` and the existing `_pid_alive(pid, snapshot) -> bool | None` probe.
 - Produces: unchanged `cmd_doctor(repo) -> int` CLI behavior, except multi-PID local sessions use the existing stale-suspect path.
 
-- [ ] **Step 1: Add a multi-claim test utility and four focused behavior tests**
+- [ ] **Step 1: Add a multi-claim test utility and five focused behavior tests**
 
 Keep `write_claim(**overrides)` as the existing one-record convenience method and add a test-only `write_claims(*overrides)` helper that writes complete claim records. Add tests named:
 
 ```python
+def write_claims(self, *overrides):
+    base = {"id": "abc123def456", "session": "sess-1", "harness": "",
+            "pid": os.getpid(), "host": socket.gethostname(),
+            "kind": "branch", "value": "feature-x",
+            "created_utc": coordination._now()}
+    data = coordination._empty_registry()
+    data["claims"] = [{**base, **record} for record in overrides]
+    os.makedirs(os.path.dirname(self.repo.registry_path), exist_ok=True)
+    coordination._save(self.repo.registry_path, data)
+
+def write_claim(self, **overrides):
+    self.write_claims(overrides)
+
 def test_distinct_pid_spread_falls_back_to_age_only(self):
     old = (_dt.datetime.now(_dt.timezone.utc)
            - _dt.timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -47,7 +60,7 @@ def test_distinct_pid_spread_falls_back_to_age_only(self):
     self.assertIn("stale-suspect claim spread000001", out)
     self.assertIn("stale-suspect claim spread000002", out)
 
-def test_repeated_dead_pid_is_not_a_spread(self):
+def test_pid_spread_rejects_repeated_dead_pid(self):
     self.write_claims(
         {"id": "repeat000001", "pid": 101},
         {"id": "repeat000002", "pid": "101", "kind": "worktree",
@@ -60,13 +73,13 @@ def test_repeated_dead_pid_is_not_a_spread(self):
 
 def test_pid_spread_is_scoped_to_session(self):
     self.write_claims(
-        {"id": "session000001", "pid": 101, "session": "sess-1"},
-        {"id": "session000002", "pid": 202, "session": "sess-2"},
+        {"id": "sess10000001", "pid": 101, "session": "sess-1"},
+        {"id": "sess20000002", "pid": 202, "session": "sess-2"},
     )
     with mock.patch.object(coordination, "_pid_alive", return_value=False):
         out = self.doctor_output()
-    self.assertIn("orphaned claim session000001", out)
-    self.assertIn("orphaned claim session000002", out)
+    self.assertIn("orphaned claim sess10000001", out)
+    self.assertIn("orphaned claim sess20000002", out)
 
 def test_pid_spread_is_scoped_to_host(self):
     self.write_claims(
@@ -77,6 +90,16 @@ def test_pid_spread_is_scoped_to_host(self):
         out = self.doctor_output()
     self.assertIn("orphaned claim local0000001", out)
     self.assertNotIn("orphaned claim foreign00001", out)
+
+def test_pid_spread_ignores_unusable_pid(self):
+    self.write_claims(
+        {"id": "valid0000001", "pid": 101},
+        {"id": "zero00000002", "pid": 0, "kind": "worktree",
+         "value": ".worktrees/codex+issue-91"},
+    )
+    with mock.patch.object(coordination, "_pid_alive", return_value=False):
+        out = self.doctor_output()
+    self.assertIn("orphaned claim valid0000001", out)
 ```
 
 The helper builds the existing complete base record, merges each override,
@@ -92,7 +115,7 @@ Run at host scope:
 python -m unittest discover -s tools/agent-coordination/tests -p test_coordination.py -k pid_spread
 ```
 
-Expected: `test_distinct_pid_spread_falls_back_to_age_only` fails because current `cmd_doctor` emits `orphaned claim spread000001`; the scope-preservation tests pass.
+Expected: `test_distinct_pid_spread_falls_back_to_age_only` fails because current `cmd_doctor` emits `orphaned claim spread000001`; the four scope-preservation tests pass.
 
 - [ ] **Step 3: Implement the minimum session-spread guard in `cmd_doctor`**
 
@@ -137,7 +160,7 @@ Run at host scope:
 python -m unittest discover -s tools/agent-coordination/tests -p test_coordination.py -k pid_spread
 ```
 
-Expected: all four PID-spread tests pass.
+Expected: all five PID-spread tests pass.
 
 - [ ] **Step 5: Run the complete repository verification**
 
