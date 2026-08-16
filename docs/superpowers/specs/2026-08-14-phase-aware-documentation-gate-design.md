@@ -50,9 +50,9 @@ Paths are matched against Git's repository-relative changed filenames.
 The roadmap may contain zero or one marker. Zero means that no mechanically
 reserved phase implementation surface is active. Duplicate markers,
 unrecognized fields, invalid JSON, or an invalid field value are blocking
-documentation findings rather than reasons to disable the gate. A marker in
-any other location, including a fenced example or the gate-change log, is also
-a blocking finding.
+documentation findings rather than reasons to disable the gate. Within the
+authoritative roadmap, a marker in any other location, including a fenced
+example or the gate-change log, is also a blocking finding.
 
 ## Lifecycle
 
