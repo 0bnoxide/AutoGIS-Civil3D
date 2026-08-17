@@ -194,6 +194,15 @@ def _invalid_gate(source, message):
     return None, [f"gate: {source} docs/roadmap.md: {message}"]
 
 
+def _reject_duplicate_members(pairs):
+    payload = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError("duplicate JSON member")
+        payload[key] = value
+    return payload
+
+
 def _valid_gate_path(path):
     if not isinstance(path, str) or not path.endswith("/"):
         return False
@@ -241,17 +250,9 @@ def _parse_phase_gate(text, source):
     match = PHASE_GATE_LINE.fullmatch(lines[index])
     if match is None:
         return _invalid_gate(source, "invalid phase-gate marker syntax")
-    def reject_duplicate_members(pairs):
-        payload = {}
-        for key, value in pairs:
-            if key in payload:
-                raise ValueError("duplicate JSON member")
-            payload[key] = value
-        return payload
-
     try:
         payload = json.loads(
-            match.group("payload"), object_pairs_hook=reject_duplicate_members
+            match.group("payload"), object_pairs_hook=_reject_duplicate_members
         )
     except json.JSONDecodeError:
         return _invalid_gate(source, "invalid JSON in phase-gate marker")
