@@ -265,7 +265,7 @@ def _parse_phase_gate(text, source):
     paths = payload["paths"]
     if type(phase) is not int or phase <= 0:
         return _invalid_gate(source, "phase must be a positive integer")
-    if payload["state"] != "blocked" or type(payload["state"]) is not str:
+    if type(payload["state"]) is not str or payload["state"] != "blocked":
         return _invalid_gate(source, "state must be 'blocked'")
     if (not isinstance(paths, list) or not paths or
             any(not _valid_gate_path(path) for path in paths) or
