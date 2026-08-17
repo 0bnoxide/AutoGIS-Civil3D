@@ -1166,16 +1166,18 @@ class TestDoctorLiveness(TempRepoCase):
         with open(lock, "w", encoding="utf-8") as fh:
             fh.write(content)
 
-    def write_claim(self, **overrides):
-        record = {"id": "abc123def456", "session": "sess-1", "harness": "",
-                  "pid": os.getpid(), "host": socket.gethostname(),
-                  "kind": "branch", "value": "feature-x",
-                  "created_utc": coordination._now()}
-        record.update(overrides)
+    def write_claims(self, *overrides):
+        base = {"id": "abc123def456", "session": "sess-1", "harness": "",
+                "pid": os.getpid(), "host": socket.gethostname(),
+                "kind": "branch", "value": "feature-x",
+                "created_utc": coordination._now()}
         data = coordination._empty_registry()
-        data["claims"].append(record)
+        data["claims"] = [{**base, **record} for record in overrides]
         os.makedirs(os.path.dirname(self.repo.registry_path), exist_ok=True)
         coordination._save(self.repo.registry_path, data)
+
+    def write_claim(self, **overrides):
+        self.write_claims(overrides)
 
     def test_pid_alive_true_for_own_process(self):
         snapshot = coordination._pid_snapshot()
@@ -1191,6 +1193,93 @@ class TestDoctorLiveness(TempRepoCase):
         out = self.doctor_output()
         self.assertIn("orphaned claim abc123def456", out)
         self.assertIn("release --force --id abc123def456", out)
+
+    def test_distinct_pid_spread_falls_back_to_age_only(self):
+        old = (_dt.datetime.now(_dt.timezone.utc)
+               - _dt.timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.write_claims(
+            {"id": "spread000001", "pid": 101, "created_utc": old},
+            {"id": "spread000002", "pid": "202", "created_utc": old,
+             "kind": "worktree", "value": ".worktrees/codex+issue-91"},
+        )
+        with mock.patch.object(coordination, "_pid_alive",
+                               return_value=False):
+            out = self.doctor_output()
+        self.assertNotIn("orphaned claim spread", out)
+        self.assertIn("stale-suspect claim spread000001", out)
+        self.assertIn("stale-suspect claim spread000002", out)
+
+    def test_pid_spread_rejects_repeated_dead_pid(self):
+        self.write_claims(
+            {"id": "repeat000001", "pid": 101},
+            {"id": "repeat000002", "pid": "101", "kind": "worktree",
+             "value": ".worktrees/codex+issue-91"},
+        )
+        with mock.patch.object(coordination, "_pid_alive",
+                               return_value=False):
+            out = self.doctor_output()
+        self.assertIn("orphaned claim repeat000001", out)
+        self.assertIn("orphaned claim repeat000002", out)
+
+    def test_pid_spread_is_scoped_to_session(self):
+        self.write_claims(
+            {"id": "sess10000001", "pid": 101, "session": "sess-1"},
+            {"id": "sess20000002", "pid": 202, "session": "sess-2"},
+        )
+        with mock.patch.object(coordination, "_pid_alive",
+                               return_value=False):
+            out = self.doctor_output()
+        self.assertIn("orphaned claim sess10000001", out)
+        self.assertIn("orphaned claim sess20000002", out)
+
+    def test_pid_spread_is_scoped_to_host(self):
+        self.write_claims(
+            {"id": "local0000001", "pid": 101},
+            {"id": "foreign00001", "pid": 202, "host": "elsewhere"},
+        )
+        with mock.patch.object(coordination, "_pid_alive",
+                               return_value=False):
+            out = self.doctor_output()
+        self.assertIn("orphaned claim local0000001", out)
+        self.assertNotIn("orphaned claim foreign00001", out)
+
+    def test_pid_spread_ignores_unusable_pid(self):
+        self.write_claims(
+            {"id": "valid0000001", "pid": 101},
+            {"id": "zero00000002", "pid": 0, "kind": "worktree",
+             "value": ".worktrees/codex+issue-91"},
+        )
+        with mock.patch.object(coordination, "_pid_alive",
+                               return_value=False):
+            out = self.doctor_output()
+        self.assertIn("orphaned claim valid0000001", out)
+
+    def test_pid_spread_ignores_adr_pid(self):
+        self.write_claims(
+            {"id": "valid0000001", "pid": 101},
+            {"id": "adr000000002", "pid": 202, "kind": "adr",
+             "value": "0005"},
+        )
+        with mock.patch.object(coordination, "_pid_alive",
+                               return_value=False):
+            out = self.doctor_output()
+        self.assertIn("orphaned claim valid0000001", out)
+        self.assertNotIn("orphaned claim adr000000002", out)
+
+    def test_pid_spread_ignores_unusable_session(self):
+        self.write_claim(session=["bad"], pid=101)
+        with mock.patch.object(coordination, "_pid_alive",
+                               return_value=False):
+            out = self.doctor_output()
+        self.assertIn("orphaned claim abc123def456", out)
+
+    def test_pid_spread_ignores_nonfinite_pid(self):
+        old = (_dt.datetime.now(_dt.timezone.utc)
+               - _dt.timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.write_claim(pid=float("inf"), created_utc=old)
+        out = self.doctor_output()
+        self.assertNotIn("orphaned claim abc123def456", out)
+        self.assertIn("stale-suspect claim abc123def456", out)
 
     def test_live_claim_not_reported_orphaned(self):
         self.write_claim()  # own pid, own host
