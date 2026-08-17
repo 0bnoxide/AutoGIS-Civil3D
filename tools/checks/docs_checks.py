@@ -9,8 +9,7 @@ Checks:
 2. transience— living documents carry no session-state or deixis.
 3. count     — living documents never numerically summarize a referenced list.
 4. gatelog   — the roadmap gate-change log only grows at the bottom.
-5. gate      — while the roadmap says Phase 0 implementation is unclaimable,
-               a change may not leave docs/ (the paper gate, made real).
+5. gate      — roadmap markers reserve phase-scoped implementation paths.
 
 Exit 0 clean, 1 findings, 3 operational failure.
 """
@@ -18,6 +17,7 @@ Exit 0 clean, 1 findings, 3 operational failure.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -55,7 +55,11 @@ COUNT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-GATE_MARKER = "may not be claimed until"
+PHASE_GATE_NAMESPACE = "docs-checks:phase-gate-"
+PHASE_GATE_TAG = f"{PHASE_GATE_NAMESPACE}v1"
+PHASE_GATE_LINE = re.compile(
+    rf"^<!-- {re.escape(PHASE_GATE_TAG)} (?P<payload>.+) -->$"
+)
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)#\s]+)(?:#[^)]*)?\)")
 CODE_SPAN_RE = re.compile(r"`[^`]*`")
 FENCE_RE = re.compile(r"^(```|~~~)")
@@ -186,31 +190,191 @@ def check_gatelog(root, baseline_ref):
     return []
 
 
-def check_gate(root, baseline_ref):
-    path = os.path.join(root, "docs", "roadmap.md")
-    if not os.path.exists(path):
-        return []
-    with open(path, encoding="utf-8") as fh:
-        roadmap = fh.read()
-    if GATE_MARKER not in roadmap:
-        return []
-    base = _resolve_baseline(root, baseline_ref)
-    proc = subprocess.run(
-        ["git", "diff", "--name-only", f"{base}...HEAD"],
-        cwd=root, capture_output=True, text=True, encoding='utf-8',
-    )
-    if proc.returncode != 0:
-        return []  # no baseline: gate not evaluable here
-    outside = [
-        f for f in proc.stdout.splitlines()
-        if f and not f.startswith("docs/")
+def _invalid_gate(source, message):
+    return None, [f"gate: {source} docs/roadmap.md: {message}"]
+
+
+def _reject_duplicate_members(pairs):
+    payload = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError("duplicate JSON member")
+        payload[key] = value
+    return payload
+
+
+def _valid_gate_path(path):
+    if not isinstance(path, str) or not path.endswith("/"):
+        return False
+    if (path.startswith(("/", "\\")) or
+            re.match(r"^[A-Za-z]:/", path) or
+            "\\" in path or any(char in path for char in "*?[")):
+        return False
+    parts = path[:-1].split("/")
+    return bool(parts) and all(part not in ("", ".", "..") for part in parts)
+
+
+def _phase_gate_slot(lines):
+    try:
+        index = lines.index("## Capability level") + 1
+    except ValueError:
+        return None
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    table_start = index
+    while index < len(lines) and lines[index].startswith("|"):
+        index += 1
+    if index == table_start:
+        return None
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    return index
+
+
+def _parse_phase_gate(text, source):
+    lines = text.splitlines()
+    locations = [
+        index for index, line in enumerate(lines)
+        if PHASE_GATE_NAMESPACE in line
     ]
-    if outside:
-        listed = ", ".join(outside[:5])
-        return [f"gate: docs/roadmap.md states Phase 0 implementation is "
-                f"unclaimable, but this change touches non-docs paths: "
-                f"{listed}. Record the authorization in the roadmap first"]
-    return []
+    if not locations:
+        return None, []
+    if len(locations) != 1:
+        return _invalid_gate(source, "duplicate phase-gate markers")
+
+    index = locations[0]
+    if index != _phase_gate_slot(lines):
+        return _invalid_gate(source, "invalid phase-gate marker placement")
+    if not lines[index].startswith(f"<!-- {PHASE_GATE_TAG} "):
+        return _invalid_gate(source, "unsupported phase-gate marker version")
+    match = PHASE_GATE_LINE.fullmatch(lines[index])
+    if match is None:
+        return _invalid_gate(source, "invalid phase-gate marker syntax")
+    try:
+        payload = json.loads(
+            match.group("payload"), object_pairs_hook=_reject_duplicate_members
+        )
+    except json.JSONDecodeError:
+        return _invalid_gate(source, "invalid JSON in phase-gate marker")
+    except ValueError:
+        return _invalid_gate(source, "duplicate keys in phase-gate marker")
+
+    if not isinstance(payload, dict) or set(payload) != {
+            "phase", "state", "paths"}:
+        return _invalid_gate(source, "invalid phase-gate marker schema")
+    phase = payload["phase"]
+    paths = payload["paths"]
+    if type(phase) is not int or phase <= 0:
+        return _invalid_gate(source, "phase must be a positive integer")
+    if type(payload["state"]) is not str or payload["state"] != "blocked":
+        return _invalid_gate(source, "state must be 'blocked'")
+    if (not isinstance(paths, list) or not paths or
+            any(not _valid_gate_path(path) for path in paths) or
+            len(set(paths)) != len(paths)):
+        return _invalid_gate(source, "paths must be unique valid prefixes")
+    return payload, []
+
+
+def _resolve_gate_base(root, baseline_ref):
+    try:
+        proc = subprocess.run(
+            ["git", "merge-base", baseline_ref, "HEAD"],
+            cwd=root, capture_output=True, text=True, encoding="utf-8",
+        )
+    except (OSError, UnicodeDecodeError):
+        return None
+    if proc.returncode != 0:
+        return None
+    base = proc.stdout.strip()
+    return base or None
+
+
+def _gate_baseline_roadmap(root, base):
+    try:
+        proc = subprocess.run(
+            ["git", "show", f"{base}:docs/roadmap.md"],
+            cwd=root, capture_output=True, text=True, encoding="utf-8",
+        )
+    except (OSError, UnicodeDecodeError):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _changed_paths(root, base):
+    try:
+        proc = subprocess.run(
+            ["git", "diff", "--name-status", "-z", "--find-renames",
+             f"{base}...HEAD"],
+            cwd=root, capture_output=True, text=True, encoding="utf-8",
+        )
+    except (OSError, UnicodeDecodeError):
+        return None
+    if proc.returncode != 0:
+        return None
+    fields = proc.stdout.split("\0")
+    paths = []
+    index = 0
+    while index < len(fields) and fields[index]:
+        status = fields[index]
+        index += 1
+        count = 2 if status.startswith("R") else 1
+        if index + count > len(fields):
+            return None
+        paths.extend(fields[index:index + count])
+        index += count
+    return list(dict.fromkeys(path for path in paths if path))
+
+
+def check_gate(root, baseline_ref):
+    base = _resolve_gate_base(root, baseline_ref)
+    if base is None:
+        return [f"gate: merge base could not be resolved from "
+                f"{baseline_ref}; phase reservations cannot be evaluated"]
+
+    baseline = _gate_baseline_roadmap(root, base)
+    if baseline is None:
+        return [f"gate: baseline roadmap could not be resolved from "
+                f"{base}; phase reservations cannot be evaluated"]
+
+    path = os.path.join(root, "docs", "roadmap.md")
+    current = ""
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as fh:
+            current = fh.read()
+
+    baseline_gate, baseline_findings = _parse_phase_gate(
+        baseline, "baseline"
+    )
+    current_gate, current_findings = _parse_phase_gate(current, "current")
+    findings = baseline_findings + current_findings
+    if findings:
+        return findings
+
+    reservations = {}
+    for gate in (baseline_gate, current_gate):
+        if gate is not None:
+            reservations.setdefault(gate["phase"], set()).update(gate["paths"])
+    if not reservations:
+        return []
+
+    changed = _changed_paths(root, base)
+    if changed is None:
+        return ["gate: changed paths could not be resolved; phase "
+                "reservations cannot be evaluated"]
+
+    blocked = {}
+    for phase, prefixes in reservations.items():
+        matches = sorted(
+            path for path in changed
+            if any(path.startswith(prefix) for prefix in prefixes)
+        )
+        if matches:
+            blocked[phase] = matches
+    return [
+        f"gate: Phase {phase} reserved paths block changed files: "
+        f"{', '.join(paths)}"
+        for phase, paths in sorted(blocked.items())
+    ]
 
 
 def main(argv=None):

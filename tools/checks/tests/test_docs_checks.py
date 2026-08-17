@@ -1,11 +1,13 @@
 """Fixtures proving each docs check fails on its defect and passes clean."""
 
 import os
+import json
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 CHECKS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, CHECKS_DIR)
@@ -84,15 +86,152 @@ class TestCounts(DocsFixture):
         self.assertEqual(docs_checks.check_counts(self.root), [])
 
 
-class GitDocsFixture(DocsFixture):
-    """Fixtures needing a git history for baseline comparisons."""
-
-    ROADMAP_V1 = (
-        "# Roadmap\n\n## Gate-change log\n\n"
+class TestPhaseGateMarker(DocsFixture):
+    ROADMAP = (
+        "# Roadmap\n\n## Capability level\n\n"
+        "| Phase | Capability | Status |\n"
+        "|---|---|---|\n"
+        "| 4 | Adapter | Authorized |\n\n"
+        "Capability prose.\n\n"
+        "## Gate-change log\n\n"
         "| Date | Decision | Recorded |\n|---|---|---|\n"
         "| 2026-08-02 | first | PR #1 |\n"
         "| 2026-08-03 | second | PR #2 |\n"
     )
+    VALID = (
+        '<!-- docs-checks:phase-gate-v1 '
+        '{"phase":4,"state":"blocked","paths":["src/reserved/"]} -->'
+    )
+
+    def placed(self, marker):
+        return self.ROADMAP.replace(
+            "\nCapability prose.\n",
+            f"\n{marker}\n\nCapability prose.\n",
+            1,
+        )
+
+    def test_no_marker_returns_no_policy(self):
+        self.assertEqual(
+            docs_checks._parse_phase_gate(self.ROADMAP, "current"),
+            (None, []),
+        )
+
+    def test_valid_marker_returns_policy(self):
+        gate, findings = docs_checks._parse_phase_gate(
+            self.placed(self.VALID), "current"
+        )
+        self.assertEqual(findings, [])
+        self.assertEqual(gate, {
+            "phase": 4,
+            "state": "blocked",
+            "paths": ["src/reserved/"],
+        })
+
+    def test_unsupported_marker_version_fails_closed(self):
+        marker = self.VALID.replace("phase-gate-v1", "phase-gate-v2")
+        gate, findings = docs_checks._parse_phase_gate(
+            self.placed(marker), "current"
+        )
+        self.assertIsNone(gate)
+        self.assertIn("unsupported", findings[0])
+
+    def test_malformed_marker_fails_closed(self):
+        marker = "<!-- docs-checks:phase-gate-v1 {not-json} -->"
+        gate, findings = docs_checks._parse_phase_gate(
+            self.placed(marker), "current"
+        )
+        self.assertIsNone(gate)
+        self.assertIn("invalid JSON", findings[0])
+
+    def test_duplicate_json_members_fail_closed(self):
+        marker = (
+            '<!-- docs-checks:phase-gate-v1 '
+            '{"phase":4,"state":"blocked",'
+            '"paths":["src/reserved/"],'
+            '"paths":["src/other/"]} -->'
+        )
+        gate, findings = docs_checks._parse_phase_gate(
+            self.placed(marker), "current"
+        )
+        self.assertIsNone(gate)
+        self.assertIn("duplicate", findings[0])
+
+    def test_duplicate_markers_fail_closed(self):
+        gate, findings = docs_checks._parse_phase_gate(
+            self.placed(f"{self.VALID}\n{self.VALID}"), "current"
+        )
+        self.assertIsNone(gate)
+        self.assertIn("duplicate", findings[0])
+
+    def test_schema_invalid_markers_fail_closed(self):
+        valid = {"phase": 4, "state": "blocked", "paths": ["src/reserved/"]}
+        payloads = [
+            [],
+            {"phase": 4, "state": "blocked"},
+            {**valid, "extra": 1},
+            {**valid, "phase": 0},
+            {**valid, "phase": -1},
+            {**valid, "phase": "4"},
+            {**valid, "phase": True},
+            {**valid, "state": "open"},
+            {**valid, "state": 1},
+            {**valid, "paths": "src/reserved/"},
+            {**valid, "paths": []},
+            {**valid, "paths": ["src/reserved/", "src/reserved/"]},
+            {**valid, "paths": [1]},
+        ]
+        bad_paths = [
+            "", "src/reserved", "src//reserved/", "src/./reserved/",
+            "src/../reserved/", "src\\reserved/", "/src/reserved/",
+            "C:/src/reserved/", "src/*/", "src/?/", "src/[/",
+        ]
+        payloads.extend({**valid, "paths": [path]} for path in bad_paths)
+
+        for payload in payloads:
+            marker = (
+                "<!-- docs-checks:phase-gate-v1 "
+                f"{json.dumps(payload, separators=(',', ':'))} -->"
+            )
+            with self.subTest(payload=payload):
+                gate, findings = docs_checks._parse_phase_gate(
+                    self.placed(marker), "current"
+                )
+                self.assertIsNone(gate)
+                self.assertTrue(findings)
+
+    def test_misplaced_markers_fail_closed(self):
+        cases = {
+            "before-table": self.ROADMAP.replace(
+                "## Capability level\n\n",
+                f"## Capability level\n\n{self.VALID}\n",
+                1,
+            ),
+            "after-prose": self.ROADMAP.replace(
+                "Capability prose.",
+                f"Capability prose.\n\n{self.VALID}",
+                1,
+            ),
+            "fenced-example": self.ROADMAP + f"\n```html\n{self.VALID}\n```\n",
+            "gate-log": self.ROADMAP.replace(
+                "## Gate-change log\n\n",
+                f"## Gate-change log\n\n{self.VALID}\n",
+                1,
+            ),
+        }
+        for name, roadmap in cases.items():
+            with self.subTest(name=name):
+                gate, findings = docs_checks._parse_phase_gate(
+                    roadmap, "current"
+                )
+                self.assertIsNone(gate)
+                self.assertIn("placement", findings[0])
+
+
+class GitDocsFixture(DocsFixture):
+    """Fixtures needing a git history for baseline comparisons."""
+
+    ROADMAP_V1 = TestPhaseGateMarker.ROADMAP
+    MARKER = TestPhaseGateMarker.VALID
 
     def setUp(self):
         super().setUp()
@@ -104,11 +243,26 @@ class GitDocsFixture(DocsFixture):
         git(["commit", "-q", "-m", "baseline"], self.root)
         self.baseline = "HEAD"
 
-    def commit_branch(self, message="change"):
-        git(["checkout", "-q", "-b", "feature"], self.root)
+    def roadmap_with_marker(self, marker=None, roadmap=None):
+        marker = marker or self.MARKER
+        roadmap = roadmap or self.ROADMAP_V1
+        return roadmap.replace(
+            "\nCapability prose.\n",
+            f"\n{marker}\n\nCapability prose.\n",
+            1,
+        )
+
+    def commit(self, message):
         git(["add", "-A", "."], self.root)
         git(["commit", "-q", "-m", message], self.root)
+
+    def start_branch(self):
+        git(["checkout", "-q", "-b", "feature"], self.root)
         self.baseline = "main"
+
+    def commit_branch(self, message="change"):
+        self.start_branch()
+        self.commit(message)
 
 
 class TestGatelog(GitDocsFixture):
@@ -135,36 +289,183 @@ class TestGatelog(GitDocsFixture):
 
 
 class TestGate(GitDocsFixture):
-    MARKER = ("\nImplementation of the phase itself is gated separately and "
-              "may not be claimed until the plan is approved.\n")
+    def activate(self, marker=None):
+        self.write("docs/roadmap.md", self.roadmap_with_marker(marker=marker))
+        self.commit("activate gate")
 
-    def test_non_docs_diff_fails_while_gated(self):
-        self.write("docs/roadmap.md", self.ROADMAP_V1 + self.MARKER)
-        git(["add", "-A", "."], self.root)
-        git(["commit", "-q", "-m", "add gate"], self.root)
-        self.write("src/code.py", "print('impl')\n")
+    def test_no_marker_allows_unrelated_change(self):
+        self.write("src/maintenance.py", "pass\n")
+        self.commit_branch()
+        self.assertEqual(docs_checks.check_gate(self.root, self.baseline), [])
+
+    def test_legacy_phrase_does_not_activate_gate(self):
+        self.write("docs/roadmap.md", self.ROADMAP_V1 +
+                   "\nmay not be claimed until a plan is approved.\n")
+        self.write("src/maintenance.py", "pass\n")
+        self.commit_branch()
+        self.assertEqual(docs_checks.check_gate(self.root, self.baseline), [])
+
+    def test_docs_only_marker_addition_passes(self):
+        self.write("docs/roadmap.md", self.roadmap_with_marker())
+        self.commit_branch()
+        self.assertEqual(docs_checks.check_gate(self.root, self.baseline), [])
+
+    def test_marker_addition_with_reserved_change_fails(self):
+        self.write("docs/roadmap.md", self.roadmap_with_marker())
+        self.write("src/reserved/new.py", "pass\n")
         self.commit_branch()
         findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertIn("Phase 4", findings[0])
+        self.assertIn("src/reserved/new.py", findings[0])
+
+    def test_active_marker_blocks_reserved_change(self):
+        self.activate()
+        self.write("src/reserved/code.py", "pass\n")
+        self.commit_branch()
+        findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertIn("Phase 4", findings[0])
+        self.assertIn("src/reserved/code.py", findings[0])
+
+    def test_active_marker_allows_unlisted_non_docs_change(self):
+        self.activate()
+        self.write("src/reserved-other/code.py", "pass\n")
+        self.commit_branch()
+        self.assertEqual(docs_checks.check_gate(self.root, self.baseline), [])
+
+    def test_docs_only_marker_removal_passes(self):
+        self.activate()
+        self.write("docs/roadmap.md", self.ROADMAP_V1)
+        self.commit_branch()
+        self.assertEqual(docs_checks.check_gate(self.root, self.baseline), [])
+
+    def test_marker_removal_with_reserved_change_fails(self):
+        self.activate()
+        self.write("docs/roadmap.md", self.ROADMAP_V1)
+        self.write("src/reserved/code.py", "pass\n")
+        self.commit_branch()
+        findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertIn("src/reserved/code.py", findings[0])
+
+    def test_rename_source_under_reserved_prefix_fails(self):
+        self.write("src/reserved/code.py", "pass\n")
+        self.activate()
+        self.start_branch()
+        git(["mv", "src/reserved/code.py", "src/code.py"], self.root)
+        self.commit("rename out")
+        findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertIn("src/reserved/code.py", findings[0])
+
+    def test_rename_destination_under_reserved_prefix_fails(self):
+        self.write("src/code.py", "pass\n")
+        self.activate()
+        self.start_branch()
+        os.makedirs(os.path.join(self.root, "src", "reserved"), exist_ok=True)
+        git(["mv", "src/code.py", "src/reserved/code.py"], self.root)
+        self.commit("rename in")
+        findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertIn("src/reserved/code.py", findings[0])
+
+    def test_marker_removal_with_reserved_rename_fails(self):
+        self.write("src/reserved/code.py", "pass\n")
+        self.activate()
+        self.start_branch()
+        self.write("docs/roadmap.md", self.ROADMAP_V1)
+        git(["mv", "src/reserved/code.py", "src/code.py"], self.root)
+        self.commit("remove gate and rename out")
+        findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertIn("src/reserved/code.py", findings[0])
+
+    def test_baseline_and_current_prefix_union_is_enforced(self):
+        old_marker = self.MARKER.replace("src/reserved/", "src/old/")
+        new_marker = self.MARKER.replace("src/reserved/", "src/new/")
+        self.activate(old_marker)
+        self.write("docs/roadmap.md", self.roadmap_with_marker(new_marker))
+        self.write("src/old/old.py", "pass\n")
+        self.write("src/new/new.py", "pass\n")
+        self.commit_branch()
+        findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertIn("src/old/old.py", findings[0])
+        self.assertIn("src/new/new.py", findings[0])
+
+    def test_change_after_marker_removal_passes(self):
+        self.activate()
+        self.write("docs/roadmap.md", self.ROADMAP_V1)
+        self.commit("remove gate on main")
+        self.write("src/reserved/code.py", "pass\n")
+        self.commit_branch()
+        self.assertEqual(docs_checks.check_gate(self.root, self.baseline), [])
+
+    def test_unavailable_baseline_fails_closed(self):
+        self.write("docs/roadmap.md", self.roadmap_with_marker())
+        self.commit_branch()
+        findings = docs_checks.check_gate(self.root, "missing-baseline")
         self.assertTrue(findings)
-        self.assertIn("src/code.py", findings[0])
+        self.assertIn("merge base", findings[0])
 
-    def test_docs_only_diff_passes_while_gated(self):
-        self.write("docs/roadmap.md", self.ROADMAP_V1 + self.MARKER)
-        git(["add", "-A", "."], self.root)
-        git(["commit", "-q", "-m", "add gate"], self.root)
-        self.write("docs/other.md", "prose\n")
+    def test_unrelated_baseline_with_roadmap_fails_closed(self):
+        git(["checkout", "-q", "--orphan", "unrelated"], self.root)
+        self.write("docs/roadmap.md", self.ROADMAP_V1)
+        self.commit("unrelated roadmap")
+        git(["checkout", "-q", "main"], self.root)
+        self.write("src/maintenance.py", "pass\n")
         self.commit_branch()
-        self.assertEqual(docs_checks.check_gate(self.root, self.baseline), [])
+        findings = docs_checks.check_gate(self.root, "unrelated")
+        self.assertTrue(findings)
+        self.assertIn("merge base", findings[0])
 
-    def test_gate_lifts_when_marker_removed_in_same_change(self):
-        self.write("docs/roadmap.md", self.ROADMAP_V1 + self.MARKER)
-        git(["add", "-A", "."], self.root)
-        git(["commit", "-q", "-m", "add gate"], self.root)
-        self.write("docs/roadmap.md",
-                   self.ROADMAP_V1 + "| 2026-08-04 | authorized | PR #9 |\n")
-        self.write("src/code.py", "print('impl')\n")
+    def test_changed_path_resolution_failure_fails_closed(self):
+        self.write("docs/roadmap.md", self.roadmap_with_marker())
+        self.write("src/reserved/new.py", "pass\n")
         self.commit_branch()
-        self.assertEqual(docs_checks.check_gate(self.root, self.baseline), [])
+        with mock.patch.object(docs_checks, "_changed_paths", return_value=None):
+            findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertTrue(findings)
+        self.assertIn("changed paths could not be resolved", findings[0])
+
+    def test_merge_base_decode_failure_fails_closed(self):
+        error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+        with mock.patch.object(docs_checks.subprocess, "run",
+                               side_effect=error):
+            findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertTrue(findings)
+        self.assertIn("merge base", findings[0])
+
+    def test_baseline_roadmap_decode_failure_fails_closed(self):
+        error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+        responses = [mock.Mock(returncode=0, stdout="base"), error]
+        with mock.patch.object(docs_checks.subprocess, "run",
+                               side_effect=responses):
+            findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertTrue(findings)
+        self.assertIn("baseline roadmap", findings[0])
+
+    def test_changed_paths_decode_failure_fails_closed(self):
+        self.write("docs/roadmap.md", self.roadmap_with_marker())
+        self.commit_branch()
+        error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+        responses = [
+            mock.Mock(returncode=0, stdout="base"),
+            mock.Mock(returncode=0, stdout=self.roadmap_with_marker()),
+            error,
+        ]
+        with mock.patch.object(docs_checks.subprocess, "run",
+                               side_effect=responses):
+            findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertTrue(findings)
+        self.assertIn("changed paths could not be resolved", findings[0])
+
+    def test_reserved_matches_are_sorted(self):
+        self.activate()
+        self.start_branch()
+        with mock.patch.object(
+                docs_checks, "_changed_paths",
+                return_value=["src/reserved/z.py", "src/reserved/a.py"]):
+            findings = docs_checks.check_gate(self.root, self.baseline)
+        self.assertEqual(
+            findings,
+            ["gate: Phase 4 reserved paths block changed files: "
+             "src/reserved/a.py, src/reserved/z.py"],
+        )
 
 
 if __name__ == "__main__":
