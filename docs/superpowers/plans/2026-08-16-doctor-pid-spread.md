@@ -1,20 +1,8 @@
 # Doctor Session PID-Spread Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
-**Goal:** Prevent `doctor` from reporting live sessions as dead-PID orphans when one session's claims record multiple transient wrapper PIDs.
-
-**Architecture:** Keep claim creation and process discovery unchanged. In `cmd_doctor`, derive the local sessions whose ordinary claims contain more than one usable PID, then route those sessions through the existing age-only fallback instead of the dead-PID orphan branch.
+**Design:** [Doctor Session PID-Spread Design](../specs/2026-08-16-doctor-pid-spread-design.md)
 
 **Tech Stack:** Python standard library, `unittest`, existing coordination test utilities.
-
-## Global Constraints
-
-- Group only ordinary claims on the local host with a non-empty string session and a positive integer-coercible PID.
-- ADR reservations, foreign-host claims, lock liveness, registry shape, claim creation, and process ancestry discovery do not change.
-- A session with one consistent PID retains current orphan detection.
-- Add no dependency, configuration, harness-name list, or new public interface.
-- Follow strict red-green TDD and run PID-liveness tests at host scope on Windows.
 
 ---
 
@@ -28,7 +16,7 @@
 - Consumes: claim dictionaries already returned by `list_claims(repo)` and the existing `_pid_alive(pid, snapshot) -> bool | None` probe.
 - Produces: unchanged `cmd_doctor(repo) -> int` CLI behavior, except multi-PID local sessions use the existing stale-suspect path.
 
-- [ ] **Step 1: Add a multi-claim test utility and eight focused behavior tests**
+#### Step 1: Add a multi-claim test utility and eight focused behavior tests
 
 Keep `write_claim(**overrides)` as the existing one-record convenience method and add a test-only `write_claims(*overrides)` helper that writes complete claim records. Add tests named:
 
@@ -132,7 +120,7 @@ stores all records in one `_empty_registry()`, and calls `_save()` once. Tests
 assert only real `doctor` output; the mock controls the external process-table
 boundary and receives no assertions.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+#### Step 2: Run the focused tests and verify RED
 
 Run at host scope:
 
@@ -147,7 +135,7 @@ pass. During implementation, run the malformed tests again whenever
 normalization or membership logic changes so regressions fail directly as
 uncaught test errors.
 
-- [ ] **Step 3: Implement the minimum session-spread guard in `cmd_doctor`**
+#### Step 3: Implement the minimum session-spread guard in `cmd_doctor`
 
 After `claims`, `now`, and `local_host` are available, derive unreliable sessions once:
 
@@ -183,7 +171,7 @@ if (record.get("host") == local_host
 
 Add `OverflowError` to `_pid_alive`'s matching conversion guard as well. Do not add a helper or change messages; falling through to the existing age branch is the feature.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+#### Step 4: Run focused tests and verify GREEN
 
 Run at host scope:
 
@@ -193,7 +181,7 @@ python -m unittest discover -s tools/agent-coordination/tests -p test_coordinati
 
 Expected: all eight PID-spread tests pass.
 
-- [ ] **Step 5: Run the complete repository verification**
+#### Step 5: Run the complete repository verification
 
 Run at host scope where noted:
 
@@ -207,7 +195,7 @@ python tools/checks/docs_checks.py
 
 Expected: every command exits `0`. Then scan both changed Python files with `sonar analyze secrets`, run `git diff --check`, and inspect the complete branch diff against `origin/main`.
 
-- [ ] **Step 6: Commit the implementation**
+#### Step 6: Commit the implementation
 
 ```powershell
 git add tools/agent-coordination/coordination.py tools/agent-coordination/tests/test_coordination.py docs/superpowers/plans/2026-08-16-doctor-pid-spread.md
