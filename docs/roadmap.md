@@ -41,7 +41,7 @@ Per the two-level rule, only the active phase — one whose Status is `Authorize
 
 The Phase 0 governing design ([`2026-08-02-repository-collaboration-architecture-design.md`](superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md), decision record [ADR-0002](adr/0002-agent-collaboration-and-main-protection.md)) remains the authority on the coordination model, including its blocking-core/deferred-hardening scope split and its claim-lifecycle invariants; they are not restated here.
 
-The Phase 4 governing design is [`2026-09-04-civil-production-accelerator-design.md`](superpowers/specs/2026-09-04-civil-production-accelerator-design.md), under [ADR-0006](adr/0006-civil-production-accelerator.md); it owns the `New Proposal` requirements and the rationale for the implementation paths reserved by the capability-level marker. The [adapter-foundation design](superpowers/specs/2026-09-04-phase-4-adapter-foundation-design.md) it partly supersedes still owns the adapter's targeting and reference-assembly decisions. The Phase 4 implementation plan is approved separately.
+The Phase 4 governing design is [`2026-09-04-civil-production-accelerator-design.md`](superpowers/specs/2026-09-04-civil-production-accelerator-design.md), under [ADR-0006](adr/0006-civil-production-accelerator.md); it owns the `New Proposal` requirements and the rationale for the implementation paths reserved by the capability-level marker. The [adapter-foundation design](superpowers/specs/2026-09-04-phase-4-adapter-foundation-design.md) it partly supersedes records its own surviving scope. The Phase 4 implementation plan is approved separately.
 
 ## Parking lot
 

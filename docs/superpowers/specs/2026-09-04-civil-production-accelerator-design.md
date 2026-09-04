@@ -60,6 +60,13 @@ needs it; abstractions are added only when a real slice needs them.
 Release 1 delivers one Civil 3D command, `New Proposal`, running inside
 Civil 3D. No standalone launcher.
 
+The concrete company conventions named in this section — the default
+project root, the three model drawing filenames and roles, and the three
+starter sheet titles — are the ones the owner supplied with this reset, and
+they are defaults owned by the standards manifest rather than constants in
+code. Every convention the owner has not supplied is listed under
+[open owner inputs](#open-owner-inputs) and is asked, never invented.
+
 Required inputs: client name, site name, proposal year, sheet orientation,
 sheet size. Optional inputs: client number, official project number,
 proposal number or provisional identifier, site address, project manager.

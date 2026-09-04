@@ -8,6 +8,8 @@ Version 1 carries one LandXML 1.2 TIN surface. DWG/DXF, multiple surfaces, produ
 
 Contract-valid means structurally and semantically conformant. It does not mean Civil 3D import-tested.
 
+This document scopes the LandXML handoff seam and nothing wider. Product direction and phase sequence are owned by [the roadmap](roadmap.md) and [ADR-0006](adr/0006-civil-production-accelerator.md), under which the Civil 3D adapter serves production workflows as well as this seam.
+
 ## Handoff assets
 
 - [V1 contract guide](../contract/v1/README.md) and its normative [JSON Schema](../contract/v1/handoff-manifest.schema.json)
