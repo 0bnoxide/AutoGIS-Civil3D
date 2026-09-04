@@ -104,10 +104,11 @@ central package file the repository already uses:
 
 Controls: the lock file the repository already restores in locked mode;
 `Private=false` on every Autodesk reference; and a build-time check that
-each resolved Autodesk assembly is in the expected series (25.0 for
-AutoCAD, 13.7 for Civil 3D), refusing a cross-release build, mirroring the
-check the diagnostic build script already performs. The check must be able
-to fail, and its failure is part of the acceptance evidence.
+the resolved AutoCAD assemblies are in the 25.0 series and `AeccDbMgd` is
+in the 13.7 series, refusing a cross-release build. `AecBaseMgd` is exempt:
+it carries its own 8.7 series, as the live run recorded. This mirrors
+exactly the check the diagnostic build script already performs. The check
+must be able to fail, and its failure is part of the acceptance evidence.
 
 This sourcing choice is a structural decision and is recorded as an ADR in
 the implementation pull request, with a number allocated per the agent
