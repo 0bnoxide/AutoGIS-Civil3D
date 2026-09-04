@@ -25,6 +25,8 @@ Each status records an owner decision, not live progress: whether authorized wor
 | 7 | Packaging and compatibility | Supported Civil 3D versions, bundle packaging, installation, security, and upgrades are validated | Identified |
 | 8 | Operational qualification and release | Authorized workstation qualification, sanitized evidence, support runbook, and release gate are complete | Identified |
 
+<!-- docs-checks:phase-gate-v1 {"phase":4,"state":"blocked","paths":["src/AutoGIS.Civil3D.Adapter/","tests/AutoGIS.Civil3D.Adapter.Tests/"]} -->
+
 Phases 1 and 2 ran ahead of Phase 0 by explicit owner decision (see gate-change log, 2026-08-02, and [ADR-0003](adr/0003-contract-slice-precedes-phase-0.md)) and were accepted together on 2026-08-04. The capability sequence above is otherwise unchanged; the deviation is recorded, not rewritten.
 
 Acceptance of Phases 1 and 2 does not carry any Civil 3D claim: contract-valid is not equivalent to Civil 3D import-tested, and the live import gate belongs to Phase 5.
@@ -38,6 +40,9 @@ Opening a phase requires its own owner decision, recorded in the gate-change log
 Per the two-level rule, only the active phase — one whose Status is `Authorized` — and the immediately next phase in the capability sequence carry delivery detail. That detail is a link to the governing design and plan under `docs/superpowers/`, never a restatement, so a phase transition changes only the Status column, the appended log row, and at most one delivery link. Later phases remain closed regardless of any plan document that mentions them.
 
 The Phase 0 governing design ([`2026-08-02-repository-collaboration-architecture-design.md`](superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md), decision record [ADR-0002](adr/0002-agent-collaboration-and-main-protection.md)) remains the authority on the coordination model, including its blocking-core/deferred-hardening scope split and its claim-lifecycle invariants; they are not restated here.
+
+The Phase 4 governing design is [`2026-09-04-phase-4-adapter-foundation-design.md`](superpowers/specs/2026-09-04-phase-4-adapter-foundation-design.md); it owns the rationale for the implementation paths reserved by the capability-level marker, and its implementation plan is approved separately.
+
 ## Parking lot
 
 Identified capabilities with no implementation authority and no sequence: alignments, profiles, corridors, pipe networks, multiple surfaces per package, bidirectional exchange, machine-readable CLI output, package signing or encryption, coordinate or datum transformation. Moving any item out of the parking lot is a gate-change-log decision.
