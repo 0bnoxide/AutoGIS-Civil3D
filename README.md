@@ -1,6 +1,6 @@
 # AutoGIS-Civil3D
 
-Contract-first handoff tooling between AutoGIS surface exports and a future Civil 3D adapter.
+A Civil Production Accelerator: deterministic, previewable, auditable automations that cut project setup, model checking, repetitive design production, and deliverable preparation time in Civil 3D. The first production workflow is `New Proposal`, a native command that scaffolds a proposal project ([ADR-0006](docs/adr/0006-civil-production-accelerator.md)).
 
 ## Current slice
 
@@ -9,7 +9,7 @@ Contract-first handoff tooling between AutoGIS surface exports and a future Civi
 - Synthetic golden packages for conformance and regression testing.
 - A preserved read-only Civil 3D diagnostic kit for later authorized workstation validation.
 
-Contract validation proves package conformance only. It does not prove that Civil 3D imported the surface.
+Contract validation proves package conformance only. It does not prove that Civil 3D imported the surface. The handoff contract and its validator are supported infrastructure beneath the production workflows the [roadmap](docs/roadmap.md) sequences.
 
 ## Quick start
 

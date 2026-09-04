@@ -26,13 +26,19 @@ preserved verbatim in
 
 ## Dependency rules
 
-- Product code (`contract/`, `src/`, `tests/`) never references Autodesk,
-  ArcGIS, or any agent tooling. The dependency direction of the contract
-  seam is recorded in [ADR-0001](adr/0001-handoff-contract-ownership.md).
+- Product code (`contract/`, `src/`, `tests/`) never references ArcGIS or
+  any agent tooling, and never references Autodesk outside
+  `src/AutoGIS.Civil3D.Adapter/`, the single product project permitted to.
+  The dependency direction of the contract seam is recorded in
+  [ADR-0001](adr/0001-handoff-contract-ownership.md).
+- The Civil production core (`src/AutoGIS.Civil3D.Proposal/`) validates,
+  plans, and defines verification and receipt contracts without touching an
+  Autodesk API or the filesystem; the adapter executes and verifies against
+  the host. Adapter → core and adapter → validator, never the reverse
+  ([ADR-0006](adr/0006-civil-production-accelerator.md)).
 - Agent and repository tooling (`tools/`, hooks, harness directories) never
   enters the product dependency graph or the shipped Civil 3D bundle
   ([ADR-0002](adr/0002-agent-collaboration-and-main-protection.md)).
-- A future Autodesk adapter depends on the validator, never the reverse.
 
 Phase sequence and gate state: [docs/roadmap.md](roadmap.md). Operating
 policy: [docs/agent-guide.md](agent-guide.md).
