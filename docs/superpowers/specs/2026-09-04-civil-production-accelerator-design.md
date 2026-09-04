@@ -1,9 +1,9 @@
 # Civil Production Accelerator, Phase 4 `New Proposal` — Design
 
-**Status:** Proposed 2026-09-04. Governs roadmap Phase 4 (authorized
-2026-08-13, [gate-change log](../../roadmap.md)) under
-[ADR-0006](../../adr/0006-civil-production-accelerator.md). Approval is an
-owner decision recorded on the pull request that merges this document.
+**Status:** Approved by the owner 2026-09-04, recorded in
+[issue #98](https://github.com/0bnoxide/AutoGIS-Civil3D/issues/98) and
+[ADR-0006](../../adr/0006-civil-production-accelerator.md). Governs roadmap
+Phase 4 (authorized 2026-08-13, [gate-change log](../../roadmap.md)).
 Implementation stays blocked until the separate Phase 4 implementation plan
 is approved and the roadmap marker this design reserves is removed, per the
 [phase-aware documentation gate](2026-08-14-phase-aware-documentation-gate-design.md).
@@ -43,9 +43,9 @@ health, grading and cut/fill QA, drainage-network audit, design-revision
 comparison, redline tracking, then controlled feature-line creation) belong
 to Phase 5. Parameter-driven design starters (building-pad preview, ditch
 and berm, standard assemblies, road, plant-site, preliminary pipe network,
-plan production) belong to Phase 6 and begin preview-only. A thin real
-alignment/profile inventory may serve as a Phase 5 walking skeleton while
-Phase 4 is underway if it stays small and does not delay `New Proposal`.
+plan production) belong to Phase 6 and begin preview-only. Phase 5 work,
+including an alignment/profile inventory walking skeleton, requires its own
+owner authorization in the [roadmap gate-change log](../../roadmap.md).
 
 Guardrails on that sequence: the large majority of near-term effort goes to
 the production foundation; internal tooling is never a milestone; every

@@ -3,18 +3,15 @@
 **Status:** Partly superseded 2026-09-04 by
 [ADR-0006](../../adr/0006-civil-production-accelerator.md) and the
 [Civil Production Accelerator design](2026-09-04-civil-production-accelerator-design.md),
-which governs roadmap Phase 4. Two decisions below no longer hold: the
-**Adapter seam** section, whose widening of the validator's public surface
-is deferred to the phase that implements import; and the scope bound under
-**Project and targeting** that the adapter contains no commands, no drawing
-access, and no extension-application entry point, since Phase 4 now ships a
-running command. The same bound appears as the first bullet under
-**Exclusions** and falls with it: imports and drawing reads stay out of
-Phase 4, but commands and transactions do not. The rest stands and governs
-the adapter project — targeting, reference-assembly sourcing and its series
-check, the known ceilings, and the remaining exclusions on bundling and
-installers, 2026 targeting, the frozen contract, the diagnostic kit, and
-parking-lot items. The reserved paths below remain reserved.
+which governs roadmap Phase 4. [ADR-0006](../../adr/0006-civil-production-accelerator.md#consequences)
+records which decisions below are superseded and which remain governing.
+The superseded scope bound also appears in **Acceptance evidence**,
+**Exclusions**, and **Known ceilings**: their no-drawing-access, no-live-load,
+and no-native-execution restrictions do not govern `New Proposal`. Its
+drawing creation, reads needed for verification, transactions, and live
+qualification follow the approved Civil Production Accelerator design.
+Phase 5 inspection workflows and package import remain outside Phase 4.
+The reserved paths below remain reserved.
 
 **Original status:** Proposed 2026-09-04. Governs roadmap Phase 4 (authorized
 2026-08-13, [gate-change log](../../roadmap.md)). Approval is an owner

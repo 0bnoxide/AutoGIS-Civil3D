@@ -130,10 +130,15 @@ and nothing else:
    stays as accepted in Phase 2.
 2. Its **scope bound** that the Phase 4 adapter contains no commands, no
    drawing access, and no extension-application entry point, and that
-   everything running inside Civil 3D belongs to Phase 5. Phase 4 now ships
-   a running command.
+   everything running inside Civil 3D belongs to Phase 5. This includes
+   repetitions of that bound in its acceptance evidence, exclusions, and
+   known ceilings. Phase 4 now ships and qualifies a running command,
+   including drawing creation, reads needed for verification, and
+   transactions within the approved `New Proposal` workflow. Phase 5
+   inspection workflows and package import remain deferred.
 
 Retained from that design, unchanged and load-bearing for the adapter:
 its project and targeting decisions, its reference-assembly sourcing
 decision and series check, its exclusions on contract and diagnostics, and
-its known ceilings.
+its reference-package availability and assembly-version compatibility
+ceilings. The no-native-execution ceiling is superseded above.
