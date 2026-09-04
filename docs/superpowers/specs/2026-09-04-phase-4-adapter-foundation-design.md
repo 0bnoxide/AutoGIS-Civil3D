@@ -1,6 +1,19 @@
 # Phase 4 Autodesk Adapter Foundation — Design
 
-**Status:** Proposed 2026-09-04. Governs roadmap Phase 4 (authorized
+**Status:** Partly superseded 2026-09-04 by
+[ADR-0006](../../adr/0006-civil-production-accelerator.md) and the
+[Civil Production Accelerator design](2026-09-04-civil-production-accelerator-design.md),
+which governs roadmap Phase 4. [ADR-0006](../../adr/0006-civil-production-accelerator.md#consequences)
+records which decisions below are superseded and which remain governing.
+The superseded scope bound also appears in **Acceptance evidence**,
+**Exclusions**, and **Known ceilings**: their no-drawing-access, no-live-load,
+and no-native-execution restrictions do not govern `New Proposal`. Its
+drawing creation, reads needed for verification, transactions, and live
+qualification follow the approved Civil Production Accelerator design.
+Phase 5 inspection workflows and package import remain outside Phase 4.
+The reserved paths below remain reserved.
+
+**Original status:** Proposed 2026-09-04. Governs roadmap Phase 4 (authorized
 2026-08-13, [gate-change log](../../roadmap.md)). Approval is an owner
 decision recorded on the pull request that merges this document; it
 approves the adapter seam and the build foundation only. Implementation

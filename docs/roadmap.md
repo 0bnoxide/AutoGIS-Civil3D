@@ -19,13 +19,13 @@ Each status records an owner decision, not live progress: whether authorized wor
 | 1 | Language-neutral handoff contract v1 | ZIP shape, JSON Schema, LandXML rules, safety limits, issue-code policy, and contract fixtures approved | Accepted |
 | 2 | Pure .NET 8 validator and CLI | Restore, build, and tests pass without Autodesk; deterministic valid and invalid fixtures prove the contract | Accepted |
 | 3 | AutoGIS producer adoption | AutoGIS emits conforming packages and passes cross-repository compatibility checks | Accepted |
-| 4 | Autodesk adapter foundation | Adapter seam approved; .NET Windows targeting and AutoCAD/Civil 3D SDK discovery established | Authorized |
-| 5 | Read-only Civil 3D integration | A contract-valid package can be inspected or imported without unapproved drawing mutation, with live evidence | Identified |
-| 6 | Controlled Civil 3D automation | Authorized writes have explicit transaction, rollback, idempotency, and audit behavior | Identified |
+| 4 | Civil production foundation | `New Proposal` runs natively in Civil 3D, scaffolding a proposal project through preview, explicit approval, verification, and receipt, and passes qualification on the owner's approved templates | Authorized |
+| 5 | Read-only Civil 3D inspection and design assistance | Design inventory, audit, and QA workflows, and inspection or import of a contract-valid package, run without unapproved drawing mutation, with live evidence | Identified |
+| 6 | Controlled Civil 3D automation and parameter-driven design starters | Preview-first generation and every other authorized write have explicit transaction, rollback, idempotency, and audit behavior | Identified |
 | 7 | Packaging and compatibility | Supported Civil 3D versions, bundle packaging, installation, security, and upgrades are validated | Identified |
 | 8 | Operational qualification and release | Authorized workstation qualification, sanitized evidence, support runbook, and release gate are complete | Identified |
 
-<!-- docs-checks:phase-gate-v1 {"phase":4,"state":"blocked","paths":["src/AutoGIS.Civil3D.Adapter/","tests/AutoGIS.Civil3D.Adapter.Tests/"]} -->
+<!-- docs-checks:phase-gate-v1 {"phase":4,"state":"blocked","paths":["src/AutoGIS.Civil3D.Adapter/","src/AutoGIS.Civil3D.Proposal/","tests/AutoGIS.Civil3D.Adapter.Tests/","tests/AutoGIS.Civil3D.Proposal.Tests/"]} -->
 
 Phases 1 and 2 ran ahead of Phase 0 by explicit owner decision (see gate-change log, 2026-08-02, and [ADR-0003](adr/0003-contract-slice-precedes-phase-0.md)) and were accepted together on 2026-08-04. The capability sequence above is otherwise unchanged; the deviation is recorded, not rewritten.
 
@@ -41,7 +41,7 @@ Per the two-level rule, only the active phase — one whose Status is `Authorize
 
 The Phase 0 governing design ([`2026-08-02-repository-collaboration-architecture-design.md`](superpowers/specs/2026-08-02-repository-collaboration-architecture-design.md), decision record [ADR-0002](adr/0002-agent-collaboration-and-main-protection.md)) remains the authority on the coordination model, including its blocking-core/deferred-hardening scope split and its claim-lifecycle invariants; they are not restated here.
 
-The Phase 4 governing design is [`2026-09-04-phase-4-adapter-foundation-design.md`](superpowers/specs/2026-09-04-phase-4-adapter-foundation-design.md); it owns the rationale for the implementation paths reserved by the capability-level marker, and its implementation plan is approved separately.
+The Phase 4 governing design is [`2026-09-04-civil-production-accelerator-design.md`](superpowers/specs/2026-09-04-civil-production-accelerator-design.md), under [ADR-0006](adr/0006-civil-production-accelerator.md); it owns the `New Proposal` requirements and the rationale for the implementation paths reserved by the capability-level marker. The [adapter-foundation design](superpowers/specs/2026-09-04-phase-4-adapter-foundation-design.md) it partly supersedes records its own surviving scope. The Phase 4 implementation plan is approved separately.
 
 ## Parking lot
 
@@ -62,3 +62,4 @@ Identified capabilities with no implementation authority and no sequence: alignm
 | 2026-08-10 | Owner authorized Phase 3. The phase advances to Authorized and becomes the active integration gate; implementation remains blocked until a plan under `docs/superpowers/plans/` is approved. Authorizes no later phase | PR #72 |
 | 2026-08-13 | Owner accepted the Phase 3 exit-gate evidence collected on issue #78; the phase advances to Accepted. The accepted evidence remains the bundle linked from issue #78. Authorizes no later phase | Issue #78; [approved gate-transition design](superpowers/specs/2026-08-13-phase-3-exit-gate-phase-4-authorization-design.md) |
 | 2026-08-13 | Owner authorized Phase 4. The phase advances to Authorized and becomes the active integration gate; implementation remains blocked until a Phase 4 design and plan under `docs/superpowers/` are approved. Authorizes no later phase | [Approved gate-transition design](superpowers/specs/2026-08-13-phase-3-exit-gate-phase-4-authorization-design.md) |
+| 2026-09-04 | Owner reset the product direction: "AutoGIS-Civil3D is a Civil Production Accelerator that uses deterministic, previewable, auditable automations to reduce project setup, model checking, repetitive design production, and deliverable preparation time." Phase 4's capability becomes the Civil production foundation with `New Proposal` as its first slice, and the Phase 5 and 6 capabilities are restated in production terms. Phases 0-3 and their accepted evidence are unchanged, no phase is renumbered, and contract v1, the validator, the CLI, the fixture corpus, and the diagnostic kit are unchanged. Authorizes no later phase | Issue #98; [ADR-0006](adr/0006-civil-production-accelerator.md); [Civil Production Accelerator design](superpowers/specs/2026-09-04-civil-production-accelerator-design.md) |
