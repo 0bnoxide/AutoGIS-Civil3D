@@ -126,7 +126,9 @@ public sealed class StandardsManifest
         ExactRoles(Sheets.Select(s => s.Role), SheetRoles);
         ExactRoles(SupportRecords.Select(s => s.Role), SupportRoles);
         Unique(Sheets.Select(s => s.Number));
-        ExactRoles(PropertyMappings.Select(p => p.Input), InputFields);
+        Require(PropertyMappings.All(p => InputFields.Contains(p.Input)) && PropertyMappings.Any(p => p.Input == "ClientNumber"),
+            "Map only known inputs and include ClientNumber for later metadata updates.", "propertyMappings");
+        Unique(PropertyMappings.Select(p => p.Input));
         Unique(PropertyMappings.Select(p => p.DstProperty));
         Unique(PropertyMappings.Select(p => p.TitleBlockAttribute));
         Require(Profiles.Length > 0, "Declare at least one sheet profile.");
@@ -258,7 +260,7 @@ public sealed class StandardsManifest
     private static void ExactRoles(IEnumerable<string> actual, IEnumerable<string> expected)
     {
         var values = actual.ToArray();
-        Require(values.Length == expected.Count() && values.ToHashSet(StringComparer.Ordinal).SetEquals(expected), "Roles or input mappings are missing, duplicated, or unknown.");
+        Require(values.Length == expected.Count() && values.ToHashSet(StringComparer.Ordinal).SetEquals(expected), "Roles are missing, duplicated, or unknown.");
     }
     private static void Unique(IEnumerable<string> values)
     {

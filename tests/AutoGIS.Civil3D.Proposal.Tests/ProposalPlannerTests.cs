@@ -12,6 +12,48 @@ public sealed class ProposalPlannerTests
     private static StandardsManifest Manifest() => StandardsManifest.Parse(StandardsManifestTests.FixtureBytes()).Manifest!;
     private static ProposalPlan Plan() => ProposalPlanner.Build(Inputs, Manifest()).Plan!;
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Mapping_subset_plans_only_declared_properties_and_preserves_all_configuration_inputs(bool clientNumberOnly)
+    {
+        string[] fields = clientNumberOnly ? ["ClientNumber"] :
+            ["ClientName", "ClientNumber", "ProjectManager", "ProjectNumber", "ProposalNumber", "SiteAddress", "SiteName"];
+        var parsed = StandardsManifestTests.Parse(StandardsManifestTests.FixtureWithMappings(fields));
+        Assert.Empty(parsed.Issues);
+        Assert.NotNull(parsed.Manifest);
+        var inputs = Inputs with { ProjectNumber = "P-2", ProposalNumber = "B-3", SiteAddress = "123 Test St.", ProjectManager = "Test Person" };
+        var first = ProposalPlanner.Build(inputs, parsed.Manifest).Plan!;
+        var updatedInputs = inputs with { ClientNumber = "TEST-CLIENT-1" };
+        var second = ProposalPlanner.Build(updatedInputs, parsed.Manifest).Plan!;
+
+        Assert.Equal(inputs, first.Configuration.Inputs);
+        Assert.Equal(updatedInputs, second.Configuration.Inputs);
+        Assert.Equal("C:/AutoGIS-Synthetic/Z_Proposal/2026/Test Client - Test Site", first.FinalRoot);
+        Assert.Equal(first.FinalRoot, second.FinalRoot);
+        Assert.Equal(first.Actions.Select(a => a.RelativePath), second.Actions.Select(a => a.RelativePath));
+        Assert.Equal(first.Actions.Select(a => a.Id), second.Actions.Select(a => a.Id));
+        Assert.NotEqual(first.ToJson(), second.ToJson());
+
+        var firstProperties = Assert.Single(first.Actions.Select(a => a.Data).OfType<SheetSetPropertiesData>()).Properties;
+        var secondProperties = Assert.Single(second.Actions.Select(a => a.Data).OfType<SheetSetPropertiesData>()).Properties;
+        Assert.Equal(fields, firstProperties.Select(p => p.Input));
+        Assert.Equal(fields, secondProperties.Select(p => p.Input));
+        Assert.Null(Assert.Single(firstProperties, p => p.Input == "ClientNumber").Value);
+        Assert.Equal(new PropertyValue("ClientNumber", "TEST-ClientNumber", "TEST-CLIENT-1"),
+            Assert.Single(secondProperties, p => p.Input == "ClientNumber"));
+        Assert.Equal(firstProperties.Where(p => p.Input != "ClientNumber"), secondProperties.Where(p => p.Input != "ClientNumber"));
+
+        var bindings = second.Actions.Select(a => a.Data).OfType<TitleBlockData>().ToArray();
+        Assert.Equal(3, bindings.Length);
+        Assert.All(bindings, binding =>
+        {
+            Assert.Equal(fields, binding.Mappings.Select(p => p.Input));
+            Assert.Equal(new PropertyMapping("ClientNumber", "TEST-ClientNumber", "TEST_CLIENTNUMBER"),
+                Assert.Single(binding.Mappings, p => p.Input == "ClientNumber"));
+        });
+    }
+
     [Fact]
     public void Final_output_paths_must_fit_windows_extended_path_limits()
     {

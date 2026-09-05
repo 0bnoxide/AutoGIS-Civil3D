@@ -12,6 +12,50 @@ public sealed class StandardsManifestTests
     internal static JsonNode Fixture() => JsonNode.Parse(FixtureBytes())!;
     internal static ManifestResult Parse(JsonNode node) => StandardsManifest.Parse(Encoding.UTF8.GetBytes(node.ToJsonString()));
 
+    internal static JsonNode FixtureWithMappings(params string[] inputs)
+    {
+        var json = Fixture();
+        json["propertyMappings"] = new JsonArray(json["propertyMappings"]!.AsArray()
+            .Where(p => inputs.Contains(p!["input"]!.GetValue<string>(), StringComparer.Ordinal))
+            .Select(p => p!.DeepClone()).ToArray());
+        return json;
+    }
+
+    [Theory]
+    [InlineData("ClientNumber")]
+    [InlineData("ClientName", "SiteName", "ClientNumber", "ProjectNumber", "ProposalNumber", "SiteAddress", "ProjectManager")]
+    public void Declared_known_mapping_subset_is_accepted(params string[] inputs)
+    {
+        var result = Parse(FixtureWithMappings(inputs));
+        Assert.Empty(result.Issues);
+        Assert.NotNull(result.Manifest);
+        Assert.Equal(inputs.Order(StringComparer.Ordinal), result.Manifest.PropertyMappings.Select(p => p.Input));
+        Assert.Equal(result.Manifest.ToJson(), StandardsManifest.Parse(Encoding.UTF8.GetBytes(result.Manifest.ToJson())).Manifest!.ToJson());
+    }
+
+    [Theory]
+    [InlineData("missingClientNumber")]
+    [InlineData("unknownInput")]
+    [InlineData("duplicateInput")]
+    [InlineData("caseVariantInput")]
+    [InlineData("dstCollision")]
+    [InlineData("titleBlockCollision")]
+    public void Incomplete_or_ambiguous_mapping_subset_has_no_value(string mutation)
+    {
+        var json = FixtureWithMappings("ClientName", "ClientNumber");
+        var mappings = json["propertyMappings"]!.AsArray();
+        switch (mutation)
+        {
+            case "missingClientNumber": mappings.RemoveAt(1); break;
+            case "unknownInput": mappings[0]!["input"] = "UnknownInput"; break;
+            case "duplicateInput": mappings[0]!["input"] = "ClientNumber"; break;
+            case "caseVariantInput": mappings[0]!["input"] = "clientnumber"; break;
+            case "dstCollision": mappings[0]!["dstProperty"] = "test-clientnumber"; break;
+            case "titleBlockCollision": mappings[0]!["titleBlockAttribute"] = "test_clientnumber"; break;
+        }
+        AssertInvalid(Parse(json), ProposalIssueCodes.InvalidManifest);
+    }
+
     [Fact]
     public void Canonical_manifest_roundtrips_all_operational_data()
     {
@@ -78,8 +122,6 @@ public sealed class StandardsManifestTests
     [InlineData("duplicateSheetNumber")]
     [InlineData("invalidGeometry")]
     [InlineData("missingPlaceholder")]
-    [InlineData("missingBinding")]
-    [InlineData("duplicateBinding")]
     public void Incomplete_or_conflicting_standards_have_no_value(string mutation)
     {
         var json = Fixture();
@@ -96,8 +138,6 @@ public sealed class StandardsManifestTests
             case "duplicateSheetNumber": json["sheets"]![1]!["number"] = "test-01"; break;
             case "invalidGeometry": json["profiles"]![0]!["placeholders"]![0]!["rectangle"]!["width"] = -1; break;
             case "missingPlaceholder": json["profiles"]![0]!["placeholders"]!.AsArray().RemoveAt(0); break;
-            case "missingBinding": json["propertyMappings"]!.AsArray().RemoveAt(0); break;
-            case "duplicateBinding": json["propertyMappings"]![1]!["dstProperty"] = "TEST-ClientName"; break;
         }
         AssertInvalid(Parse(json), ProposalIssueCodes.InvalidManifest);
     }
