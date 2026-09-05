@@ -10,7 +10,7 @@
 
 **Spec:** [Approved Civil Production Accelerator design](../specs/2026-09-04-civil-production-accelerator-design.md), under [ADR-0006](../../adr/0006-civil-production-accelerator.md).
 
-**Decision state:** Proposed for owner approval. Preparing or merging this plan does not by itself authorize implementation.
+**Decision state:** Approved by the owner 2026-09-04, recorded on [PR #102](https://github.com/0bnoxide/AutoGIS-Civil3D/pull/102). Implementation still requires the separate roadmap authorization change described below to merge first.
 
 ## Global constraints
 
