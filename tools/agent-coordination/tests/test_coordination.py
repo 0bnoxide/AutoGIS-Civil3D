@@ -989,6 +989,74 @@ class TestAdrAllocation(TempRepoCase):
         result = coordination.claim(self.repo, "s1", "adr", "")
         self.assertEqual(result["claimed"]["value"], "0005")
 
+    def write_index(self, rows):
+        with open(os.path.join(self.repo_path, "docs", "adr", "README.md"),
+                  "w", encoding="utf-8") as fh:
+            fh.write("# ADRs\n\n| ADR | Title | State |\n|---|---|---|\n"
+                     + rows + "\nAllocation policy updated in 2026.\n")
+
+    def test_fresh_registry_skips_permanently_consumed_index_number(self):
+        self.write_index("| 0005 | Consumed by allocation probe | — |\n")
+        result = coordination.claim(self.repo, "s1", "adr", "")
+        self.assertEqual(result["claimed"]["value"], "0006")
+
+    def test_index_links_also_raise_the_allocation_floor(self):
+        self.write_index("| [0008](0008-example.md) | Example | Accepted |\n")
+        result = coordination.claim(self.repo, "s1", "adr", "")
+        self.assertEqual(result["claimed"]["value"], "0009")
+
+    def test_registry_above_index_is_preserved(self):
+        for _ in range(3):
+            coordination.claim(self.repo, "s1", "adr", "")
+        self.write_index("| 0005 | Consumed by allocation probe | — |\n")
+        result = coordination.claim(self.repo, "s1", "adr", "")
+        self.assertEqual(result["claimed"]["value"], "0008")
+
+    def test_malformed_index_fails_closed_without_allocating(self):
+        for rows in ("| 000X | Consumed | — |\n",
+                     "| [0005 | Broken link | Accepted |\n"):
+            with self.subTest(rows=rows):
+                self.write_index(rows)
+                with self.assertRaises(coordination.RegistryError):
+                    coordination.claim(self.repo, "s1", "adr", "")
+                self.assertEqual(coordination.list_claims(self.repo), [])
+
+    def test_doctor_reports_index_ahead_of_registry(self):
+        self.write_index("| 0005 | Consumed by allocation probe | — |\n")
+        self.assertIn("ADR registry/index mismatch", self.doctor_output())
+        coordination.claim(self.repo, "s1", "adr", "")
+        self.assertNotIn("ADR registry/index mismatch", self.doctor_output())
+
+    def test_doctor_reports_malformed_index_without_crashing(self):
+        self.write_index("| unknown | Consumed | — |\n")
+        self.assertIn("invalid ADR index", self.doctor_output())
+
+    def test_invalid_utf8_index_fails_closed(self):
+        path = os.path.join(self.repo_path, "docs", "adr", "README.md")
+        with open(path, "wb") as fh:
+            fh.write(b"\xff")
+        with self.assertRaises(coordination.RegistryError):
+            coordination.claim(self.repo, "s1", "adr", "")
+        self.assertIn("invalid ADR index", self.doctor_output())
+
+    def test_unreadable_index_fails_closed(self):
+        os.mkdir(os.path.join(self.repo_path, "docs", "adr", "README.md"))
+        with self.assertRaises(coordination.RegistryError):
+            coordination.claim(self.repo, "s1", "adr", "")
+        self.assertIn("invalid ADR index", self.doctor_output())
+
+    def test_index_without_table_fails_closed(self):
+        path = os.path.join(self.repo_path, "docs", "adr", "README.md")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("# ADRs\n")
+        with self.assertRaises(coordination.RegistryError):
+            coordination.claim(self.repo, "s1", "adr", "")
+
+    def test_exhausted_number_space_fails_closed(self):
+        self.write_index("| 9999 | Consumed | — |\n")
+        with self.assertRaisesRegex(coordination.RegistryError, "exhausted"):
+            coordination.claim(self.repo, "s1", "adr", "")
+
     def test_concurrent_allocations_distinct(self):
         results = []
         def worker(session):

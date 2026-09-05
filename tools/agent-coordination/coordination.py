@@ -980,13 +980,44 @@ def claim(repo, session, kind, value, harness=""):
     return mutate_registry(repo, apply)
 
 
+def _adr_index_floor(repo):
+    """Read the durable index, including plain-number consumed-gap rows."""
+    path = os.path.join(repo.primary_root, "docs", "adr", "README.md")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except FileNotFoundError:
+        return 0  # Repositories without an ADR index still use filenames.
+    except (OSError, UnicodeError) as exc:
+        raise RegistryError(f"invalid ADR index: cannot read {path}") from exc
+    top = 0
+    found_header = False
+    for line in lines:
+        if not line.lstrip().startswith("|"):
+            continue
+        cell = line.split("|", 2)[1].strip()
+        if cell == "ADR":
+            found_header = True
+            continue
+        if re.fullmatch(r":?-+:?", cell):
+            continue
+        match = re.fullmatch(r"(?:\[([0-9]{4})\]\([^)]+\)|([0-9]{4}))", cell)
+        if not found_header or match is None:
+            raise RegistryError("invalid ADR index: expected a four-digit ADR "
+                                "link or consumed number in each table row")
+        top = max(top, int(match.group(1) or match.group(2)))
+    if not found_header:
+        raise RegistryError("invalid ADR index: missing ADR table header")
+    return top
+
+
 def _allocate_adr(repo, data, session, harness):
     """ADR numbers are tickets: allocated atomically, never reissued.
 
     The floor is max(existing docs/adr/NNNN-*.md, every prior allocation) —
     an allocation that never becomes a file leaves a permanent gap.
     """
-    top = 0
+    top = _adr_index_floor(repo)
     adr_dir = os.path.join(repo.primary_root, "docs", "adr")
     if os.path.isdir(adr_dir):
         for name in os.listdir(adr_dir):
@@ -996,6 +1027,8 @@ def _allocate_adr(repo, data, session, harness):
     for existing in data["claims"]:
         if existing["kind"] == "adr":
             top = max(top, int(existing["value"]))
+    if top >= 9999:
+        raise RegistryError("ADR number space exhausted (maximum 9999)")
     number = f"{top + 1:04d}"
     record = {
         "id": uuid.uuid4().hex[:12],
@@ -1324,7 +1357,24 @@ def cmd_doctor(repo):
     if os.path.exists(lock):
         findings.append(_lock_finding(lock, snapshot))
     try:
+        index_floor = _adr_index_floor(repo)
+    except RegistryError as exc:
+        findings.append(str(exc))
+        index_floor = None
+    try:
         claims = list_claims(repo)
+        registry_floor = max((int(record["value"]) for record in claims
+                              if isinstance(record, dict)
+                              and record.get("kind") == "adr"
+                              and isinstance(record.get("value"), str)
+                              and re.fullmatch(r"[0-9]{4}", record["value"])),
+                             default=0)
+        if index_floor is not None and registry_floor < index_floor:
+            findings.append(
+                "ADR registry/index mismatch: local allocation floor "
+                f"{registry_floor:04d} is below durable index {index_floor:04d}; "
+                "new allocations will honor the index"
+            )
         now = _dt.datetime.now(_dt.timezone.utc)
         local_host = socket.gethostname()
         session_pids = {}
