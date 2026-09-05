@@ -137,8 +137,13 @@ and nothing else:
    transactions within the approved `New Proposal` workflow. Phase 5
    inspection workflows and package import remain deferred.
 
-Retained from that design, unchanged and load-bearing for the adapter:
-its project and targeting decisions, its reference-assembly sourcing
+Retained from that design and load-bearing for the adapter:
+its project decisions, its reference-assembly sourcing
 decision and series check, its exclusions on contract and diagnostics, and
 its reference-package availability and assembly-version compatibility
 ceilings. The no-native-execution ceiling is superseded above.
+The original 2025 target, release-specific reference requirements, and
+exclusion of 2026 targeting are superseded by
+[ADR-0008](0008-civil3d-2026-development-target.md). That amendment retains
+the sourcing policy and requires a separate owner decision for any source
+change; package unavailability does not authorize installed-product discovery.

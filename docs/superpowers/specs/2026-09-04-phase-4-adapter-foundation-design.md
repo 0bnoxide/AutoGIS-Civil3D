@@ -5,6 +5,11 @@
 [Civil Production Accelerator design](2026-09-04-civil-production-accelerator-design.md),
 which governs roadmap Phase 4. [ADR-0006](../../adr/0006-civil-production-accelerator.md#consequences)
 records which decisions below are superseded and which remain governing.
+[ADR-0008](../../adr/0008-civil3d-2026-development-target.md) additionally
+replaces the 2025 development target and its release-specific references
+with the single 2026 target. It supersedes the 2026 targeting exclusion and
+Phase 7 deferral below, while preserving the sourcing policy and requiring
+a separate owner decision for a source change.
 The superseded scope bound also appears in **Acceptance evidence**,
 **Exclusions**, and **Known ceilings**: their no-drawing-access, no-live-load,
 and no-native-execution restrictions do not govern `New Proposal`. Its
@@ -93,12 +98,13 @@ One new product project, `src/AutoGIS.Civil3D.Adapter/`:
   that reference resolution is exercised rather than assumed. Phase 5 owns
   everything that runs inside Civil 3D.
 
-Single target: Civil 3D 2025 (`R25.0`), the pilot workstation's release.
-The boundary that makes 2026 routine is a rule, not code: the release
+Single development and qualification target:
+[ADR-0008](../../adr/0008-civil3d-2026-development-target.md).
+The release boundary is a rule, not code: the release
 appears only in the reference-assembly pins and the assembly's release
-stamp, never in namespaces, type names, or project names. A 2026 build is
-then a second set of pins and a second build configuration, and belongs to
-Phase 7 with the rest of packaging and compatibility.
+stamp, never in namespaces, type names, or project names. A second supported
+release requires a separate decision and belongs to Phase 7 with the rest
+of packaging and compatibility.
 
 A test project, `tests/AutoGIS.Civil3D.Adapter.Tests/`, is created only
 when the first logic that runs without Civil 3D lands there; Phase 4
@@ -110,17 +116,17 @@ validator suite.
 Compile against pinned NuGet reference assemblies, resolved through the
 central package file the repository already uses:
 
-- AutoCAD: the official `AutoCAD.NET` packages, 25.0 series.
-- Civil 3D: community-packaged `AecBaseMgd` and `AeccDbMgd` for 2025, the
-  packages the live diagnostic run verified. Autodesk publishes no
-  official Civil 3D managed reference package.
+- AutoCAD: the official `AutoCAD.NET` packages for the selected target.
+- Civil 3D: matching community-packaged `AecBaseMgd` and `AeccDbMgd`.
+  [ADR-0007](../../adr/0007-civil3d-2025-reference-sourcing.md) preserves the
+  historical package selection; its 2025 pins do not authorize substitution
+  for the target selected by ADR-0008.
 
 Controls: the lock file the repository already restores in locked mode;
 `Private=false` on every Autodesk reference; and a build-time check that
-the resolved AutoCAD assemblies are in the 25.0 series and `AeccDbMgd` is
-in the 13.7 series, refusing a cross-release build. `AecBaseMgd` is exempt:
-it carries its own 8.7 series, as the live run recorded. This mirrors
-exactly the check the diagnostic build script already performs. The check
+the resolved assemblies match the target series defined in ADR-0008,
+refusing a cross-release build. `AecBaseMgd` carries its own independent
+version series and must have matching release provenance. The check
 must be able to fail, and its failure is part of the acceptance evidence.
 
 This sourcing choice is a structural decision and is recorded as an ADR in
@@ -173,7 +179,7 @@ to Phase 5.
 - No Civil 3D commands, drawing reads, imports, or transactions (Phase 5
   and later).
 - No bundle, `PackageContents.xml`, installer, or signing work (Phase 7).
-- No Civil 3D 2026 targeting or multi-targeting (Phase 7).
+- No multi-targeting (Phase 7); the single target follows ADR-0008.
 - No contract change: v1 is frozen.
 - No change to the diagnostic kit or its preserved evidence.
 - No parking-lot items.
@@ -181,9 +187,9 @@ to Phase 5.
 ## Known ceilings
 
 - The Civil 3D reference packages are community-maintained. If they are
-  withdrawn or a release is not published, the fallback is installed-
-  product discovery on a Windows machine with Civil 3D, at the cost of CI
-  coverage for the adapter build. The ADR records this dependency.
+  withdrawn or the selected release is not published, dependent delivery
+  is blocked for an owner sourcing decision, per ADR-0008. Installed-product
+  discovery and a different CI runner are not automatic fallbacks.
 - The series check proves major.minor agreement, not binary compatibility
   with a specific Civil 3D update; the pilot run showed the reference and
   runtime builds differ in the fourth version part and bind correctly.

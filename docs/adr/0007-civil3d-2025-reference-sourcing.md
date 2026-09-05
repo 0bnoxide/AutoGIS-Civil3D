@@ -3,6 +3,13 @@
 **State:** Accepted
 **Date:** 2026-09-04
 
+**Target amendment:** [ADR-0008](0008-civil3d-2026-development-target.md)
+supersedes this ADR's 2025 target, exact pins, and release-specific series
+requirements for active development. The table and rationale below preserve
+the historical 2025 decision, not an authorized fallback for the new target.
+The pinned-package sourcing policy, non-copying references, fail-closed
+checks, and separate owner decision for a source change remain governing.
+
 ## Context
 
 The [retained adapter sourcing decision](../superpowers/specs/2026-09-04-phase-4-adapter-foundation-design.md#reference-assembly-sourcing),
