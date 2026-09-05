@@ -1005,6 +1005,25 @@ class TestAdrAllocation(TempRepoCase):
         result = coordination.claim(self.repo, "s1", "adr", "")
         self.assertEqual(result["claimed"]["value"], "0009")
 
+    def test_optional_markdown_outer_pipes_preserve_consumed_numbers(self):
+        for row in ("0007 | Consumed | — |\n",
+                    "0007 | Consumed | —\n",
+                    "| 0007 | Consumed | —\n"):
+            with self.subTest(row=row):
+                self.write_index(row)
+                self.assertEqual(coordination._adr_index_floor(self.repo), 7)
+        result = coordination.claim(self.repo, "s1", "adr", "")
+        self.assertEqual(result["claimed"]["value"], "0008")
+
+    def test_table_header_without_outer_pipes_is_supported(self):
+        path = os.path.join(self.repo_path, "docs", "adr", "README.md")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("ADR | Title | State\n---|---|---\n"
+                     "0007 | Consumed | —\n")
+        self.assertIn("ADR registry/index mismatch", self.doctor_output())
+        result = coordination.claim(self.repo, "s1", "adr", "")
+        self.assertEqual(result["claimed"]["value"], "0008")
+
     def test_registry_above_index_is_preserved(self):
         for _ in range(3):
             coordination.claim(self.repo, "s1", "adr", "")

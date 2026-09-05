@@ -993,9 +993,10 @@ def _adr_index_floor(repo):
     top = 0
     found_header = False
     for line in lines:
-        if not line.lstrip().startswith("|"):
+        row = line.strip()
+        if "|" not in row:
             continue
-        cell = line.split("|", 2)[1].strip()
+        cell = row.removeprefix("|").split("|", 1)[0].strip()
         if cell == "ADR":
             found_header = True
             continue
@@ -1014,8 +1015,8 @@ def _adr_index_floor(repo):
 def _allocate_adr(repo, data, session, harness):
     """ADR numbers are tickets: allocated atomically, never reissued.
 
-    The floor is max(existing docs/adr/NNNN-*.md, every prior allocation) —
-    an allocation that never becomes a file leaves a permanent gap.
+    The floor covers the durable index, existing docs/adr/NNNN-*.md, and
+    every prior local allocation. Unused allocations leave permanent gaps.
     """
     top = _adr_index_floor(repo)
     adr_dir = os.path.join(repo.primary_root, "docs", "adr")
