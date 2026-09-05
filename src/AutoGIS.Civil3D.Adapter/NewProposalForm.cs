@@ -7,7 +7,7 @@ internal sealed class NewProposalForm : Form
 {
     public ProposalApproval? ApprovedPlan { get; private set; }
     private readonly Dictionary<string, TextBox> fields = new();
-    private readonly TextBox previewText = new() { Name = "PreviewText", Multiline = true, ReadOnly = true, WordWrap = false, ScrollBars = ScrollBars.Both, Dock = DockStyle.Fill, Font = new Font("Consolas", 9) };
+    private readonly TextBox previewText = new() { Name = "PreviewText", Multiline = true, ReadOnly = true, WordWrap = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
     private readonly Button approve = new() { Name = "Approve", Text = "Approve preview", AutoSize = true, Enabled = false };
     private readonly Label status = new() { AutoSize = true, Text = "Select a standards manifest and enter the proposal inputs." };
     private readonly System.Windows.Forms.Timer dependencyCheck = new() { Interval = 2000 };
