@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Autodesk's managed API signatures also reference WindowsBase 8. -->
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+    <AssemblyMetadata Include="Civil3DSeries" Value="2025" />
+    <ProjectReference Include="../AutoGIS.Civil3D.Proposal/AutoGIS.Civil3D.Proposal.csproj" />
+    <PackageReference Include="AutoCAD.NET" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
+    <PackageReference Include="AutoCAD.NET.Core" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
+    <PackageReference Include="AutoCAD.NET.Model" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
+    <PackageReference Include="Chuongmep.Civil3D.Api.AecBaseMgd" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
+    <PackageReference Include="Chuongmep.Civil3D.Api.AeccDbMgd" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
+    <InternalsVisibleTo Include="AutoGIS.Civil3D.Adapter.Tests" />
+  </ItemGroup>
+  <PropertyGroup>
+    <AcMgdPath Condition="'$(AcMgdPath)' == ''">$(PkgAutoCAD_NET)/lib/net8.0/AcMgd.dll</AcMgdPath>
+    <AcCoreMgdPath Condition="'$(AcCoreMgdPath)' == ''">$(PkgAutoCAD_NET_Core)/lib/net8.0/AcCoreMgd.dll</AcCoreMgdPath>
+    <AcDbMgdPath Condition="'$(AcDbMgdPath)' == ''">$(PkgAutoCAD_NET_Model)/lib/net8.0/AcDbMgd.dll</AcDbMgdPath>
+    <AecBaseMgdPath Condition="'$(AecBaseMgdPath)' == ''">$(PkgChuongmep_Civil3D_Api_AecBaseMgd)/lib/net8/AecBaseMgd.dll</AecBaseMgdPath>
+    <AeccDbMgdPath Condition="'$(AeccDbMgdPath)' == ''">$(PkgChuongmep_Civil3D_Api_AeccDbMgd)/lib/net8/AeccDbMgd.dll</AeccDbMgdPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="AcMgd" HintPath="$(AcMgdPath)" Private="false" />
+    <Reference Include="AcCoreMgd" HintPath="$(AcCoreMgdPath)" Private="false" />
+    <Reference Include="AcDbMgd" HintPath="$(AcDbMgdPath)" Private="false" />
+    <Reference Include="AecBaseMgd" HintPath="$(AecBaseMgdPath)" Private="false" />
+    <Reference Include="AeccDbMgd" HintPath="$(AeccDbMgdPath)" Private="false" />
+  </ItemGroup>
+  <Target Name="ValidateAutodeskReferences" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <AutodeskReference Include="$(AcMgdPath);$(AcCoreMgdPath);$(AcDbMgdPath);$(AecBaseMgdPath);$(AeccDbMgdPath)" />
+    </ItemGroup>
+    <Error Condition="!Exists('%(AutodeskReference.Identity)')" Text="Missing Autodesk reference: %(AutodeskReference.Identity). Restore the pinned Civil 3D 2025 packages." />
+    <GetAssemblyIdentity AssemblyFiles="@(AutodeskReference)">
+      <Output TaskParameter="Assemblies" ItemName="AutodeskIdentity" />
+    </GetAssemblyIdentity>
+    <Error Condition="('%(AutodeskIdentity.Name)' == 'AcMgd' Or '%(AutodeskIdentity.Name)' == 'AcCoreMgd' Or '%(AutodeskIdentity.Name)' == 'AcDbMgd') And !$([System.String]::Copy('%(AutodeskIdentity.Version)').StartsWith('25.0.'))" Text="%(AutodeskIdentity.Name) is %(AutodeskIdentity.Version); expected Civil 3D 2025 series 25.0. Refusing a cross-version build." />
+    <Error Condition="'%(AutodeskIdentity.Name)' == 'AeccDbMgd' And !$([System.String]::Copy('%(AutodeskIdentity.Version)').StartsWith('13.7.'))" Text="AeccDbMgd is %(AutodeskIdentity.Version); expected Civil 3D 2025 series 13.7. Refusing a cross-version build." />
+  </Target>
+</Project>
