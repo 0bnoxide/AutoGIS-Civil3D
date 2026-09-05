@@ -60,7 +60,7 @@ Paths below are proposed implementation locations. Create them only when the tas
 | Task | New files and responsibility | Existing files to modify |
 |---|---|---|
 | 1 | `Proposal/AutoGIS.Civil3D.Proposal.csproj`, `ProposalInputs.cs`, `StandardsManifest.cs`, `ProposalPlan.cs`, `ProposalPlanner.cs`, `ProposalIssue.cs`; `Proposal.Tests/AutoGIS.Civil3D.Proposal.Tests.csproj`, `ProposalPlannerTests.cs`, `StandardsManifestTests.cs`, `ReferenceBoundaryTests.cs`, `Fixtures/synthetic-standards.json` | `AutoGIS.Civil3D.sln`; generated lock files for the new projects |
-| 2 | `Adapter/AutoGIS.Civil3D.Adapter.csproj`, `NewProposalCommand.cs`, `NewProposalForm.cs`, `ProposalPreview.cs`, `HostCompatibility.cs`; `Adapter.Tests/AutoGIS.Civil3D.Adapter.Tests.csproj`, `PreviewTests.cs`, `HostCompatibilityTests.cs` | `AutoGIS.Civil3D.sln`, `Directory.Build.props`, `Directory.Packages.props`; affected lock files; `docs/architecture.md`; allocated sourcing ADR and its index row |
+| 2 | `Adapter/AutoGIS.Civil3D.Adapter.csproj`, `NewProposalCommand.cs`, `NewProposalForm.cs`, `ProposalPreview.cs`, `ProposalApproval.cs`, `HostCompatibility.cs`; `Adapter.Tests/AutoGIS.Civil3D.Adapter.Tests.csproj`, `PreviewTests.cs`, `HostCompatibilityTests.cs` | `AutoGIS.Civil3D.sln`, `Directory.Build.props`, `Directory.Packages.props`; affected lock files; `docs/architecture.md`; allocated sourcing ADR and its index row |
 | 3 | `docs/diagnostics/new-proposal-native-probes.md` for sanitized procedure and interpretation; disposable probe code stays outside tracked product and diagnostic-kit files | The approved design only if an owner-approved clarification is needed |
 | 4 | `Proposal/RunReceipt.cs`, `Proposal/PreflightReport.cs`, `Proposal/VerificationReport.cs`; `Adapter/ProposalExecutor.cs`, `IProposalHost.cs`, `ProposalFiles.cs`; `Adapter.Tests/ProposalExecutorTests.cs`, `RecordingProposalHost.cs` | `Proposal/ProposalPlan.cs` only for the verified run contract |
 | 5 | `Adapter/NativeProposalHost.cs`, `DrawingWriter.cs`, `SheetSetWriter.cs`, `NativeProposalVerifier.cs`; `Adapter.Tests/NativePlanDispatchTests.cs` | `Adapter/NewProposalCommand.cs`, `NewProposalForm.cs`, and reference metadata if the proven Sheet Set API requires it |
@@ -141,7 +141,7 @@ The fixture must declare `Landscape`/`TEST-A1`; its template paths intentionally
 ## Task 2: Run the proposal preview inside Civil 3D
 
 **Consumes:** Task 1's parser and planner.
-**Produces:** Modal `NewProposalCommand.Run()` registered as `AUTOGISNEWPROPOSAL`; a wizard and `ProposalPreview.Write(ProposalPlan plan, TextWriter output)` that display the same plan later executed. No creation command is exposed yet.
+**Produces:** Modal `NewProposalCommand.Run()` registered as `AUTOGISNEWPROPOSAL`; a wizard and `ProposalPreview.Write(ProposalPlan plan, TextWriter output)` that display the same plan later executed. `ProposalApproval` is an immutable snapshot of that preview's canonical plan JSON and expected manifest/template fingerprints, with defensively copied collections. No creation command is exposed yet.
 
 - [ ] In the new adapter project, use `net8.0-windows`, x64, and the built-in Windows Forms support. Refactor only the target-framework assignment in `Directory.Build.props` to permit an explicit project target while preserving all common settings and diagnostic exclusions. Verify the effective target with `dotnet msbuild -getProperty:TargetFramework` for the adapter and existing handoff project. Do not create a second general-purpose build system.
 - [ ] Resolve and pin the retained 2025 reference packages, recording exact versions and provenance in the allocated sourcing ADR. Add non-copying references and locked restore. Adapt the existing assembly-series checks into the adapter build: an intentionally mismatched reference must fail. Confirm no Autodesk DLL is copied to the deliverable. Do not weaken checks or switch sources because a package is unavailable; record that blocker on the delivery issue.
@@ -158,7 +158,8 @@ foreach (var action in plan.Actions)
 
 Here `plan` is the valid result constructed with the Task 1 fixture and input expression; put that construction directly in `PreviewTests`, not in a new shared test library. Define `FinalRoot` and `Actions` on `ProposalPlan` in Task 1.
 
-- [ ] Implement the command's active-document and host checks using the diagnostic command as a read-only reference. The form collects the design's inputs, loads the selected standards manifest, and presents a readable plan. A change to input or manifest invalidates the preview and approval; closing the form or cancelling produces no output files. Display `Execution unavailable in preview build` while execution is unimplemented, and disable its control.
+- [ ] Implement the command's active-document and host checks using the diagnostic command as a read-only reference. The form collects the design's inputs, loads the selected standards manifest, and presents a readable plan. Capture the canonical plan JSON and expected SHA-256 fingerprints of the manifest and every selected template when constructing that preview, before the approval control can be used. A change to input, manifest, or template invalidates the preview and approval; closing the form or cancelling produces no output files. Display `Execution unavailable in preview build` while execution is unimplemented, and disable its control.
+- [ ] In `ProposalApproval.cs`, expose `PlanJson` and a read-only `DependencyFingerprints` path-to-digest map. Keep construction inside adapter orchestration and snapshot the values once; explicit approval passes that existing preview snapshot to the executor, never freshly captured expectations. Add tests for mutation attempts on the source collections, changed inputs, and manifest/template replacement after preview but before approval. The core still performs no filesystem or hashing calls.
 - [ ] Exercise the actual command in the retained host: missing active drawing, valid preview, invalid inputs, unsupported host, cancel, and edited input after preview. Compare filesystem snapshots before/after; there must be no proposal or staging artifacts. Record a timed comparison against manually determining the same setup actions. If the native host is unavailable, retain a build-only result and leave this milestone unaccepted.
 - [ ] Run ordinary adapter tests without Autodesk installed; if assembly discovery eagerly loads Autodesk types, separate the host entry point from the tested classes inside the same adapter project. Do not add a fake Autodesk assembly. Run the common checks, then commit the preview slice and publish the live evidence on its issue.
 
@@ -177,7 +178,7 @@ Here `plan` is the valid result constructed with the Task 1 fixture and input ex
 
 ## Task 4: Make execution and failure handling testable without Autodesk
 
-**Consumes:** Immutable approved plan; Task 3's lifecycle decision; a caller-provided run ID and time.
+**Consumes:** Immutable plan and Task 2's approved preview snapshot; Task 3's lifecycle decision; a caller-provided run ID and time.
 **Produces:** `ProposalExecutor.Run` and a receipt backed by observed results. `ProposalFiles` is adapter-local filesystem code; `IProposalHost` is the sole fakeable native boundary.
 
 ```csharp
@@ -188,7 +189,7 @@ public interface IProposalHost
     void CloseCreatedArtifacts();
     VerificationReport Verify(ProposalPlan plan, string artifactRoot);
 }
-// ProposalExecutor.Run(ProposalPlan plan, bool approved, IProposalHost host,
+// ProposalExecutor.Run(ProposalPlan plan, ProposalApproval? approval, IProposalHost host,
 //     Guid runId, DateTimeOffset startedAt, string failureReceiptDirectory) -> RunReceipt
 ```
 
@@ -198,7 +199,7 @@ The executor constructor takes no service container. `RecordingProposalHost` imp
 
 ```csharp
 // Execute each case with a fresh temporary workspace and RecordingProposalHost.
-var result = executor.Run(plan, false, host, Guid.NewGuid(), fixedTime, failureDirectory);
+var result = executor.Run(plan, null, host, Guid.NewGuid(), fixedTime, failureDirectory);
 Assert.Equal("Cancelled", result.Outcome);
 Assert.Empty(host.Mutations);
 Assert.False(Directory.Exists(plan.FinalRoot));
@@ -208,7 +209,7 @@ Assert.False(Directory.Exists(plan.FinalRoot));
 
 - [ ] Implement preflight: check final-root absence, root containment, readable required templates, writable approved locations, and native `Inspect` results before creating proposal artifacts. Recheck relevant facts immediately before mutation. Reject reparse points in target/staging paths or their traversed ancestors; use case-insensitive Windows containment with a separator boundary. All leaf creation is exclusive; target races fail rather than merge. Preserve foreign files even when cleanup would otherwise be convenient.
 - [ ] Reserve a unique sibling staging directory, record ownership, and execute only its planned actions. Never adopt an existing staging directory. Track created handles and ensure close is attempted on success and failure. Verify using the host's independent readback, close verification handles, and compare its observations with the plan. Only then promote without overwrite, using Task 3's approved receipt-publication sequence.
-- [ ] Keep plan identity and template/manifest fingerprints with the approved run. Revalidate them before execution; if inputs or dependencies changed, invalidate approval and rebuild the preview. Keep fingerprints in adapter orchestration, not in the pure planner. Restrict cleanup to the exact owned root and known generated entries; report unexpected entries or locked handles instead of broad recursive deletion.
+- [ ] Require `plan.ToJson()` to match `approval.PlanJson` and compare current dependencies against `approval.DependencyFingerprints` before mutation. Never replace the expected fingerprints with values captured when `Run` starts. Test manifest/template changes both after preview but before approval and after approval but before execution: each refuses execution, creates no staging/final artifacts, and requires a new preview and explicit approval. Revalidate at the native use boundary or consume the exact verified bytes so a later replacement cannot silently change the approved content. Keep fingerprints in adapter orchestration, not in the pure planner. Restrict cleanup to the exact owned root and known generated entries; report unexpected entries or locked handles instead of broad recursive deletion.
 - [ ] Store failure receipts outside the disposable root, without overwriting an earlier receipt. Report receipt-storage failure to the user and retain the diagnostic context; never report success merely because exception handling completed. Test absence of write permission, process-interruption leftovers and safe refusal on rerun, target races, locked files, and foreign staging entries. No repair/resume mode is added.
 - [ ] Run `dotnet test tests/AutoGIS.Civil3D.Adapter.Tests -c Release --filter ProposalExecutorTests` until the real filesystem and fake-host cases pass. Run the common checks and commit the executor with its tests. Leave execution disabled in the command until Task 5 passes.
 
