@@ -2,42 +2,6 @@
   "version": 2,
   "dependencies": {
     "net8.0-windows7.0": {
-      "AutoCAD.NET": {
-        "type": "Direct",
-        "requested": "[25.0.1, )",
-        "resolved": "25.0.1",
-        "contentHash": "57MbBZyhQh6nM16w/tF88uXPUascZygGfYBzE9QsuaXjM/baPArjaTnAJmvfnkzgKLsXtZrJAzr2rCtxVygPiQ==",
-        "dependencies": {
-          "AutoCAD.NET.Core": "[25.0.0]"
-        }
-      },
-      "AutoCAD.NET.Core": {
-        "type": "Direct",
-        "requested": "[25.0.0, )",
-        "resolved": "25.0.0",
-        "contentHash": "jPwsZgVs+4xqXtMLWJjgb4WSSzbb7YGbgn/BqT7LGPRthQb/93CmRZyuSgfjjSK8EgL+YsfRuRYVvYNGHrw3TA==",
-        "dependencies": {
-          "AutoCAD.NET.Model": "[25.0.0]"
-        }
-      },
-      "AutoCAD.NET.Model": {
-        "type": "Direct",
-        "requested": "[25.0.0, )",
-        "resolved": "25.0.0",
-        "contentHash": "XGKd/R/MZ5oHFEMOtxHh9L307ss6XSnW4S0JSC3UkRjvdgv8rTygXkqz+vGoRoUl8IWU/ooskfVT/qOikFfteA=="
-      },
-      "Chuongmep.Civil3D.Api.AecBaseMgd": {
-        "type": "Direct",
-        "requested": "[2025.0.0, )",
-        "resolved": "2025.0.0",
-        "contentHash": "SQTr5JCTJAIUImwfQC7Ax9wVxqvJB5wIqWsBRU/7uVUdkZo4UQtY2Qc0zzF52dlaUYwQpf+HqBBYhJso/nFQgQ=="
-      },
-      "Chuongmep.Civil3D.Api.AeccDbMgd": {
-        "type": "Direct",
-        "requested": "[2025.0.0, )",
-        "resolved": "2025.0.0",
-        "contentHash": "ZsFbHAYRryFXvPX2qqbLrioNN6c9SMokQMKe/xSVpv0gz751ihu3QUq+XiRSL7g1sl4NeL4pOi/jRjuWsA0nyg=="
-      },
       "autogis.civil3d.proposal": {
         "type": "Project"
       }

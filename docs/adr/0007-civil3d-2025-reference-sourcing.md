@@ -5,10 +5,11 @@
 
 **Target amendment:** [ADR-0008](0008-civil3d-2026-development-target.md)
 supersedes this ADR's 2025 target, exact pins, and release-specific series
-requirements for active development. The table and rationale below preserve
-the historical 2025 decision, not an authorized fallback for the new target.
-The pinned-package sourcing policy, non-copying references, fail-closed
-checks, and separate owner decision for a source change remain governing.
+requirements and package source for active development. ADR-0008 records the
+owner-approved installed Civil 3D 2026 SDK source and dedicated Windows CI
+runner. The table and rationale below preserve the historical 2025 decision,
+not an authorized fallback for the new target. Non-copying references and
+fail-closed checks remain governing.
 
 ## Context
 

@@ -24,7 +24,7 @@ public sealed class NewProposalCommand
             if (!HostCompatibility.IsSupported(typeof(Document).Assembly.GetName().Version,
                 CivilVersion(), Environment.Is64BitProcess))
             {
-                document.Editor.WriteMessage("\nNew Proposal requires Civil 3D 2025 (AutoCAD 25.0 / Civil 13.7), x64.");
+                document.Editor.WriteMessage("\nNew Proposal requires Civil 3D 2026 (AutoCAD 25.1 / Civil 13.8), x64.");
                 return;
             }
             using var form = new NewProposalForm();
@@ -32,7 +32,7 @@ public sealed class NewProposalCommand
         }
         catch (System.Exception ex) when (ex is FileNotFoundException or FileLoadException or BadImageFormatException or TypeLoadException)
         {
-            document.Editor.WriteMessage("\nNew Proposal could not load the Civil 3D 2025 API. Run it inside the supported Civil 3D host.");
+            document.Editor.WriteMessage("\nNew Proposal could not load the Civil 3D 2026 API. Run it inside the supported Civil 3D host.");
         }
     }
 

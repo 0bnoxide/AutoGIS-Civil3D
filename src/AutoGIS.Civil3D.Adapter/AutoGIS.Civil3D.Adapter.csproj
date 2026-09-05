@@ -7,21 +7,17 @@
   <ItemGroup>
     <!-- Autodesk's managed API signatures also reference WindowsBase 8. -->
     <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
-    <AssemblyMetadata Include="Civil3DSeries" Value="2025" />
+    <AssemblyMetadata Include="Civil3DSeries" Value="2026" />
     <ProjectReference Include="../AutoGIS.Civil3D.Proposal/AutoGIS.Civil3D.Proposal.csproj" />
-    <PackageReference Include="AutoCAD.NET" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
-    <PackageReference Include="AutoCAD.NET.Core" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
-    <PackageReference Include="AutoCAD.NET.Model" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
-    <PackageReference Include="Chuongmep.Civil3D.Api.AecBaseMgd" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
-    <PackageReference Include="Chuongmep.Civil3D.Api.AeccDbMgd" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
     <InternalsVisibleTo Include="AutoGIS.Civil3D.Adapter.Tests" />
   </ItemGroup>
   <PropertyGroup>
-    <AcMgdPath Condition="'$(AcMgdPath)' == ''">$(PkgAutoCAD_NET)/lib/net8.0/AcMgd.dll</AcMgdPath>
-    <AcCoreMgdPath Condition="'$(AcCoreMgdPath)' == ''">$(PkgAutoCAD_NET_Core)/lib/net8.0/AcCoreMgd.dll</AcCoreMgdPath>
-    <AcDbMgdPath Condition="'$(AcDbMgdPath)' == ''">$(PkgAutoCAD_NET_Model)/lib/net8.0/AcDbMgd.dll</AcDbMgdPath>
-    <AecBaseMgdPath Condition="'$(AecBaseMgdPath)' == ''">$(PkgChuongmep_Civil3D_Api_AecBaseMgd)/lib/net8/AecBaseMgd.dll</AecBaseMgdPath>
-    <AeccDbMgdPath Condition="'$(AeccDbMgdPath)' == ''">$(PkgChuongmep_Civil3D_Api_AeccDbMgd)/lib/net8/AeccDbMgd.dll</AeccDbMgdPath>
+    <Civil3DInstallRoot Condition="'$(Civil3DInstallRoot)' == ''">C:\Program Files\Autodesk\AutoCAD 2026</Civil3DInstallRoot>
+    <AcMgdPath Condition="'$(AcMgdPath)' == ''">$(Civil3DInstallRoot)\AcMgd.dll</AcMgdPath>
+    <AcCoreMgdPath Condition="'$(AcCoreMgdPath)' == ''">$(Civil3DInstallRoot)\AcCoreMgd.dll</AcCoreMgdPath>
+    <AcDbMgdPath Condition="'$(AcDbMgdPath)' == ''">$(Civil3DInstallRoot)\AcDbMgd.dll</AcDbMgdPath>
+    <AecBaseMgdPath Condition="'$(AecBaseMgdPath)' == ''">$(Civil3DInstallRoot)\ACA\AecBaseMgd.dll</AecBaseMgdPath>
+    <AeccDbMgdPath Condition="'$(AeccDbMgdPath)' == ''">$(Civil3DInstallRoot)\C3D\AeccDbMgd.dll</AeccDbMgdPath>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="AcMgd" HintPath="$(AcMgdPath)" Private="false" />
@@ -34,11 +30,12 @@
     <ItemGroup>
       <AutodeskReference Include="$(AcMgdPath);$(AcCoreMgdPath);$(AcDbMgdPath);$(AecBaseMgdPath);$(AeccDbMgdPath)" />
     </ItemGroup>
-    <Error Condition="!Exists('%(AutodeskReference.Identity)')" Text="Missing Autodesk reference: %(AutodeskReference.Identity). Restore the pinned Civil 3D 2025 packages." />
+    <Error Condition="!Exists('%(AutodeskReference.Identity)')" Text="Missing Autodesk reference: %(AutodeskReference.Identity). Install Civil 3D 2026 or set Civil3DInstallRoot or the individual assembly path property." />
     <GetAssemblyIdentity AssemblyFiles="@(AutodeskReference)">
       <Output TaskParameter="Assemblies" ItemName="AutodeskIdentity" />
     </GetAssemblyIdentity>
-    <Error Condition="('%(AutodeskIdentity.Name)' == 'AcMgd' Or '%(AutodeskIdentity.Name)' == 'AcCoreMgd' Or '%(AutodeskIdentity.Name)' == 'AcDbMgd') And !$([System.String]::Copy('%(AutodeskIdentity.Version)').StartsWith('25.0.'))" Text="%(AutodeskIdentity.Name) is %(AutodeskIdentity.Version); expected Civil 3D 2025 series 25.0. Refusing a cross-version build." />
-    <Error Condition="'%(AutodeskIdentity.Name)' == 'AeccDbMgd' And !$([System.String]::Copy('%(AutodeskIdentity.Version)').StartsWith('13.7.'))" Text="AeccDbMgd is %(AutodeskIdentity.Version); expected Civil 3D 2025 series 13.7. Refusing a cross-version build." />
+    <Error Condition="('%(AutodeskIdentity.Name)' == 'AcMgd' Or '%(AutodeskIdentity.Name)' == 'AcCoreMgd' Or '%(AutodeskIdentity.Name)' == 'AcDbMgd') And !$([System.String]::Copy('%(AutodeskIdentity.Version)').StartsWith('25.1.'))" Text="%(AutodeskIdentity.Name) is %(AutodeskIdentity.Version); expected Civil 3D 2026 series 25.1. Refusing a cross-version build." />
+    <Error Condition="'%(AutodeskIdentity.Name)' == 'AecBaseMgd' And !$([System.String]::Copy('%(AutodeskIdentity.Version)').StartsWith('8.8.'))" Text="AecBaseMgd is %(AutodeskIdentity.Version); expected Civil 3D 2026 series 8.8. Refusing a cross-version build." />
+    <Error Condition="'%(AutodeskIdentity.Name)' == 'AeccDbMgd' And !$([System.String]::Copy('%(AutodeskIdentity.Version)').StartsWith('13.8.'))" Text="AeccDbMgd is %(AutodeskIdentity.Version); expected Civil 3D 2026 series 13.8. Refusing a cross-version build." />
   </Target>
 </Project>

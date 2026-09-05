@@ -7,9 +7,9 @@ which governs roadmap Phase 4. [ADR-0006](../../adr/0006-civil-production-accele
 records which decisions below are superseded and which remain governing.
 [ADR-0008](../../adr/0008-civil3d-2026-development-target.md) additionally
 replaces the 2025 development target and its release-specific references
-with the single 2026 target. It supersedes the 2026 targeting exclusion and
-Phase 7 deferral below, while preserving the sourcing policy and requiring
-a separate owner decision for a source change.
+with the single 2026 target. It supersedes the 2026 targeting exclusion,
+Phase 7 deferral, and NuGet sourcing policy below with the owner-approved
+installed SDK source and dedicated Windows CI runner.
 The superseded scope bound also appears in **Acceptance evidence**,
 **Exclusions**, and **Known ceilings**: their no-drawing-access, no-live-load,
 and no-native-execution restrictions do not govern `New Proposal`. Its
@@ -113,30 +113,25 @@ validator suite.
 
 ### Reference-assembly sourcing
 
-Compile against pinned NuGet reference assemblies, resolved through the
-central package file the repository already uses:
+Compile against the Civil 3D 2026 SDK installed on the dedicated Windows CI
+runner. A single overridable install-root property defaults to the normal
+Windows installation path; the existing per-assembly path overrides remain
+for controlled negative probes. `Private=false` applies to every Autodesk
+reference, so no Autodesk assembly is copied to output or redistributed.
 
-- AutoCAD: the official `AutoCAD.NET` packages for the selected target.
-- Civil 3D: matching community-packaged `AecBaseMgd` and `AeccDbMgd`.
-  [ADR-0007](../../adr/0007-civil3d-2025-reference-sourcing.md) preserves the
-  historical package selection; its 2025 pins do not authorize substitution
-  for the target selected by ADR-0008.
+Controls: locked restore for the repository's remaining package dependencies
+and a build-time check that the resolved assemblies match the target series
+defined in ADR-0008, refusing a cross-release build. `AecBaseMgd` carries
+the independent `8.8` version series and must have matching installed-release
+provenance. The check must be able to fail, and its failure is part of the
+acceptance evidence.
 
-Controls: the lock file the repository already restores in locked mode;
-`Private=false` on every Autodesk reference; and a build-time check that
-the resolved assemblies match the target series defined in ADR-0008,
-refusing a cross-release build. `AecBaseMgd` carries its own independent
-version series and must have matching release provenance. The check
-must be able to fail, and its failure is part of the acceptance evidence.
+ADR-0008 records this owner-approved sourcing change; no new ADR is needed.
+[ADR-0007](../../adr/0007-civil3d-2025-reference-sourcing.md) preserves the
+historical 2025 package decision and is not a fallback.
 
-This sourcing choice is a structural decision and is recorded as an ADR in
-the implementation pull request, with a number allocated per the agent
-guide, not in this design.
-
-Rejected alternatives: discovering an installed Civil 3D at build time
-(the foundation could then never be verified in CI; kept as the diagnostic
-kit's documented path, not the product's); vendoring Autodesk assemblies
-into the repository (license).
+Rejected alternatives: vendoring Autodesk assemblies into the repository
+(license); using general PR jobs on the daily development workstation.
 
 ## Implementation boundary
 
@@ -158,9 +153,8 @@ product code under [ADR-0004](../../adr/0004-one-adversarial-review-proportioned
 Collected on a Phase 4 gate issue and cited by the eventual gate-change-log
 row, following the Phase 0 and Phase 3 pattern:
 
-- The adapter project restoring in locked mode and building on `main` in
-  the existing CI job, at zero warnings, on a runner with no Autodesk
-  product installed.
+- The adapter project restoring in locked mode and building on the dedicated
+  Windows CI runner with Civil 3D 2026 installed, at zero warnings.
 - The assembly-series check demonstrably failing-capable: one recorded
   build refused with a wrong-series reference.
 - The seam members public and exercised by the validator suite, with the
