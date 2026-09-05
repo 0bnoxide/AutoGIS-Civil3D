@@ -100,11 +100,11 @@ One new product project, `src/AutoGIS.Civil3D.Adapter/`:
 
 Single development and qualification target:
 [ADR-0008](../../adr/0008-civil3d-2026-development-target.md).
-The release boundary is a rule, not code: the release
-appears only in the reference-assembly pins and the assembly's release
-stamp, never in namespaces, type names, or project names. A second supported
-release requires a separate decision and belongs to Phase 7 with the rest
-of packaging and compatibility.
+The release boundary is a rule, not code: the release appears only in the
+installed SDK reference paths and the assembly's release stamp, never in
+namespaces, type names, or project names. A second supported release requires
+a separate decision and belongs to Phase 7 with the rest of packaging and
+compatibility.
 
 A test project, `tests/AutoGIS.Civil3D.Adapter.Tests/`, is created only
 when the first logic that runs without Civil 3D lands there; Phase 4
@@ -159,14 +159,15 @@ row, following the Phase 0 and Phase 3 pattern:
   build refused with a wrong-series reference.
 - The seam members public and exercised by the validator suite, with the
   validator still building and testing with no Autodesk dependency.
-- The sourcing ADR accepted and the
+- The ADR-0008 sourcing amendment accepted and the
   [architecture map](../../architecture.md) naming the adapter as the one
   product project that may reference Autodesk.
 
-No live load is required. The runtime binding of a NuGet-compiled DLL to
-the workstation's assemblies is already recorded evidence; repeating it
-with a command-free assembly proves nothing new, and live evidence belongs
-to Phase 5.
+No live load is required. The preserved 2025 diagnostic evidence includes
+runtime binding of a NuGet-compiled DLL to that workstation's assemblies; it
+does not qualify the installed-SDK adapter. Repeating binding with a
+command-free assembly proves nothing new, and live evidence belongs to
+Phase 5.
 
 ## Exclusions
 
@@ -180,10 +181,9 @@ to Phase 5.
 
 ## Known ceilings
 
-- The Civil 3D reference packages are community-maintained. If they are
-  withdrawn or the selected release is not published, dependent delivery
-  is blocked for an owner sourcing decision, per ADR-0008. Installed-product
-  discovery and a different CI runner are not automatic fallbacks.
+- The installed Civil 3D 2026 SDK and dedicated Windows CI runner are required
+  build inputs. A different source or runner requires an owner decision, per
+  ADR-0008.
 - The series check proves major.minor agreement, not binary compatibility
   with a specific Civil 3D update; the pilot run showed the reference and
   runtime builds differ in the fourth version part and bind correctly.
