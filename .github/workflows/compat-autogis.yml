@@ -38,9 +38,9 @@ jobs:
           cache: true
           cache-dependency-path: '**/packages.lock.json'
       - name: Restore
-        run: dotnet restore AutoGIS.Civil3D.sln --locked-mode
+        run: dotnet restore src/AutoGIS.Civil3D.Handoff.Cli/AutoGIS.Civil3D.Handoff.Cli.csproj --locked-mode
       - name: Build
-        run: dotnet build AutoGIS.Civil3D.sln -c Release --no-restore
+        run: dotnet build src/AutoGIS.Civil3D.Handoff.Cli/AutoGIS.Civil3D.Handoff.Cli.csproj -c Release --no-restore
       - name: Validator legs (clean / warning / negative control)
         run: python tools/checks/compat_smoke.py
       - name: Checkout AutoGIS at the pin (read-only deploy key)

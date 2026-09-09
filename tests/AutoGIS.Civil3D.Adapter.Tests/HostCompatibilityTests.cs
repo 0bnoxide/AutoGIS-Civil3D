@@ -19,4 +19,19 @@ public sealed class HostCompatibilityTests
             autocad is null ? null : Version.Parse(autocad),
             civil is null ? null : Version.Parse(civil), is64Bit));
     }
+
+    [Theory]
+    [InlineData("25.1.0.0", "13.8.0.1516", true, "PASS", "observed AutoCAD 25.1.0.0, Civil 13.8.0.1516, x64")]
+    [InlineData("25.0.0.0", null, true, "FAIL", "observed AutoCAD 25.0.0.0, Civil unavailable, x64")]
+    public void BindingReportNamesResultTargetAndObservedHost(
+        string autocad, string? civil, bool is64Bit, string result, string observation)
+    {
+        string report = HostCompatibility.BindingReport(
+            Version.Parse(autocad), civil is null ? null : Version.Parse(civil), is64Bit);
+
+        Assert.Contains($"AUTOGISPROPOSALSMOKE {result}", report, StringComparison.Ordinal);
+        Assert.Contains("target Civil 3D 2026 (AutoCAD 25.1 / Civil 13.8, x64)", report, StringComparison.Ordinal);
+        Assert.Contains(observation, report, StringComparison.Ordinal);
+        Assert.Contains("Host binding only; proposal creation was not tested.", report, StringComparison.Ordinal);
+    }
 }

@@ -7,9 +7,10 @@ which governs roadmap Phase 4. [ADR-0006](../../adr/0006-civil-production-accele
 records which decisions below are superseded and which remain governing.
 [ADR-0008](../../adr/0008-civil3d-2026-development-target.md) additionally
 replaces the 2025 development target and its release-specific references
-with the single 2026 target. It supersedes the 2026 targeting exclusion,
-Phase 7 deferral, and NuGet sourcing policy below with the owner-approved
-installed SDK source and dedicated Windows CI runner.
+with the single 2026 target. [ADR-0009](../../adr/0009-hosted-ci-manual-integration.md)
+then supersedes ADR-0008's installed-SDK source and dedicated-runner policy;
+the approved [hosted-CI/manual-integration design](2026-09-08-hosted-ci-manual-integration-design.md)
+governs preview build delivery and the separate native handoff.
 The superseded scope bound also appears in **Acceptance evidence**,
 **Exclusions**, and **Known ceilings**: their no-drawing-access, no-live-load,
 and no-native-execution restrictions do not govern `New Proposal`. Its
@@ -85,10 +86,11 @@ One new product project, `src/AutoGIS.Civil3D.Adapter/`:
   repository-wide settings inherited from `Directory.Build.props`, which
   gains a general opt-out for projects that declare their own target
   framework instead of the diagnostics-only name test it carries today.
-- References the validator library and the five base managed Autodesk
-  assemblies (`AcCoreMgd`, `AcDbMgd`, `AcMgd`, `AecBaseMgd`, `AeccDbMgd`)
-  as `Private=false`; nothing Autodesk is ever copied to output or
-  redistributed.
+- References the validator library and the three AutoCAD compile assemblies
+  (`AcCoreMgd`, `AcDbMgd`, `AcMgd`) supplied by Autodesk's pinned packages.
+  Runtime assets are excluded; nothing Autodesk is copied to output or
+  redistributed. The Civil assembly identity is resolved only inside the
+  guarded runtime host check.
 - A member of `AutoGIS.Civil3D.sln`, so the existing CI restore, build,
   test, and format steps cover it without workflow changes. CI already
   runs on Windows runners.
@@ -101,7 +103,7 @@ One new product project, `src/AutoGIS.Civil3D.Adapter/`:
 Single development and qualification target:
 [ADR-0008](../../adr/0008-civil3d-2026-development-target.md).
 The release boundary is a rule, not code: the release appears only in the
-installed SDK reference paths and the assembly's release stamp, never in
+central package pins, build property, and assembly's release stamp, never in
 namespaces, type names, or project names. A second supported release requires
 a separate decision and belongs to Phase 7 with the rest of packaging and
 compatibility.
@@ -113,25 +115,16 @@ validator suite.
 
 ### Reference-assembly sourcing
 
-Compile against the Civil 3D 2026 SDK installed on the dedicated Windows CI
-runner. A single overridable install-root property defaults to the normal
-Windows installation path; the existing per-assembly path overrides remain
-for controlled negative probes. `Private=false` applies to every Autodesk
-reference, so no Autodesk assembly is copied to output or redistributed.
+Compile the AutoCAD surface from Autodesk's `AutoCAD.NET`,
+`AutoCAD.NET.Core`, and `AutoCAD.NET.Model` packages pinned to 25.1.0, as
+specified by [ADR-0009](../../adr/0009-hosted-ci-manual-integration.md). Locked
+restore, excluded runtime assets, resolved-name and 25.1-series checks, and
+product-only artifact validation prevent an Autodesk binary from entering the
+preview. The guarded Civil identity lookup validates the installed 13.8 API at
+runtime; it is not a general reference source for future Civil operations.
 
-Controls: locked restore for the repository's remaining package dependencies
-and a build-time check that the resolved assemblies match the target series
-defined in ADR-0008, refusing a cross-release build. `AecBaseMgd` carries
-the independent `8.8` version series and must have matching installed-release
-provenance. The check must be able to fail, and its failure is part of the
-acceptance evidence.
-
-ADR-0008 records this owner-approved sourcing change; no new ADR is needed.
-[ADR-0007](../../adr/0007-civil3d-2025-reference-sourcing.md) preserves the
-historical 2025 package decision and is not a fallback.
-
-Rejected alternatives: vendoring Autodesk assemblies into the repository
-(license); using general PR jobs on the daily development workstation.
+[ADR-0007](../../adr/0007-civil3d-2025-reference-sourcing.md) and ADR-0008
+preserve the historical source decisions they record; neither is a fallback.
 
 ## Implementation boundary
 
@@ -153,21 +146,21 @@ product code under [ADR-0004](../../adr/0004-one-adversarial-review-proportioned
 Collected on a Phase 4 gate issue and cited by the eventual gate-change-log
 row, following the Phase 0 and Phase 3 pattern:
 
-- The adapter project restoring in locked mode and building on the dedicated
-  Windows CI runner with Civil 3D 2026 installed, at zero warnings.
-- The assembly-series check demonstrably failing-capable: one recorded
-  build refused with a wrong-series reference.
+- The adapter project restores in locked mode, builds and runs its unit tests
+  on ordinary hosted Windows CI, and produces the product-only 2026 preview
+  artifact with the exact commit and product DLL hashes.
+- The target/reference checks demonstrably fail: an unsupported year or
+  missing, misnamed, or wrong-series AutoCAD reference refuses the build.
 - The seam members public and exercised by the validator suite, with the
   validator still building and testing with no Autodesk dependency.
 - The ADR-0008 sourcing amendment accepted and the
   [architecture map](../../architecture.md) naming the adapter as the one
   product project that may reference Autodesk.
 
-No live load is required. The preserved 2025 diagnostic evidence includes
-runtime binding of a NuGet-compiled DLL to that workstation's assemblies; it
-does not qualify the installed-SDK adapter. Repeating binding with a
-command-free assembly proves nothing new, and live evidence belongs to
-Phase 5.
+Build-only merge eligibility does not replace native evidence. The manual
+preview handoff under ADR-0009 checks `NETLOAD`, command binding and the modal
+preview on the licensed 2026 host. Complete workflow qualification remains a
+Phase 4 acceptance requirement.
 
 ## Exclusions
 
@@ -181,9 +174,8 @@ Phase 5.
 
 ## Known ceilings
 
-- The installed Civil 3D 2026 SDK and dedicated Windows CI runner are required
-  build inputs. A different source or runner requires an owner decision, per
-  ADR-0008.
+- Hosted compilation covers the current AutoCAD API surface only. Future Civil
+  API operations still need a supported reference source and native evidence.
 - The series check proves major.minor agreement, not binary compatibility
   with a specific Civil 3D update; the pilot run showed the reference and
   runtime builds differ in the fourth version part and bind correctly.

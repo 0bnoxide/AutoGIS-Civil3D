@@ -64,7 +64,10 @@ The single development and native-qualification target is Civil 3D 2026,
 as directed by the owner in
 [ADR-0008](../../adr/0008-civil3d-2026-development-target.md). This target
 decision does not establish runtime support; the acceptance evidence below
-is still required. Additional releases need a separate decision.
+is still required. [ADR-0009](../../adr/0009-hosted-ci-manual-integration.md)
+and its [design](2026-09-08-hosted-ci-manual-integration-design.md) govern the
+hosted preview build and separate manual integration handoff. Additional
+releases need a separate decision.
 
 The concrete company conventions named in this section — the default
 project root, the three model drawing filenames and roles, and the three

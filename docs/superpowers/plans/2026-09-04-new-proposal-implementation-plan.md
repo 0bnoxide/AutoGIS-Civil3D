@@ -19,7 +19,7 @@ The design owns requirements. Read its [workflow and release boundary](../specs/
 - The [roadmap](../../roadmap.md) owns implementation authority; later phases remain closed.
 - The Proposal library performs no filesystem, clock, random-number, environment, network, or Autodesk calls. The adapter supplies observed facts and run identity.
 - Preserve the contract, validator, CLI, fixture corpus, diagnostic kit, and diagnostic evidence. Reuse their patterns, not their mutable workflow or package-import seam.
-- Follow the [adapter targeting and reference sourcing decisions](../specs/2026-09-04-phase-4-adapter-foundation-design.md#reference-assembly-sourcing) as qualified by ADR-0006 and ADR-0008. ADR-0008 authorizes the installed Civil 3D 2026 SDK and dedicated Windows CI runner; a different reference source still needs its own owner decision.
+- Follow the [hosted-CI/manual-integration amendment](2026-09-08-hosted-ci-manual-integration.md) under [ADR-0009](../../adr/0009-hosted-ci-manual-integration.md) for current reference sourcing, preview artifacts, and manual host evidence. ADR-0008 continues to own the single Civil 3D 2026 target.
 - Use the existing central package versions and lock files. No mocking framework, service container, plugin framework, background service, or standalone launcher.
 - Company conventions are manifest data. Synthetic test values must be clearly labeled and cannot be selected for a production run.
 - A core or preview task is an enabling deliverable, not a completed production workflow. Do not enable the execution button until Tasks 3–5 pass.
@@ -144,7 +144,7 @@ The fixture must declare `Landscape`/`TEST-A1`; its template paths intentionally
 **Produces:** Modal `NewProposalCommand.Run()` registered as `AUTOGISNEWPROPOSAL`; a wizard and `ProposalPreview.Write(ProposalPlan plan, TextWriter output)` that display the same plan later executed. `ProposalApproval` is an immutable snapshot of that preview's canonical plan JSON and expected manifest/template fingerprints, with defensively copied collections. No creation command is exposed yet.
 
 - [ ] In the new adapter project, use `net8.0-windows`, x64, and the built-in Windows Forms support. Refactor only the target-framework assignment in `Directory.Build.props` to permit an explicit project target while preserving all common settings and diagnostic exclusions. Verify the effective target with `dotnet msbuild -getProperty:TargetFramework` for the adapter and existing handoff project. Do not create a second general-purpose build system.
-- [ ] Reference the installed Civil 3D 2026 SDK through the single defaulted install-root property, retaining the per-assembly override paths for negative probes. Keep every reference non-copying and locked restore for remaining dependencies. Adapt the existing assembly-series checks into the adapter build: an intentionally mismatched reference must fail. Confirm no Autodesk DLL is copied to the deliverable. Do not use the historical 2025 pins, weaken checks, or switch sources without a separate owner decision.
+- [ ] Apply the [hosted preview amendment](2026-09-08-hosted-ci-manual-integration.md): compile the AutoCAD surface from Autodesk's pinned 25.1.0 packages with runtime assets excluded and locked restore, retain fail-closed year/name/series checks, and verify the product-only preview artifact. Resolve the Civil 13.8 identity only through the guarded runtime lookup. Do not use historical 2025 pins or claim a source for future Civil API operations.
 - [ ] Add `HostCompatibilityTests` for ADR-0008's target series and mismatched series. Add `PreviewTests` asserting that every action, final target, relevant input, and manual limitation appears once and in plan order. Keep the renderer free of Autodesk types so ordinary CI can exercise it.
 
 ```csharp
@@ -287,7 +287,7 @@ Before each commit, run the coordination `check` for the active session, inspect
 | Preflight, staging, ownership, no overwrite, cleanup, receipts | Task 4 real-filesystem fault tests plus Tasks 3 and 5 native handle/verification evidence |
 | Later client-number addition without root rename | Task 5 metadata procedure, demonstrated in Task 6 |
 | Data shortcuts and explicit permitted manual fallback | Task 3 feasibility decision, Task 5 receipt, Task 6 timing and qualification |
-| Build/reference sourcing, no redistributed Autodesk assemblies | Task 2 negative series check and Task 6 load-artifact inspection |
+| Build/reference sourcing, no redistributed Autodesk assemblies | Hosted preview plan's year/reference and artifact checks plus Task 6 native load-artifact inspection |
 | Real templates, supported release, time target, owner acceptance | Task 6 evidence on the Phase 4 gate issue |
 
 Before publishing an execution slice, check its interfaces against this map and its requirements against the governing design. If a probe or owner input changes the required behavior, update the owning design and this plan through review before changing production code. Do not silently downgrade a failed native requirement into a passing fake test.

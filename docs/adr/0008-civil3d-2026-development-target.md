@@ -5,6 +5,11 @@
 
 **Date:** 2026-09-04
 
+**Scoped supersession:** [ADR-0009](0009-hosted-ci-manual-integration.md)
+supersedes the installed-SDK reference source and dedicated-runner requirements
+below. The single 2026 target, x64 requirement, and fail-closed AutoCAD 25.1 /
+Civil 13.8 host checks remain in force.
+
 ## Context
 
 The adapter-foundation design and [ADR-0007](0007-civil3d-2025-reference-sourcing.md)

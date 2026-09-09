@@ -28,6 +28,9 @@ jobs:
 
   test:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        civil3d-year: ['2026']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -36,9 +39,9 @@ jobs:
           cache: true
           cache-dependency-path: '**/packages.lock.json'
       - name: Restore
-        run: dotnet restore AutoGIS.Civil3D.sln --locked-mode
+        run: dotnet restore AutoGIS.Civil3D.sln --locked-mode -p:Civil3DYear=${{ matrix.civil3d-year }}
       - name: Build
-        run: dotnet build AutoGIS.Civil3D.sln -c Release --no-restore
+        run: dotnet build AutoGIS.Civil3D.sln -c Release --no-restore -p:Civil3DYear=${{ matrix.civil3d-year }}
       - name: Test
         run: dotnet test AutoGIS.Civil3D.sln -c Release --no-build
       - name: Formatting
@@ -50,3 +53,17 @@ jobs:
         run: python diagnostics/AutoGIS.Civil3D.Diagnostics/tests/validate_package.py
       - name: Diagnostic Windows wrapper validation
         run: python diagnostics/AutoGIS.Civil3D.Diagnostics/tests/validate_windows_scripts.py
+      - name: Package New Proposal preview
+        shell: powershell
+        run: >-
+          ./tools/package-preview.ps1
+          -Year '${{ matrix.civil3d-year }}'
+          -Commit '${{ github.sha }}'
+          -SourceBuildDirectory 'src/AutoGIS.Civil3D.Adapter/bin/Release/net8.0-windows'
+          -DestinationDirectory 'artifacts/new-proposal-preview'
+      - name: Upload New Proposal preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: autogis-civil3d-preview-${{ matrix.civil3d-year }}-${{ github.sha }}
+          path: artifacts/new-proposal-preview
+          if-no-files-found: error
