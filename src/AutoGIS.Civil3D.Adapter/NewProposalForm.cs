@@ -12,6 +12,7 @@ internal sealed class NewProposalForm : Form
     private readonly Label status = new() { AutoSize = true, Text = "Select a standards manifest and enter the proposal inputs." };
     private readonly System.Windows.Forms.Timer dependencyCheck = new() { Interval = 2000 };
     private ProposalPreviewSession? preview;
+    private bool dependencyCheckBusy;
 
     public NewProposalForm()
     {
@@ -72,12 +73,28 @@ internal sealed class NewProposalForm : Form
             new Label { Text = "Execution unavailable in preview build", AutoSize = true, Margin = new Padding(10, 8, 0, 0) }]);
         layout.Controls.Add(buttons);
         Controls.Add(layout);
-        dependencyCheck.Tick += (_, _) =>
-        {
-            if (preview is not null && !preview.IsCurrent(ReadInputs(), fields["ManifestPath"].Text))
-                InvalidatePreview("Standards or templates changed. Build a new preview.");
-        };
+        dependencyCheck.Tick += async (_, _) => await CheckDependenciesAsync();
         FormClosed += (_, _) => InvalidatePreview("Cancelled.");
+    }
+
+    private async Task CheckDependenciesAsync()
+    {
+        if (dependencyCheckBusy || preview is null)
+            return;
+        dependencyCheckBusy = true;
+        ProposalPreviewSession checkedPreview = preview;
+        ProposalInputs inputs = ReadInputs();
+        string manifestPath = fields["ManifestPath"].Text;
+        try
+        {
+            bool current = await Task.Run(() => checkedPreview.IsCurrent(inputs, manifestPath));
+            if (!current && !IsDisposed && !Disposing && ReferenceEquals(preview, checkedPreview))
+                InvalidatePreview("Standards or templates changed. Build a new preview.");
+        }
+        finally
+        {
+            dependencyCheckBusy = false;
+        }
     }
 
     private TextBox Input(string name)

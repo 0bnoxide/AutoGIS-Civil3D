@@ -9,7 +9,7 @@ internal sealed class ProposalPreviewSession
     private readonly ProposalApproval approval;
     private readonly ProposalInputs originalInputs;
     private readonly string originalManifestPath;
-    private bool valid = true;
+    private volatile bool valid = true;
 
     private ProposalPreviewSession(ProposalPlan plan, ProposalInputs inputs, string manifestPath, Dictionary<string, string> fingerprints)
     {
@@ -50,9 +50,10 @@ internal sealed class ProposalPreviewSession
         if (!valid) return false;
         try
         {
-            valid = inputs == originalInputs &&
-                string.Equals(Path.GetFullPath(manifestPath), originalManifestPath, StringComparison.OrdinalIgnoreCase) &&
-                approval.DependencyFingerprints.All(pair => Fingerprint(pair.Key) == pair.Value);
+            if (inputs != originalInputs ||
+                !string.Equals(Path.GetFullPath(manifestPath), originalManifestPath, StringComparison.OrdinalIgnoreCase) ||
+                !approval.DependencyFingerprints.All(pair => valid && Fingerprint(pair.Key) == pair.Value))
+                valid = false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
