@@ -20,17 +20,30 @@
   </Target>
   <Target Name="ValidateAutodeskReferences" AfterTargets="ResolveAssemblyReferences">
     <ItemGroup>
-      <AcMgdReference Include="@(ReferencePath)" Condition="'%(Filename)' == 'AcMgd'" />
+      <!-- A real restored Autodesk DLL may replace this validation slot for a controlled negative identity probe. -->
+      <AcMgdReference Include="$(AcMgdReferenceProbePath)" Condition="'$(AcMgdReferenceProbePath)' != ''" />
+      <AcMgdReference Include="@(ReferencePath)" Condition="'$(AcMgdReferenceProbePath)' == '' And '%(Filename)' == 'AcMgd'" />
       <AcCoreMgdReference Include="@(ReferencePath)" Condition="'%(Filename)' == 'AcCoreMgd'" />
       <AcDbMgdReference Include="@(ReferencePath)" Condition="'%(Filename)' == 'AcDbMgd'" />
-      <AutodeskReference Include="@(AcMgdReference);@(AcCoreMgdReference);@(AcDbMgdReference)" />
     </ItemGroup>
     <Error Condition="'@(AcMgdReference)' == ''" Text="Missing Autodesk reference: AcMgd.dll from AutoCAD.NET 25.1.0." />
     <Error Condition="'@(AcCoreMgdReference)' == ''" Text="Missing Autodesk reference: AcCoreMgd.dll from AutoCAD.NET.Core 25.1.0." />
     <Error Condition="'@(AcDbMgdReference)' == ''" Text="Missing Autodesk reference: AcDbMgd.dll from AutoCAD.NET.Model 25.1.0." />
-    <GetAssemblyIdentity AssemblyFiles="@(AutodeskReference)">
-      <Output TaskParameter="Assemblies" ItemName="AutodeskIdentity" />
+    <GetAssemblyIdentity AssemblyFiles="@(AcMgdReference)">
+      <Output TaskParameter="Assemblies" ItemName="AcMgdIdentity" />
     </GetAssemblyIdentity>
+    <GetAssemblyIdentity AssemblyFiles="@(AcCoreMgdReference)">
+      <Output TaskParameter="Assemblies" ItemName="AcCoreMgdIdentity" />
+    </GetAssemblyIdentity>
+    <GetAssemblyIdentity AssemblyFiles="@(AcDbMgdReference)">
+      <Output TaskParameter="Assemblies" ItemName="AcDbMgdIdentity" />
+    </GetAssemblyIdentity>
+    <Error Condition="$([System.String]::Copy('%(AcMgdIdentity.Name)').ToLowerInvariant()) != 'acmgd'" Text="AcMgd.dll has assembly identity '%(AcMgdIdentity.Name)'; expected AcMgd (case-insensitive). Refusing a renamed or swapped reference." />
+    <Error Condition="$([System.String]::Copy('%(AcCoreMgdIdentity.Name)').ToLowerInvariant()) != 'accoremgd'" Text="AcCoreMgd.dll has assembly identity '%(AcCoreMgdIdentity.Name)'; expected AcCoreMgd (case-insensitive). Refusing a renamed or swapped reference." />
+    <Error Condition="$([System.String]::Copy('%(AcDbMgdIdentity.Name)').ToLowerInvariant()) != 'acdbmgd'" Text="AcDbMgd.dll has assembly identity '%(AcDbMgdIdentity.Name)'; expected AcDbMgd (case-insensitive). Refusing a renamed or swapped reference." />
+    <ItemGroup>
+      <AutodeskIdentity Include="@(AcMgdIdentity);@(AcCoreMgdIdentity);@(AcDbMgdIdentity)" />
+    </ItemGroup>
     <Error Condition="!$([System.String]::Copy('%(AutodeskIdentity.Version)').StartsWith('25.1.'))" Text="%(AutodeskIdentity.Name) is %(AutodeskIdentity.Version); expected AutoCAD 2026 series 25.1. Refusing a cross-version build." />
   </Target>
 </Project>

@@ -3,9 +3,9 @@
 This artifact is a build-only preview for Civil 3D 2026. It is not evidence
 that proposal creation or the complete Phase 4 workflow has been qualified.
 
-1. Download and extract the artifact whose name contains `civil3d-2026` and
-   the exact commit you intend to check. Confirm that `build-info.json` names
-   that commit and that its SHA-256 values match the two product DLLs.
+1. Download and extract `autogis-civil3d-preview-2026-<commit>`, using the
+   exact commit you intend to check. Confirm that `build-info.json` names that
+   commit and that its SHA-256 values match the two product DLLs.
 2. On the licensed Civil 3D 2026 work computer, open a disposable drawing.
 3. Run `NETLOAD` and select `AutoGIS.Civil3D.Adapter.dll` from the extracted
    artifact. Do not change `SECURELOAD`, `TRUSTEDPATHS`, account, or license
