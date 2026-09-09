@@ -1,0 +1,334 @@
+{
+  "version": 1,
+  "baseRoots": [
+    {
+      "year": 2026,
+      "path": "C:/AutoGIS-Synthetic/Z_Proposal/2026"
+    }
+  ],
+  "folders": [
+    "Model",
+    "Sheets",
+    "Support",
+    "Shortcuts"
+  ],
+  "modelTemplate": "C:/AutoGIS-Synthetic/Templates/Model.dwt",
+  "models": [
+    {
+      "role": "BaseModel",
+      "path": "Model/Base.dwg"
+    },
+    {
+      "role": "ExistingConditionsModel",
+      "path": "Model/Existing Conditions.dwg"
+    },
+    {
+      "role": "ProposedDesignModel",
+      "path": "Model/C-SP Linework.dwg"
+    }
+  ],
+  "sheets": [
+    {
+      "role": "SiteOverviewSheet",
+      "path": "Sheets/TEST-01.dwg",
+      "number": "TEST-01",
+      "title": "Site Overview / Site Location"
+    },
+    {
+      "role": "ExistingConditionsSheet",
+      "path": "Sheets/TEST-02.dwg",
+      "number": "TEST-02",
+      "title": "Existing Conditions"
+    },
+    {
+      "role": "ProposedSitePlanSheet",
+      "path": "Sheets/TEST-03.dwg",
+      "number": "TEST-03",
+      "title": "Proposed Site Plan"
+    }
+  ],
+  "sheetSetPath": "Proposal.dst",
+  "supportRecords": [
+    {
+      "role": "ProjectConfiguration",
+      "path": "Support/project.json"
+    },
+    {
+      "role": "SourceRegister",
+      "path": "Support/sources.json"
+    },
+    {
+      "role": "AssumptionsLog",
+      "path": "Support/assumptions.json"
+    },
+    {
+      "role": "DecisionLog",
+      "path": "Support/decisions.json"
+    },
+    {
+      "role": "CreationPlan",
+      "path": "Support/plan.json"
+    },
+    {
+      "role": "CreationReceipt",
+      "path": "Support/receipt.json"
+    }
+  ],
+  "dataShortcutPath": "Shortcuts",
+  "profiles": [
+    {
+      "orientation": "Landscape",
+      "size": "TEST-A1",
+      "template": "C:/AutoGIS-Synthetic/Templates/Sheet.dwt",
+      "layout": "TEST-LAYOUT",
+      "titleBlock": "TEST-TITLE",
+      "pageSetup": "TEST-PAGE",
+      "plot": {
+        "device": "TEST-DEVICE",
+        "media": "TEST-MEDIA",
+        "styleSheet": "TEST.ctb",
+        "units": "Millimeters",
+        "scale": 1,
+        "rotation": 0
+      },
+      "printableArea": {
+        "x": 0,
+        "y": 0,
+        "width": 800,
+        "height": 550
+      },
+      "placeholders": [
+        {
+          "sheetRole": "SiteOverviewSheet",
+          "label": "SITE LOCATION",
+          "kind": "Boundary",
+          "rectangle": {
+            "x": 10,
+            "y": 10,
+            "width": 180,
+            "height": 240
+          }
+        },
+        {
+          "sheetRole": "SiteOverviewSheet",
+          "label": "SITE OVERVIEW",
+          "kind": "Boundary",
+          "rectangle": {
+            "x": 200,
+            "y": 10,
+            "width": 580,
+            "height": 520
+          }
+        },
+        {
+          "sheetRole": "ExistingConditionsSheet",
+          "label": "TEST EXISTING CONDITIONS",
+          "kind": "Boundary",
+          "rectangle": {
+            "x": 10,
+            "y": 10,
+            "width": 770,
+            "height": 520
+          }
+        },
+        {
+          "sheetRole": "ProposedSitePlanSheet",
+          "label": "TEST PROPOSED SITE PLAN",
+          "kind": "Boundary",
+          "rectangle": {
+            "x": 10,
+            "y": 10,
+            "width": 770,
+            "height": 520
+          }
+        }
+      ]
+    }
+  ],
+  "propertyMappings": [
+    {
+      "input": "ClientName",
+      "dstProperty": "TEST-ClientName",
+      "titleBlockAttribute": "TEST_CLIENTNAME"
+    },
+    {
+      "input": "SiteName",
+      "dstProperty": "TEST-SiteName",
+      "titleBlockAttribute": "TEST_SITENAME"
+    },
+    {
+      "input": "ProposalYear",
+      "dstProperty": "TEST-ProposalYear",
+      "titleBlockAttribute": "TEST_PROPOSALYEAR"
+    },
+    {
+      "input": "Orientation",
+      "dstProperty": "TEST-Orientation",
+      "titleBlockAttribute": "TEST_ORIENTATION"
+    },
+    {
+      "input": "SheetSize",
+      "dstProperty": "TEST-SheetSize",
+      "titleBlockAttribute": "TEST_SHEETSIZE"
+    },
+    {
+      "input": "ClientNumber",
+      "dstProperty": "TEST-ClientNumber",
+      "titleBlockAttribute": "TEST_CLIENTNUMBER"
+    },
+    {
+      "input": "ProjectNumber",
+      "dstProperty": "TEST-ProjectNumber",
+      "titleBlockAttribute": "TEST_PROJECTNUMBER"
+    },
+    {
+      "input": "ProposalNumber",
+      "dstProperty": "TEST-ProposalNumber",
+      "titleBlockAttribute": "TEST_PROPOSALNUMBER"
+    },
+    {
+      "input": "SiteAddress",
+      "dstProperty": "TEST-SiteAddress",
+      "titleBlockAttribute": "TEST_SITEADDRESS"
+    },
+    {
+      "input": "ProjectManager",
+      "dstProperty": "TEST-ProjectManager",
+      "titleBlockAttribute": "TEST_PROJECTMANAGER"
+    }
+  ],
+  "xrefs": [
+    {
+      "hostRole": "ProposedDesignModel",
+      "referenceRole": "BaseModel",
+      "mode": "Overlay",
+      "insertion": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": 1,
+      "rotation": 0
+    },
+    {
+      "hostRole": "ProposedDesignModel",
+      "referenceRole": "ExistingConditionsModel",
+      "mode": "Overlay",
+      "insertion": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": 1,
+      "rotation": 0
+    },
+    {
+      "hostRole": "SiteOverviewSheet",
+      "referenceRole": "BaseModel",
+      "mode": "Overlay",
+      "insertion": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": 1,
+      "rotation": 0
+    },
+    {
+      "hostRole": "SiteOverviewSheet",
+      "referenceRole": "ExistingConditionsModel",
+      "mode": "Overlay",
+      "insertion": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": 1,
+      "rotation": 0
+    },
+    {
+      "hostRole": "SiteOverviewSheet",
+      "referenceRole": "ProposedDesignModel",
+      "mode": "Overlay",
+      "insertion": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": 1,
+      "rotation": 0
+    },
+    {
+      "hostRole": "ExistingConditionsSheet",
+      "referenceRole": "BaseModel",
+      "mode": "Overlay",
+      "insertion": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": 1,
+      "rotation": 0
+    },
+    {
+      "hostRole": "ExistingConditionsSheet",
+      "referenceRole": "ExistingConditionsModel",
+      "mode": "Overlay",
+      "insertion": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": 1,
+      "rotation": 0
+    },
+    {
+      "hostRole": "ExistingConditionsSheet",
+      "referenceRole": "ProposedDesignModel",
+      "mode": "Overlay",
+      "insertion": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": 1,
+      "rotation": 0
+    },
+    {
+      "hostRole": "ProposedSitePlanSheet",
+      "referenceRole": "BaseModel",
+      "mode": "Overlay",
+      "insertion": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": 1,
+      "rotation": 0
+    },
+    {
+      "hostRole": "ProposedSitePlanSheet",
+      "referenceRole": "ExistingConditionsModel",
+      "mode": "Overlay",
+      "insertion": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": 1,
+      "rotation": 0
+    },
+    {
+      "hostRole": "ProposedSitePlanSheet",
+      "referenceRole": "ProposedDesignModel",
+      "mode": "Overlay",
+      "insertion": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": 1,
+      "rotation": 0
+    }
+  ]
+}
