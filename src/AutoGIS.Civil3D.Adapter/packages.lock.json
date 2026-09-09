@@ -1,0 +1,34 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net8.0-windows7.0": {
+      "AutoCAD.NET": {
+        "type": "Direct",
+        "requested": "[25.1.0, )",
+        "resolved": "25.1.0",
+        "contentHash": "8Uw0ssJ9NLg5aOirscGq5RWvkZOpv35/yZ7nG7lvcIPW79eWmyltgtsV2ZMv+zpIuBQ6Z38064qMcTKRMGdWeQ==",
+        "dependencies": {
+          "AutoCAD.NET.Core": "[25.1.0]"
+        }
+      },
+      "AutoCAD.NET.Core": {
+        "type": "Direct",
+        "requested": "[25.1.0, )",
+        "resolved": "25.1.0",
+        "contentHash": "dkgyy4kwcR2Wbzls9KF9x0PUj/35y+0ArFL64LhRCsfzSxGgHtY39oFG0QjDGKEIQKFcTUaXxdirLQZP/myxSg==",
+        "dependencies": {
+          "AutoCAD.NET.Model": "[25.1.0]"
+        }
+      },
+      "AutoCAD.NET.Model": {
+        "type": "Direct",
+        "requested": "[25.1.0, )",
+        "resolved": "25.1.0",
+        "contentHash": "lLLkbEsgL2JVwwghHxIM7SVBqux7r7DwAqbOVd6c+3+GGeH8ylpwax1kY41JIR/9dyhpTWgOycjA91dRhZ1Zkg=="
+      },
+      "autogis.civil3d.proposal": {
+        "type": "Project"
+      }
+    }
+  }
+}

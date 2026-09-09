@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Civil3DYear Condition="'$(Civil3DYear)' == ''">2026</Civil3DYear>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Autodesk's managed API signatures also reference WindowsBase 8. -->
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+    <AssemblyMetadata Include="Civil3DYear" Value="$(Civil3DYear)" />
+    <PackageReference Include="AutoCAD.NET" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="AutoCAD.NET.Core" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="AutoCAD.NET.Model" PrivateAssets="all" ExcludeAssets="runtime" />
+    <ProjectReference Include="../AutoGIS.Civil3D.Proposal/AutoGIS.Civil3D.Proposal.csproj" />
+    <InternalsVisibleTo Include="AutoGIS.Civil3D.Adapter.Tests" />
+  </ItemGroup>
+  <Target Name="ValidateCivil3DYear" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(Civil3DYear)' != '2026'" Text="Civil3DYear '$(Civil3DYear)' is not configured. Only Civil 3D 2026 is supported." />
+  </Target>
+  <Target Name="ValidateAutodeskReferences" AfterTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <AcMgdReference Include="@(ReferencePath)" Condition="'%(Filename)' == 'AcMgd'" />
+      <AcCoreMgdReference Include="@(ReferencePath)" Condition="'%(Filename)' == 'AcCoreMgd'" />
+      <AcDbMgdReference Include="@(ReferencePath)" Condition="'%(Filename)' == 'AcDbMgd'" />
+      <!-- A real restored Autodesk DLL may be checked additionally in a controlled negative identity probe. -->
+      <AcMgdProbeReference Include="$(AcMgdReferenceProbePath)" Condition="'$(AcMgdReferenceProbePath)' != ''" />
+    </ItemGroup>
+    <Error Condition="'@(AcMgdReference)' == ''" Text="Missing Autodesk reference: AcMgd.dll from AutoCAD.NET 25.1.0." />
+    <Error Condition="'@(AcCoreMgdReference)' == ''" Text="Missing Autodesk reference: AcCoreMgd.dll from AutoCAD.NET.Core 25.1.0." />
+    <Error Condition="'@(AcDbMgdReference)' == ''" Text="Missing Autodesk reference: AcDbMgd.dll from AutoCAD.NET.Model 25.1.0." />
+    <GetAssemblyIdentity AssemblyFiles="@(AcMgdReference)">
+      <Output TaskParameter="Assemblies" ItemName="AcMgdIdentity" />
+    </GetAssemblyIdentity>
+    <GetAssemblyIdentity AssemblyFiles="@(AcCoreMgdReference)">
+      <Output TaskParameter="Assemblies" ItemName="AcCoreMgdIdentity" />
+    </GetAssemblyIdentity>
+    <GetAssemblyIdentity AssemblyFiles="@(AcDbMgdReference)">
+      <Output TaskParameter="Assemblies" ItemName="AcDbMgdIdentity" />
+    </GetAssemblyIdentity>
+    <GetAssemblyIdentity AssemblyFiles="@(AcMgdProbeReference)" Condition="'@(AcMgdProbeReference)' != ''">
+      <Output TaskParameter="Assemblies" ItemName="AcMgdProbeIdentity" />
+    </GetAssemblyIdentity>
+    <Error Condition="$([System.String]::Copy('%(AcMgdIdentity.Name)').ToLowerInvariant()) != 'acmgd'" Text="AcMgd.dll has assembly identity '%(AcMgdIdentity.Name)'; expected AcMgd (case-insensitive). Refusing a renamed or swapped reference." />
+    <Error Condition="$([System.String]::Copy('%(AcCoreMgdIdentity.Name)').ToLowerInvariant()) != 'accoremgd'" Text="AcCoreMgd.dll has assembly identity '%(AcCoreMgdIdentity.Name)'; expected AcCoreMgd (case-insensitive). Refusing a renamed or swapped reference." />
+    <Error Condition="$([System.String]::Copy('%(AcDbMgdIdentity.Name)').ToLowerInvariant()) != 'acdbmgd'" Text="AcDbMgd.dll has assembly identity '%(AcDbMgdIdentity.Name)'; expected AcDbMgd (case-insensitive). Refusing a renamed or swapped reference." />
+    <Error Condition="'@(AcMgdProbeIdentity)' != '' And $([System.String]::Copy('%(AcMgdProbeIdentity.Name)').ToLowerInvariant()) != 'acmgd'" Text="AcMgd probe has assembly identity '%(AcMgdProbeIdentity.Name)'; expected AcMgd (case-insensitive). Refusing a renamed or swapped reference." />
+    <ItemGroup>
+      <AutodeskIdentity Include="@(AcMgdIdentity);@(AcCoreMgdIdentity);@(AcDbMgdIdentity);@(AcMgdProbeIdentity)" />
+    </ItemGroup>
+    <Error Condition="!$([System.String]::Copy('%(AutodeskIdentity.Version)').StartsWith('25.1.'))" Text="%(AutodeskIdentity.Name) is %(AutodeskIdentity.Version); expected AutoCAD 2026 series 25.1. Refusing a cross-version build." />
+  </Target>
+</Project>

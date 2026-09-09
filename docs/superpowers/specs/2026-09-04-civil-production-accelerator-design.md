@@ -60,6 +60,15 @@ needs it; abstractions are added only when a real slice needs them.
 Release 1 delivers one Civil 3D command, `New Proposal`, running inside
 Civil 3D. No standalone launcher.
 
+The single development and native-qualification target is Civil 3D 2026,
+as directed by the owner in
+[ADR-0008](../../adr/0008-civil3d-2026-development-target.md). This target
+decision does not establish runtime support; the acceptance evidence below
+is still required. [ADR-0009](../../adr/0009-hosted-ci-manual-integration.md)
+and its [design](2026-09-08-hosted-ci-manual-integration-design.md) govern the
+hosted preview build and separate manual integration handoff. Additional
+releases need a separate decision.
+
 The concrete company conventions named in this section — the default
 project root, the three model drawing filenames and roles, and the three
 starter sheet titles — are the ones the owner supplied with this reset, and
@@ -320,8 +329,7 @@ A native-completion claim is blocked until they are answered:
 7. The exact viewport-placeholder dimensions and locations.
 8. Whether a placeholder is a real disabled paper-space viewport or only a
    labeled boundary.
-9. The Civil 3D releases the first production package must support.
-10. The standard Sheet Set Manager mode in the organization.
+9. The standard Sheet Set Manager mode in the organization.
 
 ## Exclusions
 

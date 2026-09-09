@@ -5,6 +5,12 @@
 [Civil Production Accelerator design](2026-09-04-civil-production-accelerator-design.md),
 which governs roadmap Phase 4. [ADR-0006](../../adr/0006-civil-production-accelerator.md#consequences)
 records which decisions below are superseded and which remain governing.
+[ADR-0008](../../adr/0008-civil3d-2026-development-target.md) additionally
+replaces the 2025 development target and its release-specific references
+with the single 2026 target. [ADR-0009](../../adr/0009-hosted-ci-manual-integration.md)
+then supersedes ADR-0008's installed-SDK source and dedicated-runner policy;
+the approved [hosted-CI/manual-integration design](2026-09-08-hosted-ci-manual-integration-design.md)
+governs preview build delivery and the separate native handoff.
 The superseded scope bound also appears in **Acceptance evidence**,
 **Exclusions**, and **Known ceilings**: their no-drawing-access, no-live-load,
 and no-native-execution restrictions do not govern `New Proposal`. Its
@@ -80,10 +86,11 @@ One new product project, `src/AutoGIS.Civil3D.Adapter/`:
   repository-wide settings inherited from `Directory.Build.props`, which
   gains a general opt-out for projects that declare their own target
   framework instead of the diagnostics-only name test it carries today.
-- References the validator library and the five base managed Autodesk
-  assemblies (`AcCoreMgd`, `AcDbMgd`, `AcMgd`, `AecBaseMgd`, `AeccDbMgd`)
-  as `Private=false`; nothing Autodesk is ever copied to output or
-  redistributed.
+- References the validator library and the three AutoCAD compile assemblies
+  (`AcCoreMgd`, `AcDbMgd`, `AcMgd`) supplied by Autodesk's pinned packages.
+  Runtime assets are excluded; nothing Autodesk is copied to output or
+  redistributed. The Civil assembly identity is resolved only inside the
+  guarded runtime host check.
 - A member of `AutoGIS.Civil3D.sln`, so the existing CI restore, build,
   test, and format steps cover it without workflow changes. CI already
   runs on Windows runners.
@@ -93,12 +100,13 @@ One new product project, `src/AutoGIS.Civil3D.Adapter/`:
   that reference resolution is exercised rather than assumed. Phase 5 owns
   everything that runs inside Civil 3D.
 
-Single target: Civil 3D 2025 (`R25.0`), the pilot workstation's release.
-The boundary that makes 2026 routine is a rule, not code: the release
-appears only in the reference-assembly pins and the assembly's release
-stamp, never in namespaces, type names, or project names. A 2026 build is
-then a second set of pins and a second build configuration, and belongs to
-Phase 7 with the rest of packaging and compatibility.
+Single development and qualification target:
+[ADR-0008](../../adr/0008-civil3d-2026-development-target.md).
+The release boundary is a rule, not code: the release appears only in the
+central package pins, build property, and assembly's release stamp, never in
+namespaces, type names, or project names. A second supported release requires
+a separate decision and belongs to Phase 7 with the rest of packaging and
+compatibility.
 
 A test project, `tests/AutoGIS.Civil3D.Adapter.Tests/`, is created only
 when the first logic that runs without Civil 3D lands there; Phase 4
@@ -107,30 +115,16 @@ validator suite.
 
 ### Reference-assembly sourcing
 
-Compile against pinned NuGet reference assemblies, resolved through the
-central package file the repository already uses:
+Compile the AutoCAD surface from Autodesk's `AutoCAD.NET`,
+`AutoCAD.NET.Core`, and `AutoCAD.NET.Model` packages pinned to 25.1.0, as
+specified by [ADR-0009](../../adr/0009-hosted-ci-manual-integration.md). Locked
+restore, excluded runtime assets, resolved-name and 25.1-series checks, and
+product-only artifact validation prevent an Autodesk binary from entering the
+preview. The guarded Civil identity lookup validates the installed 13.8 API at
+runtime; it is not a general reference source for future Civil operations.
 
-- AutoCAD: the official `AutoCAD.NET` packages, 25.0 series.
-- Civil 3D: community-packaged `AecBaseMgd` and `AeccDbMgd` for 2025, the
-  packages the live diagnostic run verified. Autodesk publishes no
-  official Civil 3D managed reference package.
-
-Controls: the lock file the repository already restores in locked mode;
-`Private=false` on every Autodesk reference; and a build-time check that
-the resolved AutoCAD assemblies are in the 25.0 series and `AeccDbMgd` is
-in the 13.7 series, refusing a cross-release build. `AecBaseMgd` is exempt:
-it carries its own 8.7 series, as the live run recorded. This mirrors
-exactly the check the diagnostic build script already performs. The check
-must be able to fail, and its failure is part of the acceptance evidence.
-
-This sourcing choice is a structural decision and is recorded as an ADR in
-the implementation pull request, with a number allocated per the agent
-guide, not in this design.
-
-Rejected alternatives: discovering an installed Civil 3D at build time
-(the foundation could then never be verified in CI; kept as the diagnostic
-kit's documented path, not the product's); vendoring Autodesk assemblies
-into the repository (license).
+[ADR-0007](../../adr/0007-civil3d-2025-reference-sourcing.md) and ADR-0008
+preserve the historical source decisions they record; neither is a fallback.
 
 ## Implementation boundary
 
@@ -152,38 +146,36 @@ product code under [ADR-0004](../../adr/0004-one-adversarial-review-proportioned
 Collected on a Phase 4 gate issue and cited by the eventual gate-change-log
 row, following the Phase 0 and Phase 3 pattern:
 
-- The adapter project restoring in locked mode and building on `main` in
-  the existing CI job, at zero warnings, on a runner with no Autodesk
-  product installed.
-- The assembly-series check demonstrably failing-capable: one recorded
-  build refused with a wrong-series reference.
+- The adapter project restores in locked mode, builds and runs its unit tests
+  on ordinary hosted Windows CI, and produces the product-only 2026 preview
+  artifact with the exact commit and product DLL hashes.
+- The target/reference checks demonstrably fail: an unsupported year or
+  missing, misnamed, or wrong-series AutoCAD reference refuses the build.
 - The seam members public and exercised by the validator suite, with the
   validator still building and testing with no Autodesk dependency.
-- The sourcing ADR accepted and the
+- The ADR-0008 sourcing amendment accepted and the
   [architecture map](../../architecture.md) naming the adapter as the one
   product project that may reference Autodesk.
 
-No live load is required. The runtime binding of a NuGet-compiled DLL to
-the workstation's assemblies is already recorded evidence; repeating it
-with a command-free assembly proves nothing new, and live evidence belongs
-to Phase 5.
+Build-only merge eligibility does not replace native evidence. The manual
+preview handoff under ADR-0009 checks `NETLOAD`, command binding and the modal
+preview on the licensed 2026 host. Complete workflow qualification remains a
+Phase 4 acceptance requirement.
 
 ## Exclusions
 
 - No Civil 3D commands, drawing reads, imports, or transactions (Phase 5
   and later).
 - No bundle, `PackageContents.xml`, installer, or signing work (Phase 7).
-- No Civil 3D 2026 targeting or multi-targeting (Phase 7).
+- No multi-targeting (Phase 7); the single target follows ADR-0008.
 - No contract change: v1 is frozen.
 - No change to the diagnostic kit or its preserved evidence.
 - No parking-lot items.
 
 ## Known ceilings
 
-- The Civil 3D reference packages are community-maintained. If they are
-  withdrawn or a release is not published, the fallback is installed-
-  product discovery on a Windows machine with Civil 3D, at the cost of CI
-  coverage for the adapter build. The ADR records this dependency.
+- Hosted compilation covers the current AutoCAD API surface only. Future Civil
+  API operations still need a supported reference source and native evidence.
 - The series check proves major.minor agreement, not binary compatibility
   with a specific Civil 3D update; the pilot run showed the reference and
   runtime builds differ in the fourth version part and bind correctly.
