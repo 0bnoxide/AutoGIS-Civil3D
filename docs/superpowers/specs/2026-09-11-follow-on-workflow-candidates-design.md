@@ -57,17 +57,23 @@ this responsibility here and excludes it from `New Proposal`.
   per file (survey, record drawing, GIS export, imagery, other) from the
   manifest's role list.
 - **Plan:** for each source, a copy into the configured support location
-  with the original filename preserved, a SHA-256 recorded in the source
-  register, and one relative-path attachment into `Base.dwg`. Attachments
-  use the manifest's reference conventions (overlay, insertion point,
-  scale, rotation) exactly as the Xref planner does today.
+  with the original filename preserved and a SHA-256 recorded in the source
+  register. What follows depends on the format. A DWG source gets one
+  relative-path Xref attachment into `Base.dwg` using the manifest's
+  reference conventions (overlay, insertion point, scale, rotation) exactly
+  as the Xref planner does today. A georeferenced raster gets one
+  relative-path image attachment, which has its own insertion semantics
+  and is a distinct planned action, not an Xref. Every other format (point
+  files, shapefiles, PDFs, spreadsheets) is copied and registered only;
+  nothing is attached, and the register row says so.
 - **Verify:** hash of the copied file equals hash of the original; every
   planned attachment resolves through a relative path; the source register
-  lists exactly the planned rows.
+  lists exactly the planned rows, including the register-only ones.
 - **Never:** cleans, reprojects, explodes, or edits source geometry;
-  converts a non-DWG format. Conversion of point files, shapefiles, or
-  imagery into DWG content is a separate owner decision with its own
-  design.
+  converts a non-DWG format into drawing content. Whether point files,
+  shapefiles, or imagery later become DWG content is a separate owner
+  decision with its own design; until then those formats have no attach
+  path and this workflow does not pretend they do.
 - **Guardrail tension:** this workflow attaches into `Base.dwg`, an existing
   file. It is the first workflow that writes into a drawing created by an
   earlier run. The staging model must be defined for a single drawing (copy,
@@ -82,17 +88,20 @@ Produces the outgoing deliverable set from the proposal's sheet set.
 - **Inputs:** proposal root; the DST; a deliverable profile from the
   manifest (which sheets, plot device, PDF naming rule, whether DWGs travel
   with the PDFs).
-- **Plan:** walk the DST for registered sheets; compute the reference
-  closure of each sheet drawing; one plot action per sheet using the
+- **Plan:** walk the DST for registered sheets and keep the subset the
+  deliverable profile selects; compute the reference closure of each
+  selected sheet drawing; one plot action per selected sheet using the
   manifest's page setup; one ZIP action containing the PDFs, optionally the
   drawings with their closure, and a checksum manifest.
-- **Verify:** PDF count equals registered sheet count; every file in the
-  ZIP is in the plan and every planned file is in the ZIP; the ZIP hash is
-  written to the receipt.
-- **Reuse:** the handoff validator's packaging and manifest code is the
-  closest existing implementation of "a ZIP with a manifest whose contents
-  are verified"; this workflow should reuse it rather than write a second
-  packager.
+- **Verify:** PDF count equals selected sheet count, and each PDF maps to
+  one selected sheet; every file in the ZIP is in the plan and every
+  planned file is in the ZIP; the ZIP hash is written to the receipt.
+- **Reuse:** none of the handoff packaging code writes a ZIP. It opens and
+  validates the fixed two-entry contract-v1 bundle, and contract v1 is
+  frozen. This workflow needs its own deliverables writer. What it can reuse
+  are the validation primitives that are format-neutral (bounded entry
+  reads, size limits, the staged fail-closed result shape), not the bundle
+  reader or its manifest.
 - **Never:** re-plots a sheet whose layout is missing; edits any drawing;
   emails or uploads anything.
 - **Why second:** it depends only on artifacts `New Proposal` already
