@@ -1,14 +1,24 @@
 # Follow-on production workflows after `New Proposal` — Candidate designs
 
-**Status:** Proposed 2026-09-11. Not an owner decision. This document
-sequences and shapes five candidate workflows drawn from the workflow list
-the owner approved in the
+**Status:** Proposed 2026-09-11. Not an owner decision, and not an
+approved design until the owner records it as one. This document sequences
+and shapes five candidate workflows drawn from the production-foundation
+sequence the owner approved in the
 [Civil Production Accelerator design](2026-09-04-civil-production-accelerator-design.md)
 and [ADR-0006](../../adr/0006-civil-production-accelerator.md). It
-authorizes no phase, reserves no path, and changes no roadmap marker. Each
-candidate needs its own approved design and, where noted, a Phase 5
-authorization recorded in the [roadmap gate-change log](../../roadmap.md)
-before any implementation begins.
+authorizes no phase, reserves no path, and changes no roadmap marker.
+
+Where this document departs from the approved sequence, the departure is
+itself a proposal for an owner decision, not a reading of one. The
+departures are: Package Deliverables is moved ahead of Configure Drawing,
+Survey Preflight, and Audit EG Surface; Promote Project and Export QA
+Package are left out. The approved design places all five candidates in
+the production-foundation sequence, not in its Phase 5 list. Whether the
+two read-only candidates instead belong to Phase 5 is the open question
+[issue #121](https://github.com/0bnoxide/AutoGIS-Civil3D/issues/121)
+records, and this document does not settle it. Each candidate needs its own
+approved design, and any gate decision it needs is recorded in the
+[roadmap gate-change log](../../roadmap.md) before implementation begins.
 
 ## Problem
 
@@ -45,7 +55,9 @@ Ordered by fit to the shared shape and by dependency on artifacts `New
 Proposal` already creates. `Promote Project` is deliberately absent: it
 depends on an administrator-created Autodesk Docs/Forma project that this
 repository never provisions, so it cannot be qualified end to end from the
-repository alone.
+repository alone. `Export QA Package` is absent because its inputs are the
+outputs of the two inspection candidates, so it cannot be shaped before
+their result format is decided.
 
 ### 1. Intake Source Files (creation)
 
@@ -54,14 +66,18 @@ Records and references raw survey and supplied source files into
 this responsibility here and excludes it from `New Proposal`.
 
 - **Inputs:** proposal root; one or more source file paths; a source role
-  per file (survey, record drawing, GIS export, imagery, other) from the
-  manifest's role list.
+  per file (survey, record drawing, GIS export, imagery, other). The
+  standards manifest has no source-role list today; adding one is a
+  manifest change this workflow's design must make, and the role set is
+  open owner input 2.
 - **Plan:** for each source, a copy into the configured support location
   with the original filename preserved and a SHA-256 recorded in the source
   register. What follows depends on the format. A DWG source gets one
-  relative-path Xref attachment into `Base.dwg` using the manifest's
-  reference conventions (overlay, insertion point, scale, rotation) exactly
-  as the Xref planner does today. A georeferenced raster gets one
+  relative-path Xref attachment into `Base.dwg` using the same reference
+  conventions (overlay, insertion point, scale, rotation) that
+  `ProposalPlanner` applies to the model and sheet graph. The manifest
+  validates that graph as a closed set, so a source-reference entry is a
+  second manifest change for this design. A georeferenced raster gets one
   relative-path image attachment, which has its own insertion semantics
   and is a distinct planned action, not an Xref. Every other format (point
   files, shapefiles, PDFs, spreadsheets) is copied and registered only;
@@ -102,8 +118,8 @@ Produces the outgoing deliverable set from the proposal's sheet set.
   are the validation primitives that are format-neutral (bounded entry
   reads, size limits, the staged fail-closed result shape), not the bundle
   reader or its manifest.
-- **Never:** re-plots a sheet whose layout is missing; edits any drawing;
-  emails or uploads anything.
+- **Never:** edits any drawing; emails or uploads anything. A selected
+  sheet whose layout is missing fails preflight, and nothing is plotted.
 - **Why second:** it depends only on artifacts `New Proposal` already
   creates, so it can be qualified on a synthetic proposal, and it is the
   workflow with the most visible time savings after project setup.
@@ -128,7 +144,7 @@ Brings an existing drawing's settings into conformance with the manifest.
   in `New Proposal` does not translate. It should not be built before
   candidate 1 settles the single-drawing staging model.
 
-### 4. Survey Preflight (inspection, Phase 5)
+### 4. Survey Preflight (inspection)
 
 Reports whether a survey point set is fit to build an existing-ground
 surface from, before anyone builds one.
@@ -141,13 +157,14 @@ surface from, before anyone builds one.
   file coordinate system that disagrees with the proposal's.
 - **Output:** an issue list with stable codes and a receipt naming the
   inputs, the check set and version, and the counts. No writes.
-- **Reuse:** `ProposalIssue`, the issue-code policy, and the receipt
-  contract. No planner actions beyond "read", so `PlannedAction` is not
-  reused.
-- **Gate:** Phase 5, read-only inspection. Requires its own authorization
-  before any code.
+- **Reuse:** `ProposalIssue` and the issue-code policy. There is no
+  standalone receipt type to reuse; the receipt is a planned support record
+  today, so an inspection receipt is a new small type. No planner actions
+  beyond "read", so `PlannedAction` is not reused.
+- **Gate:** read-only inspection. Which phase it sits in is the question
+  issue #121 records; it needs that answer before any code.
 
-### 5. Audit EG Surface (inspection, Phase 5)
+### 5. Audit EG Surface (inspection)
 
 Closes the gap `New Proposal` leaves open on purpose: the EG surface is
 recorded as pending and nothing checks the real one when it arrives.
@@ -159,8 +176,9 @@ recorded as pending and nothing checks the real one when it arrives.
   an edge shorter than a threshold (spikes); definition items pointing at
   missing files; a data shortcut that is created but not built.
 - **Output:** as candidate 4.
-- **Gate:** Phase 5. Candidates 4 and 5 share their result and receipt
-  shape and should be designed together even if built one at a time.
+- **Gate:** as candidate 4. Candidates 4 and 5 share their result and
+  receipt shape and should be designed together even if built one at a
+  time.
 
 ## What not to build
 
@@ -170,11 +188,11 @@ proposal-specific by design, and the accelerator design's guardrail is that
 an abstraction appears only when a real slice needs it. The sequence is:
 build candidate 1 as a second concrete workflow with its own planner and
 plan types, then extract only what the two actually share. Extracting first
-produces the plugin framework ADR-0006 rejects.
+produces the plugin framework the accelerator design rejects.
 
 Nothing in this document becomes a milestone. Every candidate is a
 user-facing workflow; the enabling work each needs (a single-drawing staging
-model, a second packager consumer, a Phase 5 result shape) is named against
+model, a deliverables writer, an inspection result shape) is named against
 the workflow it unblocks and is not scheduled on its own.
 
 ## Open owner inputs
@@ -186,13 +204,14 @@ Asked when a candidate's design is started, never assumed:
 2. The source roles and the support location convention for intake.
 3. The deliverable profile: which sheets ship, PDF naming, whether drawings
    travel with PDFs.
-4. Whether Phase 5 inspection results are shown only in the command's
-   output, written beside the proposal, or both.
+4. Whether inspection results are shown only in the command's output,
+   written beside the proposal, or both.
 5. Survey and surface thresholds, which belong in the standards manifest.
 
 ## Exclusions
 
-Not proposed here: Promote Project; any Phase 6 parameter-driven starter;
+Not proposed here: Promote Project; Export QA Package; any Phase 6
+parameter-driven starter;
 alignment, profile, corridor, network, or grading creation; automatic
 viewport framing; cloud project provisioning; any workflow that repairs,
 merges, or silently overwrites an existing proposal.
