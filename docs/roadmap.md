@@ -43,7 +43,9 @@ The Phase 4 governing design is [`2026-09-04-civil-production-accelerator-design
 
 ## Parking lot
 
-Identified capabilities with no implementation authority and no sequence: alignments, profiles, corridors, pipe networks, multiple surfaces per package, bidirectional exchange, machine-readable CLI output, package signing or encryption, coordinate or datum transformation. Moving any item out of the parking lot is a gate-change-log decision.
+Identified capabilities with no implementation authority and no sequence: multiple surfaces per package, bidirectional exchange, machine-readable CLI output, package signing or encryption, coordinate or datum transformation. Moving any item out of the parking lot is a gate-change-log decision.
+
+Alignments, profiles, corridors, and pipe networks left this list on 2026-09-04: the [Civil Production Accelerator design](superpowers/specs/2026-09-04-civil-production-accelerator-design.md) places their inspection and audit in Phase 5 and their parameter-driven production in Phase 6, sequenced behind Phase 4 acceptance and each phase's own authorization.
 
 ## Gate-change log
 
