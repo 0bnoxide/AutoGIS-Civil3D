@@ -55,6 +55,13 @@ to widen a claim elsewhere.
    explicitly says `stop ponytail` or `normal mode`.
 8. **Report only what you verified.** Test counts, hashes, and check results
    in any record must be numbers you produced, not numbers you were told.
+9. **Community evidence is pulled, never harvested.** Forum threads, Dynamo
+   graphs, and open-source repositories are consulted to answer a specific
+   open question in an active design, and an entry is recorded only where
+   it changes a decision, a check, a fixture, or a qualification scenario:
+   in that design's `Prior art` section, or as a `community-evidence` issue
+   when no active design owns it. Link and paraphrase; never copy code into
+   this repository, and note the licence of any code source.
 
 ## Reviews
 
