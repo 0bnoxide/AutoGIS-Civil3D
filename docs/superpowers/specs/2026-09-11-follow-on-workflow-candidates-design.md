@@ -96,6 +96,57 @@ this responsibility here and excludes it from `New Proposal`.
   attach, verify, swap with the prior version retained) before code is
   written, and that definition is the open owner input this design cannot
   answer.
+- **Prior art** (pulled 2026-09-15 for the staging question; links only,
+  no code adopted):
+  - Side-database editing is the practitioner consensus for changing a
+    drawing not open in the editor: `Database(false, true)`, `ReadDwgFile`,
+    `CloseInput(true)` before `SaveAs` to the same name, working-database
+    redirection kept short, and `StartOpenCloseTransaction` because a
+    no-document database has no document locking or undo.
+    [Autodesk developer blog, 2012](https://blog.autodesk.io/using-readdwgfile-with-net-attachxref-or-objectarx-acdbattachxref/).
+    Implies: the staging model's attach step runs on a side database, and
+    the transaction type is a design rule, not a detail.
+  - `AttachXref` succeeding does not mean the reference resolves; on a side
+    database call `ResolveXrefs` and read `GetHostDwgXrefGraph` or each
+    record's `XrefStatus`.
+    [Autodesk .NET forum, 2017](https://forums.autodesk.com/t5/net-forum/loading-an-external-database-and-not-being-able-to-read-the/td-p/6786923).
+    Implies: the Verify rule "every planned attachment resolves through a
+    relative path" is checked by resolution status, not by a non-null id.
+  - `eFileAccessErr` from `AttachXref` has two reported causes: the call
+    outside a document lock, and an xref name equal to the host drawing's
+    name.
+    [Autodesk .NET forum, 2021–2023](https://forums.autodesk.com/t5/net-forum/attachxref-has-an-efileaccesserr-error/td-p/10732177).
+    Implies: a preflight that the derived reference name differs from
+    `Base`, and an owner input on how source filenames map to reference
+    names.
+  - Relative-path conversion needs the host saved to a real path first;
+    `AttachXref`/`OverlayXref` are the only supported routes — a hand-built
+    block reference is not an xref.
+    [Kean Walmsley, 2015](https://keanw.com/2015/11/creating-autocad-xrefs-as-overlays-with-relative-paths-using-net.html);
+    [Autodesk .NET forum, 2015](https://forums.autodesk.com/t5/net-forum/c-xref-attach-set-type-to-attach-and-set-path-to-relative-on/td-p/5554360).
+    Implies: Verify reads the record's `XrefType` and stored path after
+    attach, and a fixture exercises attach and overlay separately.
+  - `XrefFileLock.LockFile` throws when the target is open elsewhere or
+    read-only, and a failed lock can fault again on finalization.
+    [Kean Walmsley, 2015](https://keanw.com/2015/01/modifying-the-contents-of-an-autocad-xref-using-net.html).
+    Implies: the swap step prechecks open/read-only state before touching
+    the prior `Base.dwg`, and the failure path is designed for a double
+    fault.
+  - Under Desktop Connector, paths over 260 characters or containing
+    `<>:"/|?*` break references; whether relative paths survive at all is
+    contested in Autodesk's own forum (an Autodesk collaborator says
+    references always become absolute local-cache paths; a user reports
+    relative paths surviving when the host was uploaded through the web
+    UI).
+    [Autodesk support KB](https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/XREF-files-are-not-found-or-broken-links-appear-when-opening-the-drawing-through-Desktop-Connector-in-Civil-3D.html);
+    [BIM 360 support forum, 2019](https://forums.autodesk.com/t5/bim-360-support-forum/desktop-connector-how-to-manage-xrefs/td-p/9217478).
+    Implies: a path-length preflight and a forbidden-character preflight on
+    each file or directory name, not on drive prefixes or path separators;
+    and a sixth open owner input — whether a proposal root is ever under
+    Docs/Desktop Connector, since relative-path attachment is unproven there.
+  - Gap: no source describes a copy → attach → verify → swap-with-prior-
+    retained model as a named pattern. The staging model is a
+    project-specific decision, not something to copy.
 
 ### 2. Package Deliverables (creation)
 
@@ -123,6 +174,45 @@ Produces the outgoing deliverable set from the proposal's sheet set.
 - **Why second:** it depends only on artifacts `New Proposal` already
   creates, so it can be qualified on a synthetic proposal, and it is the
   workflow with the most visible time savings after project setup.
+- **Prior art** (pulled 2026-09-15 for the plotting route; most sources
+  are AutoCAD-general and several predate 2024, so behaviour on 2026 is
+  unverified until qualified):
+  - Plotting needs the graphics pipeline, which a side database does not
+    have: "AutoCAD currently needs the graphics pipeline to generate
+    printed graphics, and this is not present for side databases."
+    [Kean Walmsley, 2007](https://keanw.com/2007/07/accessing-dwg-f.html).
+    Implies: the reference-closure walk may use side databases; the plot
+    step must open each sheet drawing as a resident document. That is a
+    design constraint, not an implementation detail.
+  - The two established routes both yield one multi-page file per batch:
+    `PlotEngine` with one `BeginDocument` and a `BeginPage` per layout,
+    and DSD-driven `Publisher.PublishDsd`/`PublishExecute`. Each layout
+    must be made current before `PlotEngine` plots it; mixed paper sizes
+    across layouts throw `eInvalidPlotInfo`; device and canonical media
+    names must match the plotter's lists exactly or `eNotValidInput`
+    follows.
+    [Kean Walmsley, 2007](https://keanw.com/2007/09/driving-a-multi.html);
+    [Kean Walmsley, 2007](https://keanw.com/2007/10/previewing-an-1.html);
+    [Autodesk developer blog, 2012](https://blog.autodesk.io/how-to-use-the-autodeskautocadpublishingpublisherpublishdsd-api-in-net/);
+    [APS blog, 2020](https://aps.autodesk.com/blog/publish-multiple-drawings-single-pdf).
+    Implies: the Verify rule "PDF count equals selected sheet count"
+    requires one plot document per sheet, so the plan is one plot action
+    per sheet by construction; a preflight validates device and media
+    names against `PlotSettingsValidator` lists; a fixture mixes paper
+    sizes. A seventh open owner input: one PDF per sheet or one multi-page
+    PDF per deliverable — the count rule changes with the answer.
+  - A named page setup referenced across drawings was unreliable; using
+    each drawing's own page setup as the source worked.
+    [Autodesk developer blog, 2012](https://blog.autodesk.io/how-to-use-the-autodeskautocadpublishingpublisherpublishdsd-api-in-net/).
+    Implies: preflight that the manifest's page setup exists in every
+    selected sheet drawing, and a preflight failure if any is missing —
+    consistent with the "missing layout fails preflight" rule above.
+  - Sheet Set Manager access from .NET is versioned COM
+    (`ACSMCOMPONENTS<NN>Lib`); manually re-registering its DLLs corrupts
+    the install ("Class not registered"), reported March 2025 on 2024/2025.
+    [Autodesk .NET forum, 2025](https://forums.autodesk.com/t5/net-forum/sheet-set-manager-api-basics/td-p/13350311).
+    Implies: DST reading is a per-release binding and a qualification item
+    of its own; no install step may register COM components.
 
 ### 3. Configure Drawing (creation, strained fit)
 
@@ -179,6 +269,52 @@ recorded as pending and nothing checks the real one when it arrives.
 - **Gate:** as candidate 4. Candidates 4 and 5 share their result and
   receipt shape and should be designed together even if built one at a
   time.
+- **Prior art** for candidates 4 and 5 (pulled 2026-09-15; Dynamo forum
+  and package repositories; Autodesk forums were not reachable in this
+  pass, so description-key, coordinate-system, and data-shortcut checks
+  have no practitioner evidence yet):
+  - `TinSurface.Triangles` fails on surfaces Civil 3D reports as valid
+    when the outer boundary passes through particular vertices; reported
+    on 2025 and 2026, recurring from October 2024 to March 2026, and fixed
+    only by moving the vertex.
+    [Dynamo forum](https://forum.dynamobim.com/t/tinsurface-triangles/105229).
+    Implies: the "no outer boundary" check is too narrow — the risky state
+    is a boundary Civil 3D accepts but triangle enumeration cannot walk.
+    Spike detection depends on that walk, so a synthetic fixture with such
+    a boundary is required before the spike check is trusted.
+  - Practitioners force `Rebuild` rather than test `IsOutOfDate`; no
+    thread branches on it.
+    [Dynamo forum, 2024](https://forum.dynamobim.com/t/rebuild-surface-in-civil-3d-using-python/105951).
+    Implies: keep the out-of-date check but prove it with our own fixture
+    (edit a definition item, do not rebuild, assert out of date); field
+    evidence for the member's reliability does not exist.
+  - Point-group reads can return empty for a recognised, populated group
+    until the session is restarted; surface and point-group creation fails
+    on re-run when the name already exists.
+    [Dynamo forum, 2026](https://forum.dynamobim.com/t/cogopointgroup-cogopoint-does-not-work-in-civil3d-dynamo/115056);
+    [Dynamo forum, 2026](https://forum.dynamobim.com/t/dynamo-throwing-error-like-the-document-already-has-a-surface-with-the-same-name.../114643).
+    Implies: Survey Preflight reports "group recognised, zero points" as
+    its own issue code rather than "no duplicates"; any later creation
+    workflow checks name existence first.
+  - Civil3DToolkit is unavailable on 2025+ (community report; repository
+    dormant since 2020, Apache-2.0) and Camber has had no release since
+    2023 (permissive licence, confirm before any reference use); both are
+    still run in the field against 2025/2026.
+    [Dynamo forum, 2025](https://forum.dynamobim.com/t/node-add-non-destructive-breaklines/108963);
+    [Civil3dToolkit](https://github.com/paoloemilioserra/Civil3dToolkit);
+    [Camber](https://github.com/mzjensen/Camber).
+    Implies: neither is a dependency or a correctness reference; Camber's
+    surface-boundary nodes are the more current API-usage reference.
+  - Broken data-shortcut states practitioners repair by hand (renamed
+    source object or drawing, relocated or deleted object) are surfaced
+    only as a Prospector icon.
+    [WisDOT Civil 3D knowledge base](https://c3dkb.dot.wi.gov/Content/c3d/data-mgt/dm-repair-data-ref.htm).
+    Implies: the "created but not built" check has no practitioner
+    evidence of a programmatic path; validate it against the
+    `DataShortcuts` API before designing around it.
+  - No evidence found for: crossing-breakline detection, spike/sliver
+    detection, elevation outliers, extent checks, coordinate-system
+    mismatch. These checks stand on the owner's stated need alone.
 
 ## What not to build
 
@@ -207,6 +343,11 @@ Asked when a candidate's design is started, never assumed:
 4. Whether inspection results are shown only in the command's output,
    written beside the proposal, or both.
 5. Survey and surface thresholds, which belong in the standards manifest.
+6. Whether a proposal root is ever hosted under Autodesk Docs / Desktop
+   Connector, since relative-path attachment is unproven there (candidate
+   1 prior art).
+7. One PDF per sheet or one multi-page PDF per deliverable; the
+   verification count rule follows the answer (candidate 2 prior art).
 
 ## Exclusions
 
