@@ -140,9 +140,10 @@ this responsibility here and excludes it from `New Proposal`.
     UI).
     [Autodesk support KB](https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/XREF-files-are-not-found-or-broken-links-appear-when-opening-the-drawing-through-Desktop-Connector-in-Civil-3D.html);
     [BIM 360 support forum, 2019](https://forums.autodesk.com/t5/bim-360-support-forum/desktop-connector-how-to-manage-xrefs/td-p/9217478).
-    Implies: a path-length and character preflight, and a sixth open owner
-    input — whether a proposal root is ever under Docs/Desktop Connector,
-    since relative-path attachment is unproven there.
+    Implies: a path-length preflight and a forbidden-character preflight on
+    each file or directory name, not on drive prefixes or path separators;
+    and a sixth open owner input — whether a proposal root is ever under
+    Docs/Desktop Connector, since relative-path attachment is unproven there.
   - Gap: no source describes a copy → attach → verify → swap-with-prior-
     retained model as a named pattern. The staging model is a
     project-specific decision, not something to copy.
@@ -212,13 +213,6 @@ Produces the outgoing deliverable set from the proposal's sheet set.
     [Autodesk .NET forum, 2025](https://forums.autodesk.com/t5/net-forum/sheet-set-manager-api-basics/td-p/13350311).
     Implies: DST reading is a per-release binding and a qualification item
     of its own; no install step may register COM components.
-  - Unattended publishing through `accoreconsole` is reported working via
-    a scripted `-PUBLISH` against a DSD; a crash attributed to the managed
-    `Publisher` turned out to be a trailing CRLF in the `.scr` file. Not
-    directly applicable — this workflow runs inside the session — but
-    relevant if a headless batch route is ever considered.
-    [Autodesk .NET forum, 2017–2018](https://forums.autodesk.com/t5/net-forum/accoreconsole-and-multisheet-pdf-publishing/td-p/6911326).
-    Implies: nothing for release 1.
 
 ### 3. Configure Drawing (creation, strained fit)
 
