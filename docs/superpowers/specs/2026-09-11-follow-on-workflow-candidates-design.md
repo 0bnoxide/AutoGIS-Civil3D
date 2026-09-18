@@ -13,11 +13,12 @@ itself a proposal for an owner decision, not a reading of one. The
 departures are: Package Deliverables is moved ahead of Configure Drawing,
 Survey Preflight, and Audit EG Surface; Promote Project and Export QA
 Package are left out. The approved design places all five candidates in
-the production-foundation sequence, not in its Phase 5 list. Whether the
-two read-only candidates instead belong to Phase 5 is the open question
-[issue #121](https://github.com/0bnoxide/AutoGIS-Civil3D/issues/121)
-records, and this document does not settle it. Each candidate needs its own
-approved design, and any gate decision it needs is recorded in the
+the production-foundation sequence, not in its Phase 5 list. The owner
+confirmed the two read-only candidates as Phase 4 production setup in
+[ADR-0010](../../adr/0010-production-setup-inspection-placement.md); that
+placement decision does not approve this candidate design or its proposed
+reordering. Each candidate needs its own approved design and implementation
+plan, and any gate decision it needs is recorded in the
 [roadmap gate-change log](../../roadmap.md) before implementation begins.
 
 ## Problem
@@ -251,8 +252,10 @@ surface from, before anyone builds one.
   standalone receipt type to reuse; the receipt is a planned support record
   today, so an inspection receipt is a new small type. No planner actions
   beyond "read", so `PlannedAction` is not reused.
-- **Gate:** read-only inspection. Which phase it sits in is the question
-  issue #121 records; it needs that answer before any code.
+- **Gate:** Phase 4 production setup under
+  [ADR-0010](../../adr/0010-production-setup-inspection-placement.md).
+  Its own approved design and implementation plan are still required before
+  code is written.
 
 ### 5. Audit EG Surface (inspection)
 
