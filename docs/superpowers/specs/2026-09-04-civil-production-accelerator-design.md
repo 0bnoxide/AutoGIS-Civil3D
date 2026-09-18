@@ -33,6 +33,11 @@ Preflight`, `Configure Drawing`, `Audit EG Surface`, `Export QA Package`,
 `Package Deliverables`. `New Proposal` ships before the next full workflow
 is developed, and each later workflow needs its own design.
 
+The owner confirmed `Survey Preflight` and `Audit EG Surface` as Phase 4
+production setup in [ADR-0010](../../adr/0010-production-setup-inspection-placement.md).
+The [roadmap](../../roadmap.md) records their boundary with Phase 5; their
+read-only behavior does not move them out of the production foundation.
+
 `Promote Project` later completes the proposal-to-active-project lifecycle.
 The awarded Autodesk Docs/Forma project and its destination folders are
 created by an administrator; this repository never provisions cloud
