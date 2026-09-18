@@ -1174,11 +1174,13 @@ class TestPreToolUseAdapter(TempRepoCase):
 
     def test_benign_edit_on_branch_silent(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
-        rc, out = self.decide({
-            "tool_name": "Edit",
-            "tool_input": {"file_path": os.path.join(self.repo_path, "seed.txt")},
-            "cwd": self.repo_path,
-        })
+        # This case exercises the no-session path, independent of the caller.
+        with mock.patch.dict(os.environ, {"AGENT_SESSION_ID": ""}):
+            rc, out = self.decide({
+                "tool_name": "Edit",
+                "tool_input": {"file_path": os.path.join(self.repo_path, "seed.txt")},
+                "cwd": self.repo_path,
+            })
         self.assertEqual(out, "")
 
     def test_malformed_payload_fails_open(self):
