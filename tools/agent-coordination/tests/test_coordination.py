@@ -900,13 +900,15 @@ class TestClaims(TempRepoCase):
         forced = coordination.release(
             self.repo, record["id"], force=True, reason="owner: orphaned")
         self.assertIn("released", forced)
-        data = json.load(open(self.repo.registry_path, encoding="utf-8"))
+        with open(self.repo.registry_path, encoding="utf-8") as fh:
+            data = json.load(fh)
         self.assertEqual(len(data["audit"]), 1)
 
     def test_no_partial_registry_after_saves(self):
         for i in range(20):
             coordination.claim(self.repo, "s1", "file_glob", f"src/{i}/*")
-        data = json.load(open(self.repo.registry_path, encoding="utf-8"))
+        with open(self.repo.registry_path, encoding="utf-8") as fh:
+            data = json.load(fh)
         self.assertEqual(len(data["claims"]), 20)
         leftovers = [n for n in os.listdir(os.path.dirname(self.repo.registry_path))
                      if n.endswith(".tmp") or n.endswith(".lock")]
