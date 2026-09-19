@@ -190,6 +190,8 @@ seam.
 
 ### Execution lifecycle
 
+Receipt publication follows the [owner-approved amendment on issue #101](https://github.com/0bnoxide/AutoGIS-Civil3D/issues/101#issuecomment-5744045745).
+
 ```text
 Inputs
   → Validate
@@ -199,8 +201,10 @@ Inputs
   → Execute in staging
   → Close created DWGs and DST
   → Verify outputs and references
-  → Promote staging root to final proposal root
-  → Write and display receipt
+  → Close verification handles
+  → Prepare and flush complete success receipt in staging
+  → Promote staging root and receipt together without overwrite
+  → Display published receipt
 ```
 
 Preflight, before anything is created, verifies that the final target root
@@ -218,14 +222,27 @@ root, containing only files the run generated. Staging is not renamed to the
 final root until every expected artifact exists, DWGs and the DST are
 closed, sheet registration is correct, project metadata is correct, expected
 Xrefs exist with valid relative paths, and the output matches the approved
-plan.
+plan. After verification handles close, the complete success receipt is
+prepared, flushed, and closed inside the owned staging root. No-overwrite
+promotion publishes that receipt with the verified project; success is
+reported only after promotion succeeds.
 
-On failure the final proposal root is not created; only the uniquely
-identified staging directory the run created is removed; a failure receipt
-is retained outside the proposal root; the exact failed operation and any
-cleanup failure are reported; and a corrected rerun is permitted. Release 1
-never merges into an existing proposal, repairs an incomplete one, or
-overwrites existing files.
+On failure before publication, including receipt preparation or promotion,
+no final proposal root owned by the run is created. A foreign target that
+appears during the run is left untouched. Cleanup is restricted to the exact
+owned staging root and known generated entries, without following reparse
+points or recursing into unknown content. A failure receipt is retained
+outside staging and the final root without overwriting earlier evidence;
+the exact failed operation and any cleanup or receipt-storage failure are
+reported with the original diagnostic context. A corrected rerun is
+permitted. Release 1 never merges into an existing proposal, repairs an
+incomplete one, or overwrites existing files.
+
+Receipt presentation happens after publication. If presentation fails,
+creation remains successful: preserve the completed project and its
+`Succeeded` receipt, report the presentation warning and final-root/receipt
+paths, and perform no cleanup against the published root. This ordering
+adds no crash-recovery, repair/resume, or cross-volume publication behavior.
 
 ### Standards manifest
 
