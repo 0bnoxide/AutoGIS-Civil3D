@@ -8,6 +8,10 @@ Give an agent one repeatable preflight check of an AutoGIS contract ZIP before a
 
 The MCP server is a separate .NET 8 child process over stdio. It contains one named tool, `validate_handoff_bundle`, and references the handoff library directly. No TCP/HTTP listener, in-process plugin, generic file reader, command sender, or C# execution endpoint is included. Logging goes to stderr; stdout carries MCP protocol messages only. Use the official C# SDK with pinned, locked dependencies. A later release must recheck the supported runtime before .NET 8 support ends.
 
+## Implementation reservation
+
+The Phase 4 roadmap marker reserves `src/AutoGIS.Civil3D.Mcp/` for this one-tool server and `tests/AutoGIS.Civil3D.Mcp.Tests/` for its protocol and path-boundary tests. These are the two new product surfaces M1 needs. The existing handoff library stays outside the reservation because M1 calls its public validator without changing contract rules. The reserved paths remain blocked until a separate documentation-only marker-removal change merges; this design does not reserve M2–M4 work.
+
 ## Tool contract
 
 Input is one nonempty `bundle_relative_path` string. Reject unknown arguments, absolute paths, UNC/device paths, drive-relative paths, traversal, alternate streams, non-`.zip` names, and path components that are reparse points. `AUTOGIS_MCP_BUNDLE_ROOT` is required at launch with no fallback. Resolve and verify directory-boundary containment under that owner-controlled local staging root before validation. The root and its contents are assumed stable against concurrent replacement during a call; pre-open path checks cannot secure a tree that a hostile same-user process can modify concurrently.
