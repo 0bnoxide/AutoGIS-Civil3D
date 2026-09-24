@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <ProjectReference Include="../AutoGIS.Civil3D.Handoff/AutoGIS.Civil3D.Handoff.csproj" />
+  </ItemGroup>
+</Project>
