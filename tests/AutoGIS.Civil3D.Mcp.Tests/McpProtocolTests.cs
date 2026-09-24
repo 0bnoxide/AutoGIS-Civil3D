@@ -335,6 +335,22 @@ public sealed class McpProtocolTests
             Assert.Null(issue.GetProperty("location").GetString());
             Assert.NotEqual("Raw package message: " + hostile, issue.GetProperty("message").GetString());
         }
+
+        string longSafeLocation = new('\uFFFF', 128);
+        ValidationIssue[] wideIssues = Enumerable.Range(0, 300)
+            .Select(_ => new ValidationIssue("WRN001", IssueSeverity.Warning,
+                "Raw package message: " + hostile, longSafeLocation))
+            .ToArray();
+        JsonElement wide = Assert.IsType<JsonElement>(HandoffTools.FormatReport(
+            new ValidationReport(ValidationStatus.ValidWithWarnings, wideIssues, report.Metadata))
+            .StructuredContent);
+        Assert.Equal("ValidWithWarnings", wide.GetProperty("status").GetString());
+        Assert.Equal(300, wide.GetProperty("issueCount").GetInt32());
+        Assert.True(wide.GetProperty("truncated").GetBoolean());
+        Assert.InRange(wide.GetProperty("issues").GetArrayLength(), 1, 127);
+        Assert.Equal(longSafeLocation, wide.GetProperty("issues")[0].GetProperty("location").GetString());
+        Assert.InRange(JsonSerializer.SerializeToUtf8Bytes(wide).Length, 1, 65_536);
+        Assert.DoesNotContain("TOP_SECRET_MARKER", wide.GetRawText());
     }
 
     private static void AssertToolError(CallToolResult result, string code)
