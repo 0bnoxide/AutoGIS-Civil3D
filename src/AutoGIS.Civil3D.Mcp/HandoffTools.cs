@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using AutoGIS.Civil3D.Handoff;
 using AutoGIS.Civil3D.Handoff.Validation;
 using ModelContextProtocol.Protocol;
@@ -9,12 +8,25 @@ using ModelContextProtocol.Server;
 namespace AutoGIS.Civil3D.Mcp;
 
 [McpServerToolType]
-public sealed class HandoffTools(string? configuredRoot)
+public sealed class HandoffTools
 {
     private const int MaxOutputBytes = 64 * 1024;
     private const int MaxIssues = 128;
-    private readonly BundleValidator _validator = new();
+    private const string FileUnreadable = "FILE_UNREADABLE";
+    private readonly string? _configuredRoot;
+    private readonly Func<string, ValidationReport> _validate;
     private int _busy;
+
+    public HandoffTools(string? configuredRoot)
+        : this(configuredRoot, new BundleValidator().ValidateBundle)
+    {
+    }
+
+    internal HandoffTools(string? configuredRoot, Func<string, ValidationReport> validate)
+    {
+        _configuredRoot = configuredRoot;
+        _validate = validate;
+    }
 
     [McpServerTool(Name = "validate_handoff_bundle", ReadOnly = true,
         UseStructuredContent = true, OutputSchemaType = typeof(ValidationOutput))]
@@ -48,6 +60,11 @@ public sealed class HandoffTools(string? configuredRoot)
             return Error(pathError);
         }
 
+        return await RunValidationAsync(path, cancellationToken);
+    }
+
+    internal async Task<CallToolResult> RunValidationAsync(string path, CancellationToken cancellationToken)
+    {
         if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
         {
             return Error("BUSY");
@@ -58,17 +75,17 @@ public sealed class HandoffTools(string? configuredRoot)
         {
             try
             {
-                return _validator.ValidateBundle(path);
+                return _validate(path);
             }
             finally
             {
                 Interlocked.Exchange(ref _busy, 0);
             }
-        });
+        }, CancellationToken.None);
 
         try
         {
-            return Success(await work.WaitAsync(cancellationToken));
+            return FormatReport(await work.WaitAsync(cancellationToken));
         }
         catch (OperationCanceledException)
         {
@@ -77,11 +94,11 @@ public sealed class HandoffTools(string? configuredRoot)
         }
         catch (UnauthorizedAccessException)
         {
-            return Error("FILE_UNREADABLE");
+            return Error(FileUnreadable);
         }
         catch (IOException)
         {
-            return Error("FILE_UNREADABLE");
+            return Error(FileUnreadable);
         }
         catch (Exception)
         {
@@ -92,15 +109,15 @@ public sealed class HandoffTools(string? configuredRoot)
     private string? ResolveRoot(out string error)
     {
         error = "ROOT_NOT_CONFIGURED";
-        if (string.IsNullOrWhiteSpace(configuredRoot) ||
-            !Path.IsPathFullyQualified(configuredRoot) || IsUncOrDevice(configuredRoot))
+        if (string.IsNullOrWhiteSpace(_configuredRoot) ||
+            !Path.IsPathFullyQualified(_configuredRoot) || IsUncOrDevice(_configuredRoot))
         {
             return null;
         }
 
         try
         {
-            string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(configuredRoot));
+            string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_configuredRoot));
             if (string.Equals(root, Path.GetPathRoot(root), PathComparison) ||
                 !Directory.Exists(root))
             {
@@ -135,8 +152,7 @@ public sealed class HandoffTools(string? configuredRoot)
         }
 
         string[] segments = relative.Replace('\\', '/').Split('/');
-        if (segments.Any(segment => segment.Length == 0 || segment is "." or ".." ||
-                segment.EndsWith(' ') || segment.EndsWith('.') || IsDeviceName(segment)) ||
+        if (segments.Any(IsUnsafeSegment) ||
             !string.Equals(Path.GetExtension(segments[^1]), ".zip", StringComparison.OrdinalIgnoreCase))
         {
             return null;
@@ -164,7 +180,7 @@ public sealed class HandoffTools(string? configuredRoot)
                 bool isDirectory = (attributes & FileAttributes.Directory) != 0;
                 if (isDirectory != (i < segments.Length - 1))
                 {
-                    error = "FILE_UNREADABLE";
+                    error = FileUnreadable;
                     return null;
                 }
             }
@@ -178,7 +194,7 @@ public sealed class HandoffTools(string? configuredRoot)
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
         {
-            error = "FILE_UNREADABLE";
+            error = FileUnreadable;
             return null;
         }
     }
@@ -187,14 +203,34 @@ public sealed class HandoffTools(string? configuredRoot)
         path.StartsWith("\\\\", StringComparison.Ordinal) ||
         path.StartsWith("//", StringComparison.Ordinal);
 
-    private static bool IsDeviceName(string segment) =>
-        Regex.IsMatch(segment, @"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static bool IsUnsafeSegment(string segment) =>
+        segment.Length == 0 || segment is "." or ".." ||
+        segment.EndsWith(' ') || segment.EndsWith('.') || IsDeviceName(segment);
+
+    private static bool IsDeviceName(string segment)
+    {
+        string stem = segment.Split('.')[0].TrimEnd(' ');
+        if (stem.Equals("CON", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("PRN", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("AUX", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("NUL", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("CONIN$", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("CONOUT$", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("CLOCK$", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return stem.Length == 4 &&
+            (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) ||
+             stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)) &&
+            (stem[3] is >= '1' and <= '9' or '\u00b9' or '\u00b2' or '\u00b3');
+    }
 
     private static StringComparison PathComparison =>
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
-    private static CallToolResult Success(ValidationReport report)
+    internal static CallToolResult FormatReport(ValidationReport report)
     {
         List<ValidationIssueOutput> issues = report.Issues.Take(MaxIssues)
             .Select(issue => new ValidationIssueOutput(

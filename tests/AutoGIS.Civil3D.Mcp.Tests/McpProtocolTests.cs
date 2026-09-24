@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using AutoGIS.Civil3D.Handoff.Validation;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Xunit;
@@ -114,7 +115,12 @@ public sealed class McpProtocolTests
                     @"C:drive-relative.zip",
                     @"\\server\share\bundle.zip",
                     @"\\?\C:\bundle.zip",
-                    @"valid.zip:stream"
+                    @"valid.zip:stream",
+                    "CON.zip",
+                    "CON .zip",
+                    "COM1.zip",
+                    "COM\u00b9.zip",
+                    "CONIN$.zip"
                 })
                 {
                     await AssertErrorAsync(client, path, "PATH_NOT_ALLOWED");
@@ -155,6 +161,15 @@ public sealed class McpProtocolTests
             string rootLink = Path.Combine(parent.FullName, "root-link");
             Directory.CreateSymbolicLink(rootLink, realRoot);
             await using (McpClient client = await ConnectAsync(rootLink))
+            {
+                await AssertErrorAsync(client, "package.zip", "PATH_NOT_ALLOWED");
+            }
+
+            string rootParentLink = Path.Combine(parent.FullName, "root-parent-link");
+            Directory.CreateSymbolicLink(rootParentLink, realRoot);
+            string nestedRoot = Path.Combine(rootParentLink, "nested");
+            Directory.CreateDirectory(Path.Combine(realRoot, "nested"));
+            await using (McpClient client = await ConnectAsync(nestedRoot))
             {
                 await AssertErrorAsync(client, "package.zip", "PATH_NOT_ALLOWED");
             }
@@ -240,12 +255,98 @@ public sealed class McpProtocolTests
         }
     }
 
-    private static async Task AssertErrorAsync(McpClient client, string path, string code)
+    [Fact]
+    public async Task Cancelled_waiter_keeps_validation_busy_until_read_finishes()
     {
-        var result = await CallAsync(client, path);
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int validations = 0;
+        var report = new ValidationReport(ValidationStatus.Valid, [],
+            new VerifiedPackageMetadata(Guid.Empty, "Safe Surface", 3, 1, 26913));
+        var tools = new HandoffTools(FixtureRoot, _ =>
+        {
+            Interlocked.Increment(ref validations);
+            entered.TrySetResult(true);
+            release.Task.GetAwaiter().GetResult();
+            return report;
+        });
+
+        using var cancellation = new CancellationTokenSource();
+        Task<CallToolResult> first = tools.RunValidationAsync("package.zip", cancellation.Token);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            AssertToolError(await tools.RunValidationAsync("package.zip", CancellationToken.None), "BUSY");
+            cancellation.Cancel();
+            AssertToolError(await first.WaitAsync(TimeSpan.FromSeconds(10)), "CANCELLED");
+            AssertToolError(await tools.RunValidationAsync("package.zip", CancellationToken.None), "BUSY");
+            Assert.Equal(1, Volatile.Read(ref validations));
+
+            release.TrySetResult(true);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            while (true)
+            {
+                CallToolResult next = await tools.RunValidationAsync("package.zip", CancellationToken.None);
+                if (next.IsError != true)
+                {
+                    Assert.Equal("Valid", next.StructuredContent!.Value.GetProperty("status").GetString());
+                    break;
+                }
+
+                AssertToolError(next, "BUSY");
+                await Task.Delay(10, timeout.Token);
+            }
+
+            Assert.Equal(2, Volatile.Read(ref validations));
+        }
+        finally
+        {
+            release.TrySetResult(true);
+        }
+    }
+
+    [Fact]
+    public void Formatter_bounds_and_redacts_many_hostile_issues()
+    {
+        const string hostile = @"C:\TOP_SECRET_MARKER\artifact.zip";
+        ValidationIssue[] issues = Enumerable.Range(0, 300)
+            .Select(_ => new ValidationIssue("WRN001", IssueSeverity.Warning,
+                "Raw package message: " + hostile, hostile))
+            .ToArray();
+        var report = new ValidationReport(ValidationStatus.ValidWithWarnings, issues,
+            new VerifiedPackageMetadata(Guid.Empty, hostile, 3, 1, 26913));
+
+        CallToolResult result = HandoffTools.FormatReport(report);
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Empty(result.Content);
+        JsonElement body = Assert.IsType<JsonElement>(result.StructuredContent);
+        Assert.Equal("ValidWithWarnings", body.GetProperty("status").GetString());
+        Assert.Equal(300, body.GetProperty("issueCount").GetInt32());
+        Assert.True(body.GetProperty("truncated").GetBoolean());
+        Assert.InRange(body.GetProperty("issues").GetArrayLength(), 1, 299);
+        Assert.Equal("[redacted]", body.GetProperty("metadata").GetProperty("surfaceName").GetString());
+        Assert.InRange(JsonSerializer.SerializeToUtf8Bytes(body).Length, 1, 65_536);
+        Assert.DoesNotContain("TOP_SECRET_MARKER", body.GetRawText());
+        foreach (JsonElement issue in body.GetProperty("issues").EnumerateArray())
+        {
+            Assert.Equal("WRN001", issue.GetProperty("code").GetString());
+            Assert.Equal("Warning", issue.GetProperty("severity").GetString());
+            Assert.Null(issue.GetProperty("location").GetString());
+            Assert.NotEqual("Raw package message: " + hostile, issue.GetProperty("message").GetString());
+        }
+    }
+
+    private static void AssertToolError(CallToolResult result, string code)
+    {
         Assert.Equal(true, result.IsError);
         Assert.Null(result.StructuredContent);
         Assert.Equal(code, Assert.Single(result.Content.OfType<TextContentBlock>()).Text);
+    }
+
+    private static async Task AssertErrorAsync(McpClient client, string path, string code)
+    {
+        AssertToolError(await CallAsync(client, path), code);
     }
 
     private static async Task<CallToolResult> CallAsync(McpClient client, string path)
