@@ -27,7 +27,7 @@
 
 ## Global Constraints
 
-- Before reading each workspace file, run the repository-required authenticated `sonar analyze secrets <path>`; stop if it reports a secret. Query codebase-memory MCP before new repository text searches. Run `coordination.py check --session 01a0d317-e56a-7670-9d22-8a4568617d1f` before writes in a claimed worktree; keep `main` read-only.
+- Before reading each workspace file, run the repository-required authenticated `sonar analyze secrets <path>`; stop if it reports a secret. Query codebase-memory MCP before new repository text searches. Each executing worker must export its own stable `AGENT_SESSION_ID` and run `coordination.py check --session <worker-session-id>` before writes in its claimed worktree; keep `main` read-only.
 - Merge a documentation-only scope/reservation PR first, then a separate documentation-only reservation-removal PR, then begin the product PR from the resulting `origin/main`. The gate checker unions marker paths in base and changed roadmaps, so neither documentation PR may include M2 source or test edits.
 - The configured manifest is a launch-time operator setting, not an argument. Read no template, base root, drawing, or other manifest-referenced path. Do not change the core planner, native adapter, Create flow, receipt flow, or approval model.
 - All tool errors use fixed safe codes without raw exception, path, manifest, or input text. Planner rejection is successful `NoPlan`. An advisory result never claims native qualification or template checks.
