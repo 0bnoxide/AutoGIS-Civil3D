@@ -10,7 +10,7 @@
 
 **Spec:** [Phase 4 M2 advisory proposal preview design](../specs/2026-09-24-phase4-m2-proposal-preview-design.md). [ADR-0012](../../adr/0012-phase4-m2-advisory-preview.md) records the Phase 4 placement and host-free acceptance boundary when the documentation gate is merged.
 
-**Status:** Written plan awaiting owner review. The owner approved the written design on 2026-09-24. Product edits remain blocked by the documentation gate.
+**Status:** Written design and plan approved by the owner on 2026-09-24, with subagent-driven execution selected. Product edits remain blocked until the separate documentation-only reservation-removal PR merges.
 
 ## File Map
 

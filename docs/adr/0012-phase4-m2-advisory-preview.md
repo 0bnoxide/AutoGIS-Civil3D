@@ -1,6 +1,6 @@
 # ADR-0012: Keep the M2 advisory proposal preview in Phase 4
 
-**Status:** Accepted 2026-09-24 by the owner's approval of the recommended M2 design and written specification. The implementation plan and separate reservation-removal gate still require approval before product edits.
+**Status:** Accepted 2026-09-24 by the owner's approval of the recommended M2 design, written specification, and implementation plan. The separate reservation-removal gate must merge before product edits.
 
 ## Context
 
@@ -10,7 +10,7 @@ The merged M1 MCP facade validates handoff bundles without Autodesk. The [New Pr
 
 Place M2 in Phase 4 as a narrow, read-only advisory interface over the existing `StandardsManifest.Parse` and `ProposalPlanner.Build`. One local stdio `preview_proposal` tool uses an operator-selected manifest snapshot and exposes only a bounded, redacted action projection. It does not inspect templates, run Civil 3D, approve execution, create a proposal, or issue a receipt.
 
-For this Autodesk-free planning slice alone, managed tests, a real stdio protocol trace, independent review, and green checks are sufficient to merge the M2 implementation without a live Civil 3D run. This is a narrow exception to the New Proposal design's live-host-per-milestone rule. It does not meet the Phase 4 exit gate, qualify the native New Proposal preview, or authorize Phase 5 inspection or Phase 6 writes. The [M2 plan](../superpowers/plans/2026-09-24-phase4-m2-proposal-preview-implementation.md) remains subject to owner approval and the roadmap's separate documentation reservation/removal sequence.
+For this Autodesk-free planning slice alone, managed tests, a real stdio protocol trace, independent review, and green checks are sufficient to merge the M2 implementation without a live Civil 3D run. This is a narrow exception to the New Proposal design's live-host-per-milestone rule. It does not meet the Phase 4 exit gate, qualify the native New Proposal preview, or authorize Phase 5 inspection or Phase 6 writes. The approved [M2 plan](../superpowers/plans/2026-09-24-phase4-m2-proposal-preview-implementation.md) still follows the roadmap's separate documentation reservation/removal sequence.
 
 ## Alternatives considered
 
