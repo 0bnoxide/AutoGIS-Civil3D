@@ -1,6 +1,6 @@
 # Phase 4 M2 advisory proposal preview — Design
 
-**Status:** Design direction approved by the owner on 2026-09-24; written spec awaiting owner review. This design does not authorize product changes. The [roadmap](../../roadmap.md) must record M2's Phase 4 scope and complete its documentation gate before implementation.
+**Status:** Design direction and written spec approved by the owner on 2026-09-24. This design does not authorize product changes. The [roadmap](../../roadmap.md) must record M2's Phase 4 scope and complete its documentation gate before implementation.
 
 ## Purpose and boundary
 
