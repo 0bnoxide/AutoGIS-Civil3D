@@ -164,6 +164,8 @@ public sealed class ProposalTools
             actions.Length, actions, issues);
         JsonElement body = JsonSerializer.SerializeToElement(output,
             new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        if (JsonSerializer.SerializeToUtf8Bytes(body).Length > 64 * 1024)
+            return Error("PREVIEW_TOO_LARGE");
         return new CallToolResult { Content = [], StructuredContent = body };
     }
 

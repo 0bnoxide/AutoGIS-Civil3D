@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using AutoGIS.Civil3D.Proposal;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Xunit;
@@ -130,6 +132,172 @@ public sealed class ProposalPreviewProtocolTests
     }
 
     [Fact]
+    public async Task Stdio_projects_every_planner_action_in_order()
+    {
+        PlanResult expected = ProposalPlanner.Build(
+            new ProposalInputs("Client", "Site", 2026, "Landscape", "TEST-A1"),
+            StandardsManifest.Parse(File.ReadAllBytes(ManifestFixturePath)).Manifest!);
+        await using McpClient client = await ConnectAsync(ManifestFixturePath);
+        CallToolResult reply = await client.CallToolAsync("preview_proposal", ValidArguments);
+        JsonElement actual = Assert.IsType<JsonElement>(reply.StructuredContent);
+        Assert.InRange(JsonSerializer.SerializeToUtf8Bytes(actual).Length, 1, 64 * 1024);
+
+        Assert.Equal(new[] { "actionCount", "actions", "advisoryOnly", "existingGround",
+            "issues", "manifestVersion", "nativePreflightPerformed", "proposedRootName",
+            "status", "templatesChecked" }, actual.EnumerateObject().Select(p => p.Name)
+                .Order(StringComparer.Ordinal).ToArray());
+        Assert.True(actual.GetProperty("advisoryOnly").GetBoolean());
+        Assert.False(actual.GetProperty("nativePreflightPerformed").GetBoolean());
+        Assert.False(actual.GetProperty("templatesChecked").GetBoolean());
+        JsonElement actions = actual.GetProperty("actions");
+        Assert.Equal(expected.Plan!.Actions.Length, actions.GetArrayLength());
+        Assert.Equal(actions.GetArrayLength(), actual.GetProperty("actionCount").GetInt32());
+        Assert.Equal("", actions[0].GetProperty("relativePath").GetString());
+        for (int i = 0; i < actions.GetArrayLength(); i++)
+        {
+            PlannedAction action = expected.Plan.Actions[i];
+            Assert.Equal(new[] { "dependencies", "id", "operation", "relativePath" },
+                actions[i].EnumerateObject().Select(p => p.Name)
+                    .Order(StringComparer.Ordinal).ToArray());
+            Assert.Equal(action.Id, actions[i].GetProperty("id").GetString());
+            Assert.Equal(action.Operation.ToString(), actions[i].GetProperty("operation").GetString());
+            Assert.Equal(action.RelativePath, actions[i].GetProperty("relativePath").GetString());
+            Assert.Equal(action.Dependencies.ToArray(),
+                actions[i].GetProperty("dependencies").EnumerateArray()
+                    .Select(item => item.GetString()).ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task Stdio_keeps_startup_manifest_snapshot_until_restart()
+    {
+        DirectoryInfo temp = Directory.CreateTempSubdirectory("AutoGIS-M2-Snapshot-");
+        try
+        {
+            string path = Path.Combine(temp.FullName, "snapshot.json");
+            File.Copy(ManifestFixturePath, path);
+            string[] fixtureInventory = Inventory(FixtureRoot);
+            await using (McpClient running = await ConnectAsync(path, FixtureRoot))
+            {
+                byte[] firstBytes = File.ReadAllBytes(path);
+                string[] firstInventory = Inventory(temp.FullName);
+                CallToolResult first = await running.CallToolAsync("preview_proposal", ValidArguments);
+                Assert.NotEqual(true, first.IsError);
+                Assert.Equal(firstBytes, File.ReadAllBytes(path));
+                Assert.Equal(firstInventory, Inventory(temp.FullName));
+                Assert.Equal(fixtureInventory, Inventory(FixtureRoot));
+
+                File.WriteAllText(path, "{");
+                byte[] secondBytes = File.ReadAllBytes(path);
+                string[] secondInventory = Inventory(temp.FullName);
+                CallToolResult second = await running.CallToolAsync("preview_proposal", ValidArguments);
+                Assert.Equal(first.StructuredContent?.GetRawText(),
+                    second.StructuredContent?.GetRawText());
+                Assert.Equal(secondBytes, File.ReadAllBytes(path));
+                Assert.Equal(secondInventory, Inventory(temp.FullName));
+                Assert.Equal(fixtureInventory, Inventory(FixtureRoot));
+            }
+
+            byte[] restartBytes = File.ReadAllBytes(path);
+            string[] restartInventory = Inventory(temp.FullName);
+            await using McpClient restarted = await ConnectAsync(path, FixtureRoot);
+            CallToolResult invalid = await restarted.CallToolAsync("preview_proposal", ValidArguments);
+            Assert.True(invalid.IsError == true);
+            Assert.Null(invalid.StructuredContent);
+            Assert.Equal("MANIFEST_INVALID",
+                Assert.Single(invalid.Content.OfType<TextContentBlock>()).Text);
+            Assert.Equal(restartBytes, File.ReadAllBytes(path));
+            Assert.Equal(restartInventory, Inventory(temp.FullName));
+            Assert.Equal(fixtureInventory, Inventory(FixtureRoot));
+        }
+        finally
+        {
+            temp.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Stdio_redacts_manifest_paths_templates_and_optional_metadata()
+    {
+        DirectoryInfo temp = Directory.CreateTempSubdirectory("AutoGIS-M2-Redaction-");
+        try
+        {
+            string path = Path.Combine(temp.FullName, "redaction.json");
+            JsonNode manifest = JsonNode.Parse(File.ReadAllText(ManifestFixturePath))!;
+            manifest["baseRoots"]![0]!["path"] = "C:/HOST_ROOT_MARKER/2026";
+            manifest["modelTemplate"] = "C:/TEMPLATE_MARKER/Model.dwt";
+            manifest["profiles"]![0]!["template"] = "C:/TEMPLATE_MARKER/Sheet.dwt";
+            File.WriteAllText(path, manifest.ToJsonString());
+            byte[] before = File.ReadAllBytes(path);
+            string[] inventory = Inventory(temp.FullName);
+            string[] fixtureInventory = Inventory(FixtureRoot);
+            var arguments = ValidArguments;
+            arguments["project_manager"] = "OPTIONAL_METADATA_MARKER";
+            arguments["site_address"] = "OPTIONAL_METADATA_MARKER";
+            await using McpClient client = await ConnectAsync(path, FixtureRoot);
+            CallToolResult reply = await client.CallToolAsync("preview_proposal", arguments);
+            JsonElement body = Assert.IsType<JsonElement>(reply.StructuredContent);
+            string raw = body.GetRawText();
+
+            Assert.DoesNotContain("HOST_ROOT_MARKER", raw);
+            Assert.DoesNotContain("TEMPLATE_MARKER", raw);
+            Assert.DoesNotContain("OPTIONAL_METADATA_MARKER", raw);
+            Assert.DoesNotContain("finalRoot", raw, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("\"configuration\":", raw, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("\"data\"", raw, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("approvalToken", raw, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("planDigest", raw, StringComparison.OrdinalIgnoreCase);
+            var rejectedArguments = ValidArguments;
+            rejectedArguments["proposal_year"] = 2030;
+            CallToolResult rejected = await client.CallToolAsync("preview_proposal", rejectedArguments);
+            string rejectedRaw = Assert.IsType<JsonElement>(rejected.StructuredContent).GetRawText();
+            Assert.DoesNotContain("The manifest has no root for the selected proposal year.", rejectedRaw);
+            Assert.DoesNotContain("ProposalYear", rejectedRaw);
+            Assert.Equal(before, File.ReadAllBytes(path));
+            Assert.Equal(inventory, Inventory(temp.FullName));
+            Assert.Equal(fixtureInventory, Inventory(FixtureRoot));
+        }
+        finally
+        {
+            temp.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Stdio_rejects_complete_projection_over_64_kib_without_partial_graph()
+    {
+        DirectoryInfo temp = Directory.CreateTempSubdirectory("AutoGIS-M2-Large-");
+        try
+        {
+            string path = Path.Combine(temp.FullName, "large.json");
+            JsonNode manifest = JsonNode.Parse(File.ReadAllText(ManifestFixturePath))!;
+            JsonArray folders = manifest["folders"]!.AsArray();
+            for (int i = 0; i < 600; i++)
+                folders.Add($"X{i:D4}{new string('a', 100)}");
+            File.WriteAllText(path, manifest.ToJsonString());
+            Assert.InRange(new FileInfo(path).Length, 1, 256 * 1024);
+            Assert.NotNull(StandardsManifest.Parse(File.ReadAllBytes(path)).Manifest);
+            byte[] before = File.ReadAllBytes(path);
+            string[] inventory = Inventory(temp.FullName);
+            string[] fixtureInventory = Inventory(FixtureRoot);
+            await using McpClient client = await ConnectAsync(path, FixtureRoot);
+            CallToolResult tooLarge = await client.CallToolAsync("preview_proposal", ValidArguments);
+
+            Assert.True(tooLarge.IsError == true);
+            Assert.Null(tooLarge.StructuredContent);
+            Assert.Equal("PREVIEW_TOO_LARGE",
+                Assert.Single(tooLarge.Content.OfType<TextContentBlock>()).Text);
+            Assert.Equal(before, File.ReadAllBytes(path));
+            Assert.Equal(inventory, Inventory(temp.FullName));
+            Assert.Equal(fixtureInventory, Inventory(FixtureRoot));
+        }
+        finally
+        {
+            temp.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Startup_manifest_configuration_returns_only_safe_codes_and_keeps_m1_available()
     {
         DirectoryInfo temp = Directory.CreateTempSubdirectory("AutoGIS-Civil3D-M2Manifest-");
@@ -195,6 +363,11 @@ public sealed class ProposalPreviewProtocolTests
         ["orientation"] = "Landscape",
         ["sheet_size"] = "TEST-A1"
     };
+
+    private static string[] Inventory(string root) =>
+        Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(root, path))
+            .Order(StringComparer.Ordinal).ToArray();
 
     private static async Task<McpClient> ConnectAsync(string? manifestPath = null,
         string? bundleRoot = null)
