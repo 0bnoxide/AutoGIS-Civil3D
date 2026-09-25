@@ -1,5 +1,6 @@
 using AutoGIS.Civil3D.Mcp;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -25,6 +26,25 @@ McpServerTool tool = McpServerTool.Create(
 tool.ProtocolTool.InputSchema = JsonSerializer.Deserialize<JsonElement>(ProposalTools.InputSchemaJson);
 builder.Services.AddMcpServer()
     .WithStdioServerTransport()
+    .WithMessageFilters(filters => filters.AddIncomingFilter(next => async (context, ct) =>
+    {
+        if (context.JsonRpcMessage is JsonRpcRequest request &&
+            request.Method == "tools/call" &&
+            request.Params is JsonObject parameters &&
+            parameters["name"]?.GetValue<string>() == "preview_proposal" &&
+            parameters["arguments"] is JsonObject arguments)
+        {
+            try
+            {
+                _ = arguments.ToJsonString();
+            }
+            catch (InvalidOperationException)
+            {
+                parameters["arguments"] = new JsonObject();
+            }
+        }
+        await next(context, ct);
+    }))
     .WithTools(new HandoffTools(Environment.GetEnvironmentVariable("AUTOGIS_MCP_BUNDLE_ROOT")))
     .WithTools([tool]);
 

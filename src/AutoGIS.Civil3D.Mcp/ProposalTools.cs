@@ -49,8 +49,7 @@ public sealed class ProposalTools
     private static bool IsLocalJsonPath(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) ||
-            path.StartsWith(@"\\", StringComparison.Ordinal) ||
-            path.StartsWith("//", StringComparison.Ordinal))
+            path.Replace('/', '\\').StartsWith(@"\\", StringComparison.Ordinal))
             return false;
         try
         {
@@ -213,7 +212,14 @@ public sealed class ProposalTools
             return !required;
         if (raw.ValueKind != JsonValueKind.String)
             return false;
-        value = raw.GetString();
+        try
+        {
+            value = raw.GetString();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or JsonException)
+        {
+            return false;
+        }
         return value is not null && value.Length <= 1024;
     }
 

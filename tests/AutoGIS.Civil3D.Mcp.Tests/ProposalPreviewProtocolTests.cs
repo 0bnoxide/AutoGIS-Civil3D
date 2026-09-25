@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AutoGIS.Civil3D.Proposal;
@@ -64,6 +66,72 @@ public sealed class ProposalPreviewProtocolTests
                 Assert.Single(result.Content.OfType<TextContentBlock>()).Text);
         }
 
+    }
+
+    [Fact]
+    public async Task Stdio_rejects_lone_surrogate_escapes_as_invalid_arguments()
+    {
+        var start = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        start.ArgumentList.Add("exec");
+        start.ArgumentList.Add(ServerDllPath);
+        start.Environment["AUTOGIS_MCP_STANDARDS_MANIFEST"] = ManifestFixturePath;
+        start.Environment["AUTOGIS_MCP_BUNDLE_ROOT"] = FixtureRoot;
+        using Process process = Process.Start(start)!;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        async Task<JsonElement> Exchange(string request)
+        {
+            await process.StandardInput.WriteLineAsync(request);
+            string? line = await process.StandardOutput.ReadLineAsync(timeout.Token);
+            Assert.NotNull(line);
+            using JsonDocument response = JsonDocument.Parse(line);
+            return response.RootElement.Clone();
+        }
+
+        try
+        {
+            JsonElement initialized = await Exchange("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"regression","version":"1"}}}""");
+            Assert.True(initialized.TryGetProperty("result", out _), initialized.GetRawText());
+            await process.StandardInput.WriteLineAsync("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
+
+            string[] requests =
+            [
+                """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"preview_proposal","arguments":{"client_name":"\ud800","site_name":"Site","proposal_year":2026,"orientation":"Landscape","sheet_size":"TEST-A1"}}}""",
+                """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"preview_proposal","arguments":{"client_name":"Client","site_name":"Site","proposal_year":2026,"orientation":"Landscape","sheet_size":"TEST-A1","site_address":"\udfff"}}}"""
+            ];
+            foreach (string request in requests)
+            {
+                JsonElement response = await Exchange(request);
+                Assert.True(response.TryGetProperty("result", out JsonElement result),
+                    response.GetRawText());
+                Assert.True(result.GetProperty("isError").GetBoolean());
+                Assert.Equal("INVALID_ARGUMENTS",
+                    result.GetProperty("content")[0].GetProperty("text").GetString());
+                Assert.True(!result.TryGetProperty("structuredContent", out JsonElement body) ||
+                    body.ValueKind == JsonValueKind.Null);
+            }
+
+            JsonElement valid = await Exchange("""{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"preview_proposal","arguments":{"client_name":"Client","site_name":"Site","proposal_year":2026,"orientation":"Landscape","sheet_size":"TEST-A1"}}}""");
+            Assert.Equal("AdvisoryPlan", valid.GetProperty("result")
+                .GetProperty("structuredContent").GetProperty("status").GetString());
+
+            JsonElement m1 = await Exchange("""{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"validate_handoff_bundle","arguments":{"bundle_relative_path":"valid/known-vertical-datum.zip"}}}""");
+            JsonElement m1Result = m1.GetProperty("result");
+            Assert.True(!m1Result.TryGetProperty("isError", out JsonElement m1Error) ||
+                !m1Error.GetBoolean());
+        }
+        finally
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+        }
     }
 
     [Fact]
@@ -353,6 +421,17 @@ public sealed class ProposalPreviewProtocolTests
         {
             temp.Delete(recursive: true);
         }
+    }
+
+    [Theory]
+    [InlineData(@"\/server/share/standards.json")]
+    [InlineData(@"/\server/share/standards.json")]
+    public void Manifest_path_guard_rejects_mixed_separator_unc_without_io(string path)
+    {
+        var guard = typeof(ProposalTools).GetMethod("IsLocalJsonPath",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(guard);
+        Assert.False(Assert.IsType<bool>(guard.Invoke(null, [path])));
     }
 
     private static Dictionary<string, object?> ValidArguments => new()
