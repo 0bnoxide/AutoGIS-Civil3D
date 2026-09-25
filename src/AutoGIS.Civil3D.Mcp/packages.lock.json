@@ -385,6 +385,9 @@
           "SharpZipLib": "[1.4.2, )"
         }
       },
+      "autogis.civil3d.proposal": {
+        "type": "Project"
+      },
       "JsonSchema.Net": {
         "type": "CentralTransitive",
         "requested": "[9.4.0, )",
