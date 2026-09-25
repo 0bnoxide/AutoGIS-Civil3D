@@ -7,9 +7,62 @@ namespace AutoGIS.Civil3D.Mcp;
 
 public sealed class ProposalTools
 {
-    private readonly string? _configuredManifestPath;
+    private const int MaxManifestBytes = 256 * 1024;
+    private readonly StandardsManifest? _manifest;
+    private readonly string? _manifestError;
 
-    public ProposalTools(string? manifestPath) => _configuredManifestPath = manifestPath;
+    public ProposalTools(string? manifestPath)
+    {
+        if (!IsLocalJsonPath(manifestPath))
+        {
+            _manifestError = "MANIFEST_NOT_CONFIGURED";
+            return;
+        }
+        try
+        {
+            using var stream = new FileStream(manifestPath!, FileMode.Open,
+                FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            byte[] bytes = new byte[MaxManifestBytes + 1];
+            int used = 0;
+            while (used < bytes.Length)
+            {
+                int read = stream.Read(bytes, used, bytes.Length - used);
+                if (read == 0) break;
+                used += read;
+            }
+            if (used > MaxManifestBytes)
+            {
+                _manifestError = "MANIFEST_TOO_LARGE";
+                return;
+            }
+            ManifestResult parsed = StandardsManifest.Parse(bytes.AsSpan(0, used));
+            _manifest = parsed.Manifest;
+            _manifestError = parsed.Manifest is null ? "MANIFEST_INVALID" : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or ArgumentException or NotSupportedException or System.Security.SecurityException)
+        {
+            _manifestError = "MANIFEST_UNREADABLE";
+        }
+    }
+
+    private static bool IsLocalJsonPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) ||
+            path.StartsWith(@"\\", StringComparison.Ordinal) ||
+            path.StartsWith("//", StringComparison.Ordinal))
+            return false;
+        try
+        {
+            return Path.IsPathFullyQualified(path) &&
+                string.Equals(Path.GetExtension(path), ".json",
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
 
     internal const string InputSchemaJson = """
     {
@@ -81,9 +134,11 @@ public sealed class ProposalTools
     public CallToolResult PreviewProposal(
         RequestContext<CallToolRequestParams> context, CancellationToken cancellationToken)
     {
+        if (_manifest is null)
+            return Error(_manifestError!);
         if (!TryReadInputs(context.Params.Arguments, out _))
             return Error("INVALID_ARGUMENTS");
-        return Error("MANIFEST_NOT_CONFIGURED");
+        return Error("SERVER_ERROR");
     }
 
     private static bool TryReadInputs(IDictionary<string, JsonElement>? args,

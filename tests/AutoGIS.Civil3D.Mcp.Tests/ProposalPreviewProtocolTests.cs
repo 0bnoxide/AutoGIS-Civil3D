@@ -10,7 +10,7 @@ public sealed class ProposalPreviewProtocolTests
     [Fact]
     public async Task Stdio_lists_preview_with_explicit_schemas()
     {
-        await using McpClient client = await ConnectAsync();
+        await using McpClient client = await ConnectAsync(ManifestFixturePath);
         var tools = await client.ListToolsAsync();
         Assert.Equal(new[] { "preview_proposal", "validate_handoff_bundle" },
             tools.Select(tool => tool.Name).Order(StringComparer.Ordinal).ToArray());
@@ -35,7 +35,7 @@ public sealed class ProposalPreviewProtocolTests
     [Fact]
     public async Task Stdio_rejects_invalid_argument_shapes_with_one_safe_code()
     {
-        await using McpClient client = await ConnectAsync();
+        await using McpClient client = await ConnectAsync(ManifestFixturePath);
         var wrongType = ValidArguments;
         wrongType["proposal_year"] = "2026";
         var extra = ValidArguments;
@@ -62,11 +62,64 @@ public sealed class ProposalPreviewProtocolTests
                 Assert.Single(result.Content.OfType<TextContentBlock>()).Text);
         }
 
-        CallToolResult valid = await client.CallToolAsync("preview_proposal", ValidArguments);
-        Assert.Equal(true, valid.IsError);
-        Assert.Null(valid.StructuredContent);
-        Assert.Equal("MANIFEST_NOT_CONFIGURED",
-            Assert.Single(valid.Content.OfType<TextContentBlock>()).Text);
+    }
+
+    [Fact]
+    public async Task Startup_manifest_configuration_returns_only_safe_codes_and_keeps_m1_available()
+    {
+        DirectoryInfo temp = Directory.CreateTempSubdirectory("AutoGIS-Civil3D-M2Manifest-");
+        try
+        {
+            string missing = Path.Combine(temp.FullName, "missing.json");
+            string unreadable = Path.Combine(temp.FullName, "directory.json");
+            Directory.CreateDirectory(unreadable);
+            string tooLarge = Path.Combine(temp.FullName, "too-large.json");
+            await File.WriteAllBytesAsync(tooLarge, new byte[256 * 1024 + 1]);
+            string badUtf8 = Path.Combine(temp.FullName, "bad-utf8.json");
+            await File.WriteAllBytesAsync(badUtf8, [0xC3, 0x28]);
+            string badJson = Path.Combine(temp.FullName, "bad-json.json");
+            await File.WriteAllTextAsync(badJson, "{");
+            string rejected = Path.Combine(temp.FullName, "rejected.json");
+            await File.WriteAllTextAsync(rejected, "{\"version\":1}");
+
+            var cases = new (string Name, string? Path, string Code)[]
+            {
+                ("absent", null, "MANIFEST_NOT_CONFIGURED"),
+                ("blank", " ", "MANIFEST_NOT_CONFIGURED"),
+                ("relative", "standards.json", "MANIFEST_NOT_CONFIGURED"),
+                ("wrong extension", Path.Combine(temp.FullName, "standards.txt"), "MANIFEST_NOT_CONFIGURED"),
+                ("UNC", @"\\server\share\standards.json", "MANIFEST_NOT_CONFIGURED"),
+                ("device", @"\\?\C:\standards.json", "MANIFEST_NOT_CONFIGURED"),
+                ("slash UNC", "//server/share/standards.json", "MANIFEST_NOT_CONFIGURED"),
+                ("missing", missing, "MANIFEST_UNREADABLE"),
+                ("unreadable", unreadable, "MANIFEST_UNREADABLE"),
+                ("too large", tooLarge, "MANIFEST_TOO_LARGE"),
+                ("bad UTF-8", badUtf8, "MANIFEST_INVALID"),
+                ("bad JSON", badJson, "MANIFEST_INVALID"),
+                ("parser rejection", rejected, "MANIFEST_INVALID")
+            };
+
+            foreach (var (name, path, code) in cases)
+            {
+                await using McpClient client = await ConnectAsync(path, FixtureRoot);
+                Assert.Equal(2, (await client.ListToolsAsync()).Count);
+                CallToolResult error = await client.CallToolAsync("preview_proposal", ValidArguments);
+                Assert.True(error.IsError == true, name);
+                Assert.Null(error.StructuredContent);
+                Assert.Equal(code, Assert.Single(error.Content.OfType<TextContentBlock>()).Text);
+
+                CallToolResult m1 = await client.CallToolAsync("validate_handoff_bundle",
+                    new Dictionary<string, object?>
+                    {
+                        ["bundle_relative_path"] = "valid/known-vertical-datum.zip"
+                    });
+                Assert.NotEqual(true, m1.IsError);
+            }
+        }
+        finally
+        {
+            temp.Delete(recursive: true);
+        }
     }
 
     private static Dictionary<string, object?> ValidArguments => new()
@@ -78,7 +131,8 @@ public sealed class ProposalPreviewProtocolTests
         ["sheet_size"] = "TEST-A1"
     };
 
-    private static async Task<McpClient> ConnectAsync()
+    private static async Task<McpClient> ConnectAsync(string? manifestPath = null,
+        string? bundleRoot = null)
     {
         var transport = new StdioClientTransport(new StdioClientTransportOptions
         {
@@ -87,13 +141,18 @@ public sealed class ProposalPreviewProtocolTests
             Arguments = ["exec", ServerDllPath],
             EnvironmentVariables = new Dictionary<string, string?>
             {
-                ["AUTOGIS_MCP_STANDARDS_MANIFEST"] = null,
-                ["AUTOGIS_MCP_BUNDLE_ROOT"] = null
+                ["AUTOGIS_MCP_STANDARDS_MANIFEST"] = manifestPath,
+                ["AUTOGIS_MCP_BUNDLE_ROOT"] = bundleRoot
             }
         });
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         return await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
     }
+
+    private static string FixtureRoot => Path.Combine(RepositoryRoot, "fixtures", "v1");
+
+    private static string ManifestFixturePath => Path.Combine(RepositoryRoot, "tests",
+        "AutoGIS.Civil3D.Proposal.Tests", "Fixtures", "synthetic-standards.json");
 
     private static string ServerDllPath => Path.Combine(RepositoryRoot, "src",
         "AutoGIS.Civil3D.Mcp", "bin",
