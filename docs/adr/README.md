@@ -15,5 +15,6 @@ ADRs record decisions, context, alternatives, and consequences. They do not carr
 | [0009](0009-hosted-ci-manual-integration.md) | Build the 2026 preview in hosted CI and qualify it manually | Accepted |
 | [0010](0010-production-setup-inspection-placement.md) | Keep Survey Preflight and Audit EG Surface in Phase 4 production setup | Accepted |
 | [0011](0011-phase4-local-handoff-mcp.md) | Place local handoff MCP validation in Phase 4 | Accepted |
+| [0012](0012-phase4-m2-advisory-preview.md) | Keep the M2 advisory proposal preview in Phase 4 | Accepted |
 
 ADR numbers are allocated, never guessed: take one with `coordination.py claim --session <id> --kind adr`, which allocates the next unused number atomically under the registry lock. A number is consumed on allocation and never reissued. Record unused allocations as plain four-digit rows in this table before retiring their local registry so fresh clones preserve those consumed gaps. The allocator uses the highest number from this table, existing ADR filenames, and local reservations; `doctor` reports when the local registry is behind the index. Keep this index to one ADR table with linked ADR numbers or plain consumed numbers in its first column.
