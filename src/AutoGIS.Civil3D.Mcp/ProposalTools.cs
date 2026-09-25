@@ -134,12 +134,51 @@ public sealed class ProposalTools
     public CallToolResult PreviewProposal(
         RequestContext<CallToolRequestParams> context, CancellationToken cancellationToken)
     {
-        if (_manifest is null)
-            return Error(_manifestError!);
-        if (!TryReadInputs(context.Params.Arguments, out _))
+        if (_manifestError is { } code)
+            return Error(code);
+        if (!TryReadInputs(context.Params.Arguments, out ProposalInputs? inputs))
             return Error("INVALID_ARGUMENTS");
-        return Error("SERVER_ERROR");
+        try
+        {
+            return FormatResult(ProposalPlanner.Build(inputs!, _manifest!));
+        }
+        catch (Exception)
+        {
+            return Error("PREVIEW_FAILED");
+        }
     }
+
+    private static CallToolResult FormatResult(PlanResult result)
+    {
+        ProposalPlan? plan = result.Plan;
+        PreviewAction[] actions = plan is null ? [] :
+            plan.Actions.Select(action => new PreviewAction(action.Id,
+                action.Operation.ToString(), action.RelativePath,
+                action.Dependencies.ToArray())).ToArray();
+        PreviewIssue[] issues = plan is null
+            ? result.Issues.Select(SafeIssue).ToArray() : [];
+        var output = new ProposalPreviewOutput(
+            plan is null ? "NoPlan" : "AdvisoryPlan", true, false, false,
+            plan?.ManifestVersion, plan is null ? null : plan.FinalRootComponents[1],
+            plan is null ? null : ExistingGroundState.Pending.ToString(),
+            actions.Length, actions, issues);
+        JsonElement body = JsonSerializer.SerializeToElement(output,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return new CallToolResult { Content = [], StructuredContent = body };
+    }
+
+    private static PreviewIssue SafeIssue(ProposalIssue issue) => issue.Code switch
+    {
+        ProposalIssueCodes.InvalidInputs =>
+            new(issue.Code, "Check proposal input values."),
+        ProposalIssueCodes.UnsupportedYear =>
+            new(issue.Code, "Choose a year in configured standards."),
+        ProposalIssueCodes.UnsupportedSheet =>
+            new(issue.Code, "Choose a configured sheet profile."),
+        ProposalIssueCodes.UnsafePath =>
+            new(issue.Code, "A planned path is too long."),
+        _ => new("PROPOSAL_ISSUE", "Proposal planning was rejected.")
+    };
 
     private static bool TryReadInputs(IDictionary<string, JsonElement>? args,
         out ProposalInputs? inputs)

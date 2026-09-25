@@ -65,6 +65,71 @@ public sealed class ProposalPreviewProtocolTests
     }
 
     [Fact]
+    public async Task Stdio_returns_safe_planner_rejections()
+    {
+        await using McpClient client = await ConnectAsync(ManifestFixturePath);
+        var cases = new (string Name, string Key, object Value, string Code, string Explanation)[]
+        {
+            ("blank optional", "project_manager", " ", "PROPOSAL_INVALID_INPUTS", "Check proposal input values."),
+            ("unsafe name", "client_name", "Client/Other", "PROPOSAL_INVALID_INPUTS", "Check proposal input values."),
+            ("unsupported year", "proposal_year", 2030, "PROPOSAL_UNSUPPORTED_YEAR", "Choose a year in configured standards."),
+            ("out-of-range year", "proposal_year", 10000, "PROPOSAL_INVALID_INPUTS", "Check proposal input values."),
+            ("unsupported orientation", "orientation", "Portrait", "PROPOSAL_UNSUPPORTED_SHEET", "Choose a configured sheet profile."),
+            ("unsupported size", "sheet_size", "TEST-A0", "PROPOSAL_UNSUPPORTED_SHEET", "Choose a configured sheet profile.")
+        };
+
+        foreach (var (name, key, value, code, explanation) in cases)
+        {
+            var arguments = ValidArguments;
+            arguments[key] = value;
+            CallToolResult result = await client.CallToolAsync("preview_proposal", arguments);
+            Assert.NotEqual(true, result.IsError);
+            JsonElement body = Assert.IsType<JsonElement>(result.StructuredContent);
+            Assert.Equal("NoPlan", body.GetProperty("status").GetString());
+            Assert.True(body.GetProperty("advisoryOnly").GetBoolean());
+            Assert.False(body.GetProperty("nativePreflightPerformed").GetBoolean());
+            Assert.False(body.GetProperty("templatesChecked").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, body.GetProperty("manifestVersion").ValueKind);
+            Assert.Equal(JsonValueKind.Null, body.GetProperty("proposedRootName").ValueKind);
+            Assert.Equal(JsonValueKind.Null, body.GetProperty("existingGround").ValueKind);
+            Assert.Equal(0, body.GetProperty("actionCount").GetInt32());
+            Assert.Empty(body.GetProperty("actions").EnumerateArray());
+            JsonElement issue = Assert.Single(body.GetProperty("issues").EnumerateArray());
+            Assert.Equal(code, issue.GetProperty("code").GetString());
+            Assert.Equal(explanation, issue.GetProperty("explanation").GetString());
+            Assert.Equal(2, issue.EnumerateObject().Count());
+        }
+    }
+
+    [Fact]
+    public async Task Stdio_returns_complete_advisory_plan_from_synthetic_standards()
+    {
+        await using McpClient client = await ConnectAsync(ManifestFixturePath);
+        CallToolResult result = await client.CallToolAsync("preview_proposal", ValidArguments);
+
+        Assert.NotEqual(true, result.IsError);
+        JsonElement body = Assert.IsType<JsonElement>(result.StructuredContent);
+        Assert.Equal(10, body.EnumerateObject().Count());
+        Assert.Equal("AdvisoryPlan", body.GetProperty("status").GetString());
+        Assert.True(body.GetProperty("advisoryOnly").GetBoolean());
+        Assert.False(body.GetProperty("nativePreflightPerformed").GetBoolean());
+        Assert.False(body.GetProperty("templatesChecked").GetBoolean());
+        Assert.Equal(1, body.GetProperty("manifestVersion").GetInt32());
+        Assert.Equal("Client - Site", body.GetProperty("proposedRootName").GetString());
+        Assert.Equal("Pending", body.GetProperty("existingGround").GetString());
+        Assert.Equal(36, body.GetProperty("actionCount").GetInt32());
+        JsonElement[] actions = body.GetProperty("actions").EnumerateArray().ToArray();
+        Assert.Equal(36, actions.Length);
+        Assert.Empty(body.GetProperty("issues").EnumerateArray());
+        Assert.Equal("00:root", actions[0].GetProperty("id").GetString());
+        Assert.Equal("CreateFolder", actions[0].GetProperty("operation").GetString());
+        Assert.Equal("", actions[0].GetProperty("relativePath").GetString());
+        Assert.Empty(actions[0].GetProperty("dependencies").EnumerateArray());
+        Assert.All(actions, action => Assert.Equal(4, action.EnumerateObject().Count()));
+        Assert.DoesNotContain("C:/AutoGIS-Synthetic", body.GetRawText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Startup_manifest_configuration_returns_only_safe_codes_and_keeps_m1_available()
     {
         DirectoryInfo temp = Directory.CreateTempSubdirectory("AutoGIS-Civil3D-M2Manifest-");
