@@ -13,10 +13,13 @@ public sealed class McpProtocolTests
     private const string ToolName = "validate_handoff_bundle";
 
     [Fact]
-    public async Task Stdio_client_lists_one_tool_and_preserves_package_outcomes()
+    public async Task Stdio_client_lists_both_tools_and_preserves_package_outcomes()
     {
         await using McpClient client = await ConnectAsync(FixtureRoot);
-        var tool = Assert.Single(await client.ListToolsAsync()).ProtocolTool;
+        var tools = await client.ListToolsAsync();
+        Assert.Equal(new[] { "preview_proposal", ToolName },
+            tools.Select(item => item.Name).Order(StringComparer.Ordinal).ToArray());
+        var tool = Assert.Single(tools, item => item.Name == ToolName).ProtocolTool;
         Assert.Equal(ToolName, tool.Name);
 
         JsonElement input = tool.InputSchema;
@@ -221,8 +224,10 @@ public sealed class McpProtocolTests
                 """{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}""");
             await child.StandardInput.FlushAsync();
             JsonElement listed = await ReadResponseAsync(2);
-            Assert.Equal(ToolName, Assert.Single(listed.GetProperty("result")
-                .GetProperty("tools").EnumerateArray()).GetProperty("name").GetString());
+            Assert.Equal(new[] { "preview_proposal", ToolName },
+                listed.GetProperty("result").GetProperty("tools").EnumerateArray()
+                    .Select(item => item.GetProperty("name").GetString())
+                    .Order(StringComparer.Ordinal).ToArray());
 
             child.StandardInput.Close();
             Task<string> trailing = child.StandardOutput.ReadToEndAsync(timeout.Token);

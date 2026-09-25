@@ -460,9 +460,13 @@
         "type": "Project",
         "dependencies": {
           "AutoGIS.Civil3D.Handoff": "[1.0.0, )",
+          "AutoGIS.Civil3D.Proposal": "[1.0.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.12, )",
           "ModelContextProtocol": "[2.2.0, )"
         }
+      },
+      "autogis.civil3d.proposal": {
+        "type": "Project"
       },
       "JsonSchema.Net": {
         "type": "CentralTransitive",

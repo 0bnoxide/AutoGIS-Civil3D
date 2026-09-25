@@ -6,6 +6,7 @@
     <PackageReference Include="ModelContextProtocol" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <ProjectReference Include="../AutoGIS.Civil3D.Handoff/AutoGIS.Civil3D.Handoff.csproj" />
+    <ProjectReference Include="../AutoGIS.Civil3D.Proposal/AutoGIS.Civil3D.Proposal.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="AutoGIS.Civil3D.Mcp.Tests" />
