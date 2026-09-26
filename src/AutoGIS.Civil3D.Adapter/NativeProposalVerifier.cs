@@ -13,57 +13,93 @@ internal static class NativeProposalVerifier
         var failures = new List<ProposalIssue>();
         var verified = new List<string>();
         var hashes = new List<KeyValuePair<string, string>>();
-        foreach (var action in plan.Actions.Where(a => a.Operation == ProposalOperation.CreateModelDrawing))
+        var locked = new List<(string RelativePath, string Path, FileStream File, string Hash)>();
+        try
         {
-            string path = ProposalFiles.Child(artifactRoot, action.RelativePath);
-            try
+            foreach (var action in plan.Actions.Where(a => a.Operation == ProposalOperation.CreateModelDrawing))
             {
-                ProposalFiles.RejectReparseAncestors(path);
-                if (!File.Exists(path)) throw new FileNotFoundException("Planned model drawing is missing.", path);
-                string before = Hash(path);
-                int oldFailures = failures.Count;
-                var active = AcApplication.DocumentManager.MdiActiveDocument
-                    ?? throw new InvalidOperationException("A Civil 3D document must remain active on the host thread.");
-                Database activeDatabase = active.Database;
-                string activeName = active.Name;
-                Database previous = HostApplicationServices.WorkingDatabase;
-                Database? db = null;
+                string path = ProposalFiles.Child(artifactRoot, action.RelativePath);
+                FileStream? file = null;
                 try
                 {
-                    db = new Database(false, true);
-                    db.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, false, null);
-                    db.CloseInput(true);
-                    if (db.NeedsRecovery) throw new InvalidDataException("Model drawing requires recovery.");
-                    CheckReferences(db, plan, action.RelativePath, artifactRoot, failures);
+                    ProposalFiles.RejectReparseAncestors(path);
+                    // Allow Autodesk readers while denying ordinary writes and replacement until all resolution ends.
+                    file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    string before = Hash(file);
+                    int oldFailures = failures.Count;
+                    WithReadDatabase(path, db => CheckReferences(db, plan, action.RelativePath, artifactRoot, failures));
+                    if (Hash(file) != before)
+                        Fail(failures, action.RelativePath, "Readback changed the model drawing bytes.");
                     if (failures.Count == oldFailures)
                     {
-                        db.ResolveXrefs(false, false);
-                        CheckLoadedReferences(db, plan, action.RelativePath, artifactRoot, failures);
+                        locked.Add((action.RelativePath, path, file, before));
+                        file = null;
                     }
                 }
-                finally
+                catch (System.Exception ex)
                 {
-                    try { HostApplicationServices.WorkingDatabase = previous; }
-                    finally { db?.Dispose(); }
+                    Fail(failures, action.RelativePath, $"Could not independently read model drawing: {ex.GetType().Name}: {ex.Message}");
                 }
-                if (!activeDatabase.Equals(AcApplication.DocumentManager.MdiActiveDocument?.Database) ||
-                    !string.Equals(activeName, AcApplication.DocumentManager.MdiActiveDocument?.Name, StringComparison.Ordinal) ||
-                    !previous.Equals(HostApplicationServices.WorkingDatabase))
-                    throw new InvalidOperationException("Readback changed the active document or working database.");
-                string after = Hash(path);
-                if (after != before) Fail(failures, action.RelativePath, "Readback changed the model drawing bytes.");
-                if (failures.Count == oldFailures)
+                finally { file?.Dispose(); }
+            }
+
+            if (failures.Count == 0)
+                foreach (var model in locked)
                 {
-                    verified.Add(action.RelativePath);
-                    hashes.Add(KeyValuePair.Create(action.RelativePath, after));
+                    try
+                    {
+                        ProposalFiles.RejectReparseAncestors(model.Path);
+                        int oldFailures = failures.Count;
+                        WithReadDatabase(model.Path, db =>
+                        {
+                            db.ResolveXrefs(false, false);
+                            CheckLoadedReferences(db, plan, model.RelativePath, artifactRoot, failures);
+                        });
+                        string after = Hash(model.File);
+                        if (after != model.Hash)
+                            Fail(failures, model.RelativePath, "Resolution changed the model drawing bytes.");
+                        if (failures.Count == oldFailures)
+                        {
+                            verified.Add(model.RelativePath);
+                            hashes.Add(KeyValuePair.Create(model.RelativePath, after));
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Fail(failures, model.RelativePath, $"Could not independently resolve model drawing: {ex.GetType().Name}: {ex.Message}");
+                    }
+                    if (failures.Count != 0) break;
                 }
-            }
-            catch (System.Exception ex)
-            {
-                Fail(failures, action.RelativePath, $"Could not independently read model drawing: {ex.GetType().Name}: {ex.Message}");
-            }
         }
+        finally { foreach (var model in locked) model.File.Dispose(); }
         return new(verified, failures, [], hashes);
+    }
+
+    private static void WithReadDatabase(string path, Action<Database> inspect)
+    {
+        var active = AcApplication.DocumentManager.MdiActiveDocument
+            ?? throw new InvalidOperationException("A Civil 3D document must remain active on the host thread.");
+        Database activeDatabase = active.Database;
+        string activeName = active.Name;
+        Database previous = HostApplicationServices.WorkingDatabase;
+        Database? db = null;
+        try
+        {
+            db = new Database(false, true);
+            db.ReadDwgFile(path, FileOpenMode.OpenForReadAndAllShare, false, null);
+            db.CloseInput(true);
+            if (db.NeedsRecovery) throw new InvalidDataException("Model drawing requires recovery.");
+            inspect(db);
+        }
+        finally
+        {
+            try { HostApplicationServices.WorkingDatabase = previous; }
+            finally { db?.Dispose(); }
+        }
+        if (!activeDatabase.Equals(AcApplication.DocumentManager.MdiActiveDocument?.Database) ||
+            !string.Equals(activeName, AcApplication.DocumentManager.MdiActiveDocument?.Name, StringComparison.Ordinal) ||
+            !previous.Equals(HostApplicationServices.WorkingDatabase))
+            throw new InvalidOperationException("Readback changed the active document or working database.");
     }
 
     private static void CheckReferences(Database db, ProposalPlan plan, string hostRelativePath,
@@ -209,10 +245,12 @@ internal static class NativeProposalVerifier
 
     private static string Normalize(string path) => path.Replace('/', '\\');
 
-    private static string Hash(string path)
+    private static string Hash(FileStream file)
     {
-        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        return Convert.ToHexString(SHA256.HashData(file));
+        file.Position = 0;
+        string hash = Convert.ToHexString(SHA256.HashData(file));
+        file.Position = 0;
+        return hash;
     }
 
     private static void Fail(List<ProposalIssue> failures, string path, string message) =>
