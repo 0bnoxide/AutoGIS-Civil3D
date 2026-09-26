@@ -105,6 +105,7 @@ public sealed class ProposalExecutor
             ProposalFiles.WriteReceipt(stagedReceipt, candidate, () => ownedFiles.Add(stagedReceipt), beforeSuccessReceiptFlush);
             failedActionId = "Verify";
             ProposalFiles.ValidateOwnedTree(stage, ownedFiles, ownedDirectories);
+            ProposalFiles.ValidateArtifactHashes(verification, stage);
 
             failedActionId = "Promote";
             ProposalFiles.Publish(stage, plan.FinalRoot);

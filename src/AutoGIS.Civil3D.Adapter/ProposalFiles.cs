@@ -144,13 +144,27 @@ internal static class ProposalFiles
     {
         var expected = ExpectedArtifacts(plan);
         var observed = report.VerifiedArtifacts.ToHashSet(Paths);
-        if (observed.Count != report.VerifiedArtifacts.Length || !expected.SetEquals(observed))
-            throw new InvalidDataException("Independent verification did not report exactly the planned artifacts.");
+        if (observed.Count != report.VerifiedArtifacts.Length || !expected.SetEquals(observed) ||
+            report.ArtifactSha256.Count != expected.Count || !expected.SetEquals(report.ArtifactSha256.Keys))
+            throw new InvalidDataException("Independent verification did not report exactly the planned artifacts and digests.");
         foreach (string relative in observed)
         {
             string path = Child(stage, relative);
             RejectReparseAncestors(path);
             if (!File.Exists(path)) throw new FileNotFoundException("Verified artifact is missing on disk.", path);
+        }
+    }
+
+    internal static void ValidateArtifactHashes(VerificationReport report, string stage)
+    {
+        foreach (var (relative, expected) in report.ArtifactSha256)
+        {
+            string path = Child(stage, relative);
+            RejectReparseAncestors(path);
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            string actual = Convert.ToHexString(SHA256.HashData(file));
+            if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"Verified artifact changed after readback: {relative}");
         }
     }
 

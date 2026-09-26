@@ -100,6 +100,79 @@ public sealed class ProposalExecutorTests
         Assert.True(File.Exists(result.ReceiptPath));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ArtifactChangedAfterReadbackPreventsPublication(bool replaceFile)
+    {
+        using var harness = new Harness();
+        string model = harness.Plan.Actions.Single(action => action.Id == "20:model/BaseModel").RelativePath;
+        string stagedModel = ProposalFiles.Child(harness.StageRoot, model);
+        byte[] tampered = [99, 98, 97];
+        var executor = new ProposalExecutor(_ =>
+        {
+            if (replaceFile) File.Delete(stagedModel);
+            using var stream = new FileStream(stagedModel, replaceFile ? FileMode.CreateNew : FileMode.Open,
+                FileAccess.Write, FileShare.None);
+            stream.SetLength(0);
+            stream.Write(tampered);
+        });
+
+        var result = executor.Run(harness.Plan, harness.Approval, new RecordingProposalHost(),
+            harness.RunId, Harness.FixedTime, harness.FailureDirectory);
+
+        Assert.Equal("Failed", result.Outcome);
+        Assert.Equal("Verify", result.FailedActionId);
+        Assert.Contains(result.FailedChecks, issue => issue.Code == ExecutionIssueCodes.VerificationFailed);
+        Assert.Equal(harness.StageRoot, result.RetainedStagingRoot);
+        Assert.False(Directory.Exists(harness.Plan.FinalRoot));
+        Assert.Equal(tampered, File.ReadAllBytes(stagedModel));
+        Assert.True(File.Exists(result.ReceiptPath));
+        Assert.Equal("Failed", JsonSerializer.Deserialize<RunReceipt>(File.ReadAllText(result.ReceiptPath!))!.Outcome);
+    }
+
+    [Fact]
+    public void MissingReadbackDigestPreventsPublication()
+    {
+        using var harness = new Harness();
+        string model = harness.Plan.Actions.Single(action => action.Id == "20:model/BaseModel").RelativePath;
+        var host = new RecordingProposalHost { OmitHashRelativePath = model };
+
+        var result = new ProposalExecutor().Run(harness.Plan, harness.Approval, host,
+            harness.RunId, Harness.FixedTime, harness.FailureDirectory);
+
+        Assert.Equal("Failed", result.Outcome);
+        Assert.Equal("Verify", result.FailedActionId);
+        Assert.Contains(result.FailedChecks, issue => issue.Code == ExecutionIssueCodes.VerificationFailed);
+        Assert.Equal(harness.StageRoot, result.RetainedStagingRoot);
+        Assert.False(Directory.Exists(harness.Plan.FinalRoot));
+        Assert.True(File.Exists(result.ReceiptPath));
+    }
+
+    [Fact]
+    public void ArtifactUnreadableAfterReadbackPreventsPublication()
+    {
+        using var harness = new Harness();
+        string model = harness.Plan.Actions.Single(action => action.Id == "20:model/BaseModel").RelativePath;
+        string stagedModel = ProposalFiles.Child(harness.StageRoot, model);
+        FileStream? locked = null;
+        try
+        {
+            var executor = new ProposalExecutor(_ => locked = new FileStream(stagedModel,
+                FileMode.Open, FileAccess.ReadWrite, FileShare.None));
+            var result = executor.Run(harness.Plan, harness.Approval, new RecordingProposalHost(),
+                harness.RunId, Harness.FixedTime, harness.FailureDirectory);
+
+            Assert.Equal("Failed", result.Outcome);
+            Assert.Equal("Verify", result.FailedActionId);
+            Assert.Contains(result.FailedChecks, issue => issue.Code == ExecutionIssueCodes.VerificationFailed);
+            Assert.Equal(harness.StageRoot, result.RetainedStagingRoot);
+            Assert.False(Directory.Exists(harness.Plan.FinalRoot));
+            Assert.True(File.Exists(result.ReceiptPath));
+        }
+        finally { locked?.Dispose(); }
+    }
+
     [Fact]
     public void MissingArtifactDuringHostReadbackIsVerificationFailure()
     {
@@ -903,6 +976,7 @@ public sealed class ProposalExecutorTests
         public bool FailClose { get; init; }
         public int FailCloseOnCount { get; init; }
         public bool FailVerify { get; init; }
+        public string? OmitHashRelativePath { get; init; }
         public int CloseCount { get; private set; }
         public Action? OnInspect { get; init; }
         public ProposalIssue[] InspectIssues { get; init; } = [];
@@ -946,10 +1020,13 @@ public sealed class ProposalExecutorTests
             Calls.Add("Verify");
             OnVerify?.Invoke(artifactRoot);
             if (FailVerify)
-                return new([], [new(ExecutionIssueCodes.VerificationFailed, "Injected verification failure.")], []);
-            string[] observed = Directory.GetFiles(artifactRoot, "*", SearchOption.AllDirectories)
-                .Select(path => Path.GetRelativePath(artifactRoot, path).Replace('\\', '/')).ToArray();
-            return new(observed, [], ["Associate synthetic data shortcuts manually."]);
+                return new([], [new(ExecutionIssueCodes.VerificationFailed, "Injected verification failure.")], [], []);
+            string[] paths = Directory.GetFiles(artifactRoot, "*", SearchOption.AllDirectories);
+            string[] observed = paths.Select(path => Path.GetRelativePath(artifactRoot, path).Replace('\\', '/')).ToArray();
+            var hashes = paths.Zip(observed, (path, relative) =>
+                KeyValuePair.Create(relative, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))))
+                .Where(hash => !string.Equals(hash.Key, OmitHashRelativePath, StringComparison.OrdinalIgnoreCase));
+            return new(observed, [], ["Associate synthetic data shortcuts manually."], hashes);
         }
     }
 }
