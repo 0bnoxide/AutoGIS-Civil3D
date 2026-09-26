@@ -59,9 +59,13 @@ internal static class DrawingWriter
         Database? side = null;
         string temporary = Path.Combine(Path.GetDirectoryName(destination)!,
             $".autogis-{Guid.NewGuid():N}.dwg");
+        ProposalFiles.RejectReparseAncestors(source);
+        ProposalFiles.RejectReparseAncestors(destination);
+        using FileStream? original = replace
+            ? new FileStream(destination, FileMode.Open, FileAccess.ReadWrite, FileShare.Read)
+            : null;
         try
         {
-            ProposalFiles.RejectReparseAncestors(source);
             ProposalFiles.RejectReparseAncestors(destination);
             if (ProposalFiles.EntryExists(temporary)) throw new IOException("Temporary drawing path already exists.");
             side = new Database(false, true);
@@ -81,7 +85,19 @@ internal static class DrawingWriter
             !string.Equals(activeName, AcApplication.DocumentManager.MdiActiveDocument?.Name, StringComparison.Ordinal) ||
             !previous.Equals(HostApplicationServices.WorkingDatabase))
             throw new InvalidOperationException("Native drawing work changed the active document or working database.");
-        if (replace) File.Replace(temporary, destination, null);
-        else File.Move(temporary, destination);
+        if (!replace)
+        {
+            File.Move(temporary, destination);
+            return;
+        }
+
+        ProposalFiles.RejectReparseAncestors(destination);
+        ProposalFiles.RejectReparseAncestors(temporary);
+        using var saved = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read,
+            4096, FileOptions.DeleteOnClose);
+        original!.Position = 0;
+        saved.CopyTo(original);
+        original.SetLength(saved.Length);
+        original.Flush(true);
     }
 }
