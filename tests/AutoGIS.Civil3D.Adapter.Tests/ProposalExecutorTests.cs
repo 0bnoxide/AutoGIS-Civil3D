@@ -65,6 +65,39 @@ public sealed class ProposalExecutorTests
     }
 
     [Fact]
+    public void MissingPlannedEmptyFolderPreventsPublication()
+    {
+        using var harness = new Harness();
+        string shortcutId = harness.Plan.Actions.Single(action => action.Operation == ProposalOperation.CreateFolder &&
+            action.RelativePath == "Shortcuts").Id;
+        var host = new RecordingProposalHost { SkipActionId = shortcutId };
+        var result = new ProposalExecutor().Run(harness.Plan, harness.Approval, host, harness.RunId, Harness.FixedTime, harness.FailureDirectory);
+        Assert.Equal("Failed", result.Outcome);
+        Assert.Equal("PrepareReceipt", result.FailedActionId);
+        Assert.False(Directory.Exists(harness.Plan.FinalRoot));
+        Assert.Equal(harness.StageRoot, result.RetainedStagingRoot);
+        Assert.False(Directory.Exists(ProposalFiles.Child(harness.StageRoot, "Shortcuts")));
+        Assert.True(File.Exists(result.ReceiptPath));
+    }
+
+    [Fact]
+    public void FileRemovedAfterVerificationPreventsPublication()
+    {
+        using var harness = new Harness();
+        string model = harness.Plan.Actions.Single(action => action.Id == "20:model/BaseModel").RelativePath;
+        string stagedModel = ProposalFiles.Child(harness.StageRoot, model);
+        var executor = new ProposalExecutor(_ => File.Delete(stagedModel));
+        var result = executor.Run(harness.Plan, harness.Approval, new RecordingProposalHost(),
+            harness.RunId, Harness.FixedTime, harness.FailureDirectory);
+        Assert.Equal("Failed", result.Outcome);
+        Assert.Equal("PrepareReceipt", result.FailedActionId);
+        Assert.False(Directory.Exists(harness.Plan.FinalRoot));
+        Assert.Equal(harness.StageRoot, result.RetainedStagingRoot);
+        Assert.False(File.Exists(stagedModel));
+        Assert.True(File.Exists(result.ReceiptPath));
+    }
+
+    [Fact]
     public void EveryActionFailureRetainsEvidenceWithoutPublishing()
     {
         using var identity = new Harness();
@@ -112,6 +145,20 @@ public sealed class ProposalExecutorTests
         var host = new RecordingProposalHost();
         var result = new ProposalExecutor().Run(harness.Plan, harness.Approval, host, harness.RunId, Harness.FixedTime, harness.FailureDirectory);
         Assert.Equal("Refused", result.Outcome);
+        Assert.Contains(result.FailedChecks, issue => issue.Code == ExecutionIssueCodes.StaleApproval);
+        Assert.Empty(host.Calls);
+        Assert.False(Directory.Exists(harness.StageRoot));
+    }
+
+    [Fact]
+    public void DifferentApprovedPlanIsReportedAsStale()
+    {
+        using var harness = new Harness();
+        var stale = new ProposalApproval(harness.Approval.PlanJson + " ", harness.Approval.DependencyFingerprints.ToDictionary());
+        var host = new RecordingProposalHost();
+        var result = new ProposalExecutor().Run(harness.Plan, stale, host, harness.RunId, Harness.FixedTime, harness.FailureDirectory);
+        Assert.Equal("Refused", result.Outcome);
+        Assert.Contains(result.FailedChecks, issue => issue.Code == ExecutionIssueCodes.StaleApproval);
         Assert.Empty(host.Calls);
         Assert.False(Directory.Exists(harness.StageRoot));
     }
@@ -162,6 +209,20 @@ public sealed class ProposalExecutorTests
         Assert.Equal("Verify", verify.FailedActionId);
         Assert.Contains(verify.FailedChecks, c => c.Code == ExecutionIssueCodes.VerificationFailed);
         Assert.False(Directory.Exists(verifyHarness.Plan.FinalRoot));
+    }
+
+    [Fact]
+    public void CloseAfterVerificationReportsTheFailedCloseOperation()
+    {
+        using var harness = new Harness();
+        var host = new RecordingProposalHost { FailCloseOnCount = 2 };
+        var result = new ProposalExecutor().Run(harness.Plan, harness.Approval, host, harness.RunId, Harness.FixedTime, harness.FailureDirectory);
+        Assert.Equal("Failed", result.Outcome);
+        Assert.Equal("CloseCreatedArtifacts", result.FailedActionId);
+        Assert.Contains("Verify", host.Calls);
+        Assert.False(Directory.Exists(harness.Plan.FinalRoot));
+        Assert.Equal(harness.StageRoot, result.RetainedStagingRoot);
+        Assert.True(File.Exists(result.ReceiptPath));
     }
 
     [Fact]
@@ -225,6 +286,90 @@ public sealed class ProposalExecutorTests
     }
 
     [Fact]
+    public void DirectoryCreationAclDenialRefusesBeforeNativeInspect()
+    {
+        using var harness = new Harness();
+        var directory = new DirectoryInfo(harness.BaseRoot);
+        var original = directory.GetAccessControl(AccessControlSections.Access);
+        var denied = directory.GetAccessControl(AccessControlSections.Access);
+        denied.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!,
+            FileSystemRights.CreateDirectories, AccessControlType.Deny));
+        directory.SetAccessControl(denied);
+        try
+        {
+            string file = Path.Combine(harness.BaseRoot, "file-creation-still-allowed");
+            File.WriteAllText(file, "allowed");
+            File.Delete(file);
+            var host = new RecordingProposalHost();
+            var result = new ProposalExecutor().Run(harness.Plan, harness.Approval, host, harness.RunId, Harness.FixedTime, harness.FailureDirectory);
+            Assert.Equal("Refused", result.Outcome);
+            Assert.Contains(result.FailedChecks, issue => issue.Code == ExecutionIssueCodes.PreflightFailed);
+            Assert.Empty(host.Calls);
+            Assert.False(Directory.Exists(harness.StageRoot));
+            Assert.False(Directory.Exists(harness.Plan.FinalRoot));
+        }
+        finally { directory.SetAccessControl(original); }
+    }
+
+    [Fact]
+    public void MissingConfiguredBaseRootReportsPreflightFailure()
+    {
+        using var harness = new Harness();
+        Directory.Delete(harness.BaseRoot);
+        var host = new RecordingProposalHost();
+        var result = new ProposalExecutor().Run(harness.Plan, harness.Approval, host, harness.RunId, Harness.FixedTime, harness.FailureDirectory);
+        Assert.Equal("Refused", result.Outcome);
+        Assert.Contains(result.FailedChecks, issue => issue.Code == ExecutionIssueCodes.PreflightFailed);
+        Assert.Empty(host.Calls);
+        Assert.False(Directory.Exists(harness.StageRoot));
+        Assert.False(Directory.Exists(harness.Plan.FinalRoot));
+    }
+
+    [Fact]
+    public void ReparsePointIntroducedDuringInspectIsReportedAsUnsafe()
+    {
+        using var harness = new Harness();
+        string parent = Path.GetDirectoryName(harness.BaseRoot)!;
+        string physical = Path.Combine(parent, "physical-proposals");
+        string probe = Path.Combine(parent, "symlink-probe");
+        Directory.CreateDirectory(physical);
+        try
+        {
+            Directory.CreateSymbolicLink(probe, physical);
+            Directory.Delete(probe);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            output.WriteLine("Reparse race test not exercised: local symlink creation is unavailable: " + ex.GetType().Name);
+            return;
+        }
+        bool linked = false;
+        var host = new RecordingProposalHost
+        {
+            OnInspect = () =>
+            {
+                Directory.Delete(harness.BaseRoot);
+                Directory.CreateSymbolicLink(harness.BaseRoot, physical);
+                linked = true;
+            }
+        };
+        try
+        {
+            var result = new ProposalExecutor().Run(harness.Plan, harness.Approval, host, harness.RunId, Harness.FixedTime, harness.FailureDirectory);
+            Assert.Equal("Refused", result.Outcome);
+            Assert.Contains(result.FailedChecks, issue => issue.Code == ExecutionIssueCodes.UnsafeExecutionPath);
+            Assert.Equal(["Inspect"], host.Calls);
+            Assert.Empty(Directory.GetFileSystemEntries(physical));
+            Assert.False(Directory.Exists(harness.StageRoot));
+        }
+        finally
+        {
+            if (linked) Directory.Delete(harness.BaseRoot);
+            Directory.CreateDirectory(harness.BaseRoot);
+        }
+    }
+
+    [Fact]
     public void ReparsePointBaseRootIsRejectedWithoutTouchingItsTarget()
     {
         using var harness = new Harness();
@@ -247,6 +392,7 @@ public sealed class ProposalExecutorTests
             var host = new RecordingProposalHost();
             var result = new ProposalExecutor().Run(harness.Plan, harness.Approval, host, harness.RunId, Harness.FixedTime, harness.FailureDirectory);
             Assert.Equal("Refused", result.Outcome);
+            Assert.Contains(result.FailedChecks, issue => issue.Code == ExecutionIssueCodes.UnsafeExecutionPath);
             Assert.Empty(host.Calls);
             Assert.Empty(Directory.GetFileSystemEntries(physical));
         }
@@ -519,7 +665,9 @@ public sealed class ProposalExecutorTests
     {
         public List<string> Calls { get; } = [];
         public string? FailActionId { get; init; }
+        public string? SkipActionId { get; init; }
         public bool FailClose { get; init; }
+        public int FailCloseOnCount { get; init; }
         public bool FailVerify { get; init; }
         public int CloseCount { get; private set; }
         public Action? OnInspect { get; init; }
@@ -542,6 +690,7 @@ public sealed class ProposalExecutorTests
                 OnFailure?.Invoke(stagingRoot);
                 throw new IOException("Injected action failure.");
             }
+            if (action.Id == SkipActionId) return;
             if (action.Operation == ProposalOperation.CreateFolder)
             {
                 if (action.RelativePath.Length > 0) ProposalFiles.ReserveStage(ProposalFiles.Child(stagingRoot, action.RelativePath));
@@ -556,7 +705,7 @@ public sealed class ProposalExecutorTests
         {
             Calls.Add("CloseCreatedArtifacts");
             CloseCount++;
-            if (FailClose) throw new IOException("Injected close failure.");
+            if (FailClose || CloseCount == FailCloseOnCount) throw new IOException("Injected close failure.");
         }
         public VerificationReport Verify(ProposalPlan plan, string artifactRoot)
         {

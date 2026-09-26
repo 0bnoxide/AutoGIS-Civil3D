@@ -31,25 +31,37 @@ public sealed class ProposalExecutor
             return Blank("Cancelled", [new(ExecutionIssueCodes.ApprovalRequired, "Review the current preview and approve it before execution.")]);
 
         string stage;
+        string preflightCode = ExecutionIssueCodes.PreflightFailed;
         try
         {
+            preflightCode = ExecutionIssueCodes.StaleApproval;
             if (!string.Equals(planJson, approval.PlanJson, StringComparison.Ordinal))
                 throw new InvalidDataException("The approved plan is no longer the plan selected for execution.");
+            preflightCode = ExecutionIssueCodes.UnsafeExecutionPath;
             stage = ProposalFiles.ValidateAndStagePath(plan, runId, failureReceiptDirectory);
+            preflightCode = ExecutionIssueCodes.TargetExists;
             ProposalFiles.RefuseExisting(plan.FinalRoot, stage);
+            preflightCode = ExecutionIssueCodes.StaleApproval;
             EnsureFingerprints(approval);
+            preflightCode = ExecutionIssueCodes.PreflightFailed;
             ProposalFiles.ProbeWritable(plan.FinalRootComponents[0], runId);
             var native = host.Inspect(plan);
             if (!native.Issues.IsEmpty)
                 return Blank("Refused", native.Issues);
             // Inspect can take time; recheck every approved input before the first artifact exists.
+            preflightCode = ExecutionIssueCodes.StaleApproval;
             EnsureFingerprints(approval);
+            preflightCode = ExecutionIssueCodes.TargetExists;
             ProposalFiles.RefuseExisting(plan.FinalRoot, stage);
         }
         catch (Exception ex)
         {
-            string code = SafeEntryExists(plan.FinalRoot)
-                ? ExecutionIssueCodes.TargetExists : ExecutionIssueCodes.PreflightFailed;
+            string code = ex switch
+            {
+                UnsafeExecutionPathException => ExecutionIssueCodes.UnsafeExecutionPath,
+                DirectoryNotFoundException when preflightCode == ExecutionIssueCodes.UnsafeExecutionPath => ExecutionIssueCodes.PreflightFailed,
+                _ => preflightCode
+            };
             return Blank("Refused", [new(code, ex.Message)], ex.GetType().Name + ": " + ex.Message);
         }
 
@@ -87,8 +99,10 @@ public sealed class ProposalExecutor
             failedActionId = "Verify";
             closeNeeded = true;
             verification = host.Verify(plan, stage);
+            failedActionId = "CloseCreatedArtifacts";
             host.CloseCreatedArtifacts();
             closeNeeded = false;
+            failedActionId = "Verify";
             if (!verification.FailedChecks.IsEmpty)
                 throw new InvalidDataException("Independent artifact verification failed.");
             ProposalFiles.ValidateObservedArtifacts(plan, verification, stage);

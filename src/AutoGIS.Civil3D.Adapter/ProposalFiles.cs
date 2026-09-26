@@ -7,6 +7,11 @@ using AutoGIS.Civil3D.Proposal;
 
 namespace AutoGIS.Civil3D.Adapter;
 
+internal sealed class UnsafeExecutionPathException : IOException
+{
+    internal UnsafeExecutionPathException(string message) : base(message) { }
+}
+
 internal static class ProposalFiles
 {
     private static readonly StringComparer Paths = StringComparer.OrdinalIgnoreCase;
@@ -29,7 +34,7 @@ internal static class ProposalFiles
             try
             {
                 if ((File.GetAttributes(part) & FileAttributes.ReparsePoint) != 0)
-                    throw new IOException($"Reparse point is not permitted: {part}");
+                    throw new UnsafeExecutionPathException($"Reparse point is not permitted: {part}");
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { }
         }
@@ -103,6 +108,9 @@ internal static class ProposalFiles
             stream.WriteByte(0);
             stream.Flush(true);
         }
+        string directoryProbe = Path.Combine(directory, $".autogis-directory-probe-{runId:N}");
+        ReserveStage(directoryProbe);
+        Directory.Delete(directoryProbe);
     }
 
     internal static void ReserveStage(string stage)
@@ -151,6 +159,10 @@ internal static class ProposalFiles
             if ((attributes & FileAttributes.Directory) != 0 ? !ownedDirectories.Contains(entry) : !ownedFiles.Contains(entry))
                 throw new IOException($"A foreign entry appeared in staging: {entry}");
         }
+        foreach (string directory in ownedDirectories)
+            if (!Directory.Exists(directory)) throw new IOException($"A planned directory is missing or changed type: {directory}");
+        foreach (string file in ownedFiles)
+            if (!File.Exists(file)) throw new IOException($"A planned file is missing or changed type: {file}");
     }
 
     internal static void TrackAction(string stage, PlannedAction action, HashSet<string> ownedFiles, HashSet<string> ownedDirectories)
