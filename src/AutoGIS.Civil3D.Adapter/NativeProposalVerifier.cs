@@ -81,12 +81,12 @@ internal static class NativeProposalVerifier
         }
         using var transaction = db.TransactionManager.StartTransaction();
         var table = (BlockTable)transaction.GetObject(db.BlockTableId, OpenMode.ForRead);
-        var external = new Dictionary<string, (ObjectId Id, BlockTableRecord Record)>(StringComparer.Ordinal);
+        var external = new HashSet<string>(StringComparer.Ordinal);
         foreach (ObjectId id in table)
         {
             var block = (BlockTableRecord)transaction.GetObject(id, OpenMode.ForRead);
             if (!block.IsFromExternalReference) continue;
-            if (!external.TryAdd(block.Name, (id, block)))
+            if (!external.Add(block.Name))
                 Fail(failures, hostRelativePath, $"Duplicate Xref definition: {block.Name}.");
             string? storedTarget = CheckStoredPath(block, hostRelativePath, artifactRoot, failures);
             if (!expected.TryGetValue(block.Name, out var intent))
@@ -96,11 +96,11 @@ internal static class NativeProposalVerifier
             }
             CheckDefinition(block, storedTarget, intent, hostRelativePath, artifactRoot, failures);
         }
-        foreach (string missing in expected.Keys.Except(external.Keys, StringComparer.Ordinal))
+        foreach (string missing in expected.Keys.Except(external, StringComparer.Ordinal))
             Fail(failures, hostRelativePath, $"Missing model Xref definition: {missing}.");
 
-        var placements = new Dictionary<ObjectId, int>();
-        var modelPlacements = new Dictionary<ObjectId, int>();
+        var placements = new Dictionary<string, int>(StringComparer.Ordinal);
+        var modelPlacements = new Dictionary<string, int>(StringComparer.Ordinal);
         ObjectId modelSpaceId = table[BlockTableRecord.ModelSpace];
         foreach (ObjectId spaceId in table)
         {
@@ -108,21 +108,20 @@ internal static class NativeProposalVerifier
             if (space.IsFromExternalReference) continue;
             foreach (ObjectId entityId in space)
             {
-                if (transaction.GetObject(entityId, OpenMode.ForRead) is not BlockReference reference ||
-                    !external.Values.Any(x => x.Id == reference.BlockTableRecord)) continue;
-                placements[reference.BlockTableRecord] = placements.GetValueOrDefault(reference.BlockTableRecord) + 1;
+                if (transaction.GetObject(entityId, OpenMode.ForRead) is not BlockReference reference) continue;
+                var definition = (BlockTableRecord)transaction.GetObject(reference.BlockTableRecord, OpenMode.ForRead);
+                if (!definition.IsFromExternalReference || !expected.TryGetValue(definition.Name, out var intent)) continue;
+                string role = definition.Name;
+                placements[role] = placements.GetValueOrDefault(role) + 1;
                 if (spaceId != modelSpaceId) continue;
-                modelPlacements[reference.BlockTableRecord] = modelPlacements.GetValueOrDefault(reference.BlockTableRecord) + 1;
-                var role = external.Single(x => x.Value.Id == reference.BlockTableRecord).Key;
-                if (expected.TryGetValue(role, out var intent) && !TransformMatches(reference, intent.Reference))
+                modelPlacements[role] = modelPlacements.GetValueOrDefault(role) + 1;
+                if (!TransformMatches(reference, intent.Reference))
                     Fail(failures, hostRelativePath, $"Model Xref transform differs from plan: {role}.");
             }
         }
         foreach (string role in expected.Keys)
         {
-            if (!external.TryGetValue(role, out var definition)) continue; // Missing definitions were reported above.
-            ObjectId id = definition.Id;
-            if (placements.GetValueOrDefault(id) != 1 || modelPlacements.GetValueOrDefault(id) != 1)
+            if (placements.GetValueOrDefault(role) != 1 || modelPlacements.GetValueOrDefault(role) != 1)
                 Fail(failures, hostRelativePath, $"Model Xref has a missing, duplicate, or non-model insertion: {role}.");
         }
     }
