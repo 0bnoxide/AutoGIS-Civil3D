@@ -7,9 +7,11 @@ using AutoGIS.Civil3D.Proposal;
 
 namespace AutoGIS.Civil3D.Adapter;
 
-internal sealed class UnsafeExecutionPathException : IOException
+internal sealed class ProposalConditionException : IOException
 {
-    internal UnsafeExecutionPathException(string message) : base(message) { }
+    internal string Code { get; }
+
+    internal ProposalConditionException(string code, string message) : base(message) => Code = code;
 }
 
 internal static class ProposalFiles
@@ -34,7 +36,7 @@ internal static class ProposalFiles
             try
             {
                 if ((File.GetAttributes(part) & FileAttributes.ReparsePoint) != 0)
-                    throw new UnsafeExecutionPathException($"Reparse point is not permitted: {part}");
+                    throw new ProposalConditionException(ExecutionIssueCodes.UnsafeExecutionPath, $"Reparse point is not permitted: {part}");
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { }
         }
@@ -44,9 +46,9 @@ internal static class ProposalFiles
     {
         if (string.IsNullOrEmpty(relative) || relative.Contains('\\') || Path.IsPathRooted(relative) ||
             relative.Split('/').Any(part => part.Length == 0 || part is "." or ".." || part.Contains(':')))
-            throw new InvalidDataException("The plan contains an unsafe relative artifact path.");
+            throw new ProposalConditionException(ExecutionIssueCodes.UnsafeExecutionPath, "The plan contains an unsafe relative artifact path.");
         string child = Full(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
-        if (!Within(child, root)) throw new InvalidDataException("A planned artifact escapes the staging root.");
+        if (!Within(child, root)) throw new ProposalConditionException(ExecutionIssueCodes.UnsafeExecutionPath, "A planned artifact escapes the staging root.");
         return child;
     }
 
@@ -60,13 +62,13 @@ internal static class ProposalFiles
         string name = plan.FinalRootComponents[1];
         if (name.Length == 0 || name is "." or ".." || name.IndexOfAny(['/', '\\', ':']) >= 0 ||
             !Paths.Equals(Full(Path.Combine(baseRoot, name)), Full(plan.FinalRoot)))
-            throw new InvalidDataException("The planned final root is not a direct child of its approved base root.");
+            throw new ProposalConditionException(ExecutionIssueCodes.UnsafeExecutionPath, "The planned final root is not a direct child of its approved base root.");
         if (!Directory.Exists(baseRoot)) throw new DirectoryNotFoundException($"The approved base root does not exist: {baseRoot}");
         string finalRoot = Full(plan.FinalRoot);
         string stage = StagePath(finalRoot, runId);
         string failureRoot = Full(failureDirectory);
         if (Paths.Equals(failureRoot, finalRoot) || Within(failureRoot, finalRoot) || Paths.Equals(failureRoot, stage) || Within(failureRoot, stage))
-            throw new InvalidDataException("Failure receipts must be outside the proposal and staging roots.");
+            throw new ProposalConditionException(ExecutionIssueCodes.UnsafeExecutionPath, "Failure receipts must be outside the proposal and staging roots.");
         RejectReparseAncestors(baseRoot);
         RejectReparseAncestors(finalRoot);
         RejectReparseAncestors(stage);
@@ -80,13 +82,13 @@ internal static class ProposalFiles
     {
         RejectReparseAncestors(finalRoot);
         RejectReparseAncestors(stage);
-        if (EntryExists(finalRoot)) throw new IOException("The proposal target already exists.");
-        if (EntryExists(stage)) throw new IOException("An earlier staging root exists for this run ID; it will not be adopted.");
+        if (EntryExists(finalRoot)) throw new ProposalConditionException(ExecutionIssueCodes.TargetExists, "The proposal target already exists.");
+        if (EntryExists(stage)) throw new ProposalConditionException(ExecutionIssueCodes.TargetExists, "An earlier staging root exists for this run ID; it will not be adopted.");
         string prefix = StagePrefix(finalRoot);
         string parent = Path.GetDirectoryName(Full(stage))!;
         if (Directory.EnumerateFileSystemEntries(parent)
             .Any(entry => Path.GetFileName(entry).StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
-            throw new IOException("An unfinished staging root exists for this proposal; inspect it before rerunning.");
+            throw new ProposalConditionException(ExecutionIssueCodes.TargetExists, "An unfinished staging root exists for this proposal; inspect it before rerunning.");
     }
 
     internal static string StagePath(string finalRoot, Guid runId) =>
@@ -117,7 +119,12 @@ internal static class ProposalFiles
     {
         RejectReparseAncestors(stage);
         if (!CreateDirectoryExclusive(stage, 0))
-            throw new IOException($"Could not exclusively reserve staging root: {stage}", new Win32Exception(Marshal.GetLastWin32Error()));
+        {
+            int error = Marshal.GetLastWin32Error();
+            if (error is 80 or 183)
+                throw new ProposalConditionException(ExecutionIssueCodes.TargetExists, $"Staging root already exists: {stage}");
+            throw new IOException($"Could not exclusively reserve staging root: {stage}", new Win32Exception(error));
+        }
     }
 
     internal static HashSet<string> ExpectedArtifacts(ProposalPlan plan) =>
@@ -155,7 +162,7 @@ internal static class ProposalFiles
         {
             var attributes = File.GetAttributes(entry);
             if ((attributes & FileAttributes.ReparsePoint) != 0)
-                throw new IOException($"A reparse point appeared in staging: {entry}");
+                throw new ProposalConditionException(ExecutionIssueCodes.UnsafeExecutionPath, $"A reparse point appeared in staging: {entry}");
             if ((attributes & FileAttributes.Directory) != 0 ? !ownedDirectories.Contains(entry) : !ownedFiles.Contains(entry))
                 throw new IOException($"A foreign entry appeared in staging: {entry}");
         }
@@ -179,7 +186,7 @@ internal static class ProposalFiles
         string path = Child(stage, action.RelativePath);
         RejectReparseAncestors(path);
         if ((action.Operation == ProposalOperation.CreateFolder || IsArtifactCreate(action)) && EntryExists(path))
-            throw new IOException($"A planned output already exists before exclusive creation: {path}");
+            throw new ProposalConditionException(ExecutionIssueCodes.TargetExists, $"A planned output already exists before exclusive creation: {path}");
     }
 
     internal static void WriteReceipt(string path, RunReceipt receipt, Action onCreated, Action<FileStream>? beforeFlush = null)
@@ -195,9 +202,13 @@ internal static class ProposalFiles
     internal static void Publish(string stage, string finalRoot)
     {
         RejectReparseAncestors(finalRoot);
-        if (EntryExists(finalRoot)) throw new IOException("The proposal target appeared before publication.");
+        if (EntryExists(finalRoot)) throw new ProposalConditionException(ExecutionIssueCodes.TargetExists, "The proposal target appeared before publication.");
         RejectReparseAncestors(stage);
-        Directory.Move(stage, finalRoot);
+        try { Directory.Move(stage, finalRoot); }
+        catch (IOException) when (EntryExists(finalRoot))
+        {
+            throw new ProposalConditionException(ExecutionIssueCodes.TargetExists, "The proposal target appeared during publication.");
+        }
     }
 
     internal static string? Cleanup(string stage)

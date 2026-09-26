@@ -31,37 +31,24 @@ public sealed class ProposalExecutor
             return Blank("Cancelled", [new(ExecutionIssueCodes.ApprovalRequired, "Review the current preview and approve it before execution.")]);
 
         string stage;
-        string preflightCode = ExecutionIssueCodes.PreflightFailed;
         try
         {
-            preflightCode = ExecutionIssueCodes.StaleApproval;
             if (!string.Equals(planJson, approval.PlanJson, StringComparison.Ordinal))
-                throw new InvalidDataException("The approved plan is no longer the plan selected for execution.");
-            preflightCode = ExecutionIssueCodes.UnsafeExecutionPath;
+                throw new ProposalConditionException(ExecutionIssueCodes.StaleApproval, "The approved plan is no longer the plan selected for execution.");
             stage = ProposalFiles.ValidateAndStagePath(plan, runId, failureReceiptDirectory);
-            preflightCode = ExecutionIssueCodes.TargetExists;
             ProposalFiles.RefuseExisting(plan.FinalRoot, stage);
-            preflightCode = ExecutionIssueCodes.StaleApproval;
             EnsureFingerprints(approval);
-            preflightCode = ExecutionIssueCodes.PreflightFailed;
             ProposalFiles.ProbeWritable(plan.FinalRootComponents[0], runId);
             var native = host.Inspect(plan);
             if (!native.Issues.IsEmpty)
                 return Blank("Refused", native.Issues);
             // Inspect can take time; recheck every approved input before the first artifact exists.
-            preflightCode = ExecutionIssueCodes.StaleApproval;
             EnsureFingerprints(approval);
-            preflightCode = ExecutionIssueCodes.TargetExists;
             ProposalFiles.RefuseExisting(plan.FinalRoot, stage);
         }
         catch (Exception ex)
         {
-            string code = ex switch
-            {
-                UnsafeExecutionPathException => ExecutionIssueCodes.UnsafeExecutionPath,
-                DirectoryNotFoundException when preflightCode == ExecutionIssueCodes.UnsafeExecutionPath => ExecutionIssueCodes.PreflightFailed,
-                _ => preflightCode
-            };
+            string code = ex is ProposalConditionException condition ? condition.Code : ExecutionIssueCodes.PreflightFailed;
             return Blank("Refused", [new(code, ex.Message)], ex.GetType().Name + ": " + ex.Message);
         }
 
@@ -84,7 +71,9 @@ public sealed class ProposalExecutor
                 if (!action.Dependencies.All(completed.Contains))
                     throw new InvalidDataException("Planned action dependencies are out of order.");
                 ProposalFiles.RejectReparseAncestors(stage);
-                if (ProposalFiles.EntryExists(plan.FinalRoot)) throw new IOException("The final target appeared during execution.");
+                ProposalFiles.RejectReparseAncestors(plan.FinalRoot);
+                if (ProposalFiles.EntryExists(plan.FinalRoot))
+                    throw new ProposalConditionException(ExecutionIssueCodes.TargetExists, "The final target appeared during execution.");
                 ProposalFiles.RequireFreshActionTarget(stage, action);
                 using FileStream? templateGuard = OpenVerifiedTemplateAtUse(action, approval);
                 closeNeeded = true;
@@ -114,6 +103,7 @@ public sealed class ProposalExecutor
             var candidate = new RunReceipt(runId, startedAt.ToUniversalTime(), planHash, "Succeeded", plan.FinalRoot,
                 publishedReceipt, verification.VerifiedArtifacts, verification.ManualSteps, null, [], null, [], null, null);
             ProposalFiles.WriteReceipt(stagedReceipt, candidate, () => ownedFiles.Add(stagedReceipt), beforeSuccessReceiptFlush);
+            failedActionId = "Verify";
             ProposalFiles.ValidateOwnedTree(stage, ownedFiles, ownedDirectories);
 
             failedActionId = "Promote";
@@ -133,7 +123,13 @@ public sealed class ProposalExecutor
                 if (cleanup is not null) cleanupFailures.Add(cleanup);
             }
             var checks = verification?.FailedChecks ?? [];
-            if (checks.IsEmpty) checks = [new(ExecutionIssueCodes.ExecutionFailed, ex.Message)];
+            if (checks.IsEmpty)
+            {
+                string code = ex is ProposalConditionException condition ? condition.Code
+                    : failedActionId == "Verify" ? ExecutionIssueCodes.VerificationFailed
+                    : ExecutionIssueCodes.ExecutionFailed;
+                checks = [new(code, ex.Message)];
+            }
             var failure = Blank("Failed", checks, ex.GetType().Name + ": " + ex.Message) with
             {
                 FailedActionId = failedActionId,
@@ -156,7 +152,7 @@ public sealed class ProposalExecutor
     private static void EnsureFingerprints(ProposalApproval approval)
     {
         if (approval.DependencyFingerprints.Count == 0)
-            throw new InvalidDataException("Approval contains no source fingerprints.");
+            throw new ProposalConditionException(ExecutionIssueCodes.StaleApproval, "Approval contains no source fingerprints.");
         foreach (var expected in approval.DependencyFingerprints)
             using (OpenVerifiedDependency(expected.Key, expected.Value)) { }
     }
@@ -172,19 +168,25 @@ public sealed class ProposalExecutor
         if (path is null) return null;
         path = Path.GetFullPath(path);
         if (!approval.DependencyFingerprints.TryGetValue(path, out string? expected))
-            throw new InvalidDataException("The selected template was not captured by approval.");
+            throw new ProposalConditionException(ExecutionIssueCodes.StaleApproval, "The selected template was not captured by approval.");
         return OpenVerifiedDependency(path, expected);
     }
 
     private static FileStream OpenVerifiedDependency(string path, string expected)
     {
         ProposalFiles.RejectReparseAncestors(path);
-        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        FileStream stream;
+        try { stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            throw new ProposalConditionException(ExecutionIssueCodes.StaleApproval,
+                $"An approved manifest or template is missing; create a new preview and approve it: {path}");
+        }
         try
         {
             string actual = Convert.ToHexString(SHA256.HashData(stream));
             if (!string.Equals(actual, expected, StringComparison.Ordinal))
-                throw new InvalidDataException("An approved manifest or template changed; create a new preview and approve it.");
+                throw new ProposalConditionException(ExecutionIssueCodes.StaleApproval, "An approved manifest or template changed; create a new preview and approve it.");
             stream.Position = 0;
             return stream;
         }
