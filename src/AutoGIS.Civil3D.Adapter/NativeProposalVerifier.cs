@@ -118,8 +118,10 @@ internal static class NativeProposalVerifier
                     Fail(failures, hostRelativePath, $"Model Xref transform differs from plan: {role}.");
             }
         }
-        foreach (var (role, (id, _)) in external)
+        foreach (string role in expected.Keys)
         {
+            if (!external.TryGetValue(role, out var definition)) continue; // Missing definitions were reported above.
+            ObjectId id = definition.Id;
             if (placements.GetValueOrDefault(id) != 1 || modelPlacements.GetValueOrDefault(id) != 1)
                 Fail(failures, hostRelativePath, $"Model Xref has a missing, duplicate, or non-model insertion: {role}.");
         }
@@ -203,7 +205,8 @@ internal static class NativeProposalVerifier
         reference.ScaleFactors.Z == expected.Scale && reference.Rotation == expected.Rotation &&
         HasWorldNormal(reference.Normal.X, reference.Normal.Y, reference.Normal.Z);
 
-    internal static bool HasWorldNormal(double x, double y, double z) => x == 0 && y == 0 && z == 1;
+    internal static bool HasWorldNormal(double x, double y, double z) =>
+        Math.Abs(x) <= 1e-9 && Math.Abs(y) <= 1e-9 && Math.Abs(z - 1) <= 1e-9;
 
     private static string Normalize(string path) => path.Replace('/', '\\');
 

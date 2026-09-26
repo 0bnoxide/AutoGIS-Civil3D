@@ -50,7 +50,10 @@ public sealed class NativePlanDispatchTests
     public void TiltedXrefNormalIsNotThePlannedWorldUpTransform()
     {
         Assert.True(NativeProposalVerifier.HasWorldNormal(0, 0, 1));
+        Assert.True(NativeProposalVerifier.HasWorldNormal(1e-12, -1e-12, 1 - 1e-12));
         Assert.False(NativeProposalVerifier.HasWorldNormal(0, 1, 0));
+        Assert.False(NativeProposalVerifier.HasWorldNormal(1e-6, 0, 1));
+        Assert.False(NativeProposalVerifier.HasWorldNormal(double.NaN, 0, 1));
     }
 
     private static ProposalPlan Plan()
