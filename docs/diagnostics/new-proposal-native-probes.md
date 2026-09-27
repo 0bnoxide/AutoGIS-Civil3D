@@ -51,7 +51,7 @@ Data Shortcuts association remains unverified. The installed 13.8 API exposes lo
 
 ## Task 5 scratch-save behavior observed on 2026-09-26
 
-A disposable Civil 3D 2026 x64 probe called managed `Database.SaveAs` against five synthetic target states. The frozen probe DLL SHA-256 was `7D8B31D5FD8BEE721666464CA6D148304D5E873F0EABA3D194526D7FED73006B`; the report SHA-256 was `BC056C0448724DAECC45CAD5B54C7D6B647445A15844B5D211DD38CFA81022C6`. Independent disk hashes and DWG headers matched the report. The active drawing's disk hash was unchanged.
+A disposable Civil 3D 2026 x64 probe called managed `Database.SaveAs` against five synthetic target states. The frozen probe DLL SHA-256 was `7D8B31D5FD8BEE721666464CA6D148304D5E873F0EABA3D194526D7FED73006B`; the report SHA-256 was `BC056C0448724DAECC45CAD5B54C7D6B647445A15844B5D211DD38CFA81022C6`. Independent target-file hashes and DWG headers matched the report. Each case recorded the same active document and working database before and after; the report did not record a pre/post active-drawing disk hash.
 
 | Target state | Observed `SaveAs` result |
 | --- | --- |
