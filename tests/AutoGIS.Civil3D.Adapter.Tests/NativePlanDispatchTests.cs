@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using AutoGIS.Civil3D.Proposal;
 using Xunit;
 
@@ -54,6 +55,27 @@ public sealed class NativePlanDispatchTests
         Assert.False(NativeProposalVerifier.HasWorldNormal(0, 1, 0));
         Assert.False(NativeProposalVerifier.HasWorldNormal(1e-6, 0, 1));
         Assert.False(NativeProposalVerifier.HasWorldNormal(double.NaN, 0, 1));
+    }
+
+    [Fact]
+    public void CapturedDigestRejectsSwappedModelUnderReadLock()
+    {
+        string stage = Path.Combine(Path.GetTempPath(), "AutoGIS-model-swap-" + Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(stage, "Model.dwg");
+        byte[] created = [1, 2, 3, 4];
+        byte[] replacement = [9, 8, 7];
+        try
+        {
+            Directory.CreateDirectory(stage);
+            File.WriteAllBytes(path, created);
+            string expected = Convert.ToHexString(SHA256.HashData(created));
+            File.WriteAllBytes(path, replacement);
+
+            using var guard = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            Assert.Throws<InvalidDataException>(() => ProposalFiles.RequireCreatedHash(guard, expected));
+            Assert.Equal(replacement, File.ReadAllBytes(path));
+        }
+        finally { if (Directory.Exists(stage)) Directory.Delete(stage, recursive: true); }
     }
 
     [Fact]

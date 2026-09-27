@@ -162,10 +162,24 @@ internal static class ProposalFiles
             string path = Child(stage, relative);
             RejectReparseAncestors(path);
             using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            string actual = Convert.ToHexString(SHA256.HashData(file));
+            string actual = Hash(file);
             if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"Verified artifact changed after readback: {relative}");
         }
+    }
+
+    internal static string Hash(FileStream file)
+    {
+        file.Position = 0;
+        string hash = Convert.ToHexString(SHA256.HashData(file));
+        file.Position = 0;
+        return hash;
+    }
+
+    internal static void RequireCreatedHash(FileStream file, string expected)
+    {
+        if (!string.Equals(Hash(file), expected, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Model drawing changed after creation.");
     }
 
     internal static void ValidateOwnedTree(string stage, HashSet<string> ownedFiles, HashSet<string> ownedDirectories)

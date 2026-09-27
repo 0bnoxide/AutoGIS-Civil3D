@@ -5,11 +5,15 @@ namespace AutoGIS.Civil3D.Adapter;
 public sealed class NativeProposalHost : IProposalHost
 {
     private ProposalPlan? inspectedPlan;
+    private string? appliedRoot;
+    private readonly Dictionary<string, string> createdSha256 = new(StringComparer.OrdinalIgnoreCase);
 
     public PreflightReport Inspect(ProposalPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
         inspectedPlan = null;
+        appliedRoot = null;
+        createdSha256.Clear();
         foreach (var action in plan.Actions)
         {
             if (!IsModelAction(action))
@@ -26,6 +30,10 @@ public sealed class NativeProposalHost : IProposalHost
             throw new NotSupportedException($"Native proposal operation is not implemented: {action.Operation}.");
         var plan = inspectedPlan ?? throw new InvalidOperationException("Native plan inspection must pass before applying actions.");
         ValidateModelAction(plan, action, stagingRoot);
+        string root = ProposalFiles.Full(stagingRoot);
+        if (appliedRoot is not null && !string.Equals(appliedRoot, root, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Native plan actions must use one staging root.");
+        appliedRoot = root;
         switch (action.Operation)
         {
             case ProposalOperation.CreateFolder:
@@ -33,10 +41,16 @@ public sealed class NativeProposalHost : IProposalHost
                     ProposalFiles.ReserveStage(ProposalFiles.Child(stagingRoot, action.RelativePath));
                 break;
             case ProposalOperation.CreateModelDrawing:
-                DrawingWriter.CreateModel(action, stagingRoot);
+                createdSha256[action.RelativePath] = DrawingWriter.CreateModel(action, stagingRoot);
                 break;
             case ProposalOperation.AddXref:
-                DrawingWriter.AddModelOverlay(action, stagingRoot);
+                var xref = (XrefData)action.Data;
+                string target = plan.Configuration.Standards.Models.Single(m => m.Role == xref.Reference.ReferenceRole).Path;
+                if (!createdSha256.TryGetValue(action.RelativePath, out string? hostHash) ||
+                    !createdSha256.TryGetValue(target, out string? targetHash))
+                    throw new InvalidDataException("Model overlay lacks writer-captured drawing digests.");
+                createdSha256[action.RelativePath] = DrawingWriter.AddModelOverlay(
+                    action, stagingRoot, hostHash, targetHash);
                 break;
             default:
                 throw new NotSupportedException($"Native proposal operation is not implemented: {action.Operation}.");
@@ -49,9 +63,11 @@ public sealed class NativeProposalHost : IProposalHost
     public VerificationReport Verify(ProposalPlan plan, string artifactRoot)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        var refusal = Inspect(plan).Issues;
-        if (!refusal.IsEmpty) return new([], refusal, [], []);
-        return NativeProposalVerifier.VerifyModels(plan, artifactRoot);
+        if (!ReferenceEquals(inspectedPlan, plan) || appliedRoot is null ||
+            !string.Equals(appliedRoot, ProposalFiles.Full(artifactRoot), StringComparison.OrdinalIgnoreCase))
+            return new([], [new(ExecutionIssueCodes.VerificationFailed,
+                "Native verification requires the inspected plan and its writer-captured staging root.")], [], []);
+        return NativeProposalVerifier.VerifyModels(plan, artifactRoot, createdSha256);
     }
 
     internal static void ValidateModelAction(ProposalPlan plan, PlannedAction action, string stagingRoot)

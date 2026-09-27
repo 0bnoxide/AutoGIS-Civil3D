@@ -8,7 +8,7 @@ namespace AutoGIS.Civil3D.Adapter;
 
 internal static class DrawingWriter
 {
-    internal static void CreateModel(PlannedAction action, string stagingRoot)
+    internal static string CreateModel(PlannedAction action, string stagingRoot)
     {
         if (action is not { Operation: ProposalOperation.CreateModelDrawing, Data: ModelDrawingData data })
             throw new InvalidDataException("Expected a model drawing action.");
@@ -17,10 +17,11 @@ internal static class DrawingWriter
         if (!File.Exists(data.Template)) throw new FileNotFoundException("The approved model template is missing.", data.Template);
         if (ProposalFiles.EntryExists(output))
             throw new ProposalConditionException(ExecutionIssueCodes.TargetExists, "Model drawing output already exists.");
-        SaveSideDatabase(data.Template, output, null, replace: false);
+        return SaveSideDatabase(data.Template, output, null, replace: false, expectedSourceHash: null);
     }
 
-    internal static void AddModelOverlay(PlannedAction action, string stagingRoot)
+    internal static string AddModelOverlay(PlannedAction action, string stagingRoot,
+        string expectedHostHash, string expectedTargetHash)
     {
         if (action is not { Operation: ProposalOperation.AddXref, Data: XrefData data } ||
             data.Reference is not { HostRole: "ProposedDesignModel", Mode: "Overlay" })
@@ -30,7 +31,9 @@ internal static class DrawingWriter
         ProposalFiles.RejectReparseAncestors(host);
         if (!File.Exists(host) || !File.Exists(target))
             throw new FileNotFoundException("A planned model overlay drawing is missing.");
-        SaveSideDatabase(host, host, db =>
+        using var targetGuard = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read);
+        ProposalFiles.RequireCreatedHash(targetGuard, expectedTargetHash);
+        return SaveSideDatabase(host, host, db =>
         {
             ObjectId definition = db.OverlayXref(data.RelativeReferencePath, data.Reference.ReferenceRole);
             if (definition.IsNull) throw new InvalidDataException("OverlayXref did not create a definition.");
@@ -46,10 +49,11 @@ internal static class DrawingWriter
             modelSpace.AppendEntity(reference);
             transaction.AddNewlyCreatedDBObject(reference, true);
             transaction.Commit();
-        }, replace: true);
+        }, replace: true, expectedSourceHash: expectedHostHash);
     }
 
-    private static void SaveSideDatabase(string source, string destination, Action<Database>? change, bool replace)
+    private static string SaveSideDatabase(string source, string destination, Action<Database>? change,
+        bool replace, string? expectedSourceHash)
     {
         var active = AcApplication.DocumentManager.MdiActiveDocument
             ?? throw new InvalidOperationException("A Civil 3D document must remain active on the host thread.");
@@ -62,6 +66,8 @@ internal static class DrawingWriter
         using FileStream? original = replace
             ? new FileStream(destination, FileMode.Open, FileAccess.ReadWrite, FileShare.Read)
             : null;
+        if (replace) ProposalFiles.RequireCreatedHash(original!, expectedSourceHash!);
+        string? createdHash = null;
         WithReservedScratchDrawing(destination, temporary =>
         {
             try
@@ -86,7 +92,14 @@ internal static class DrawingWriter
                 throw new InvalidOperationException("Native drawing work changed the active document or working database.");
             ProposalFiles.RejectReparseAncestors(temporary);
             if (!replace)
+            {
+                using (var saved = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    createdHash = ProposalFiles.Hash(saved);
                 File.Move(temporary, destination);
+                using var published = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.Read);
+                if (!string.Equals(ProposalFiles.Hash(published), createdHash, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Published model drawing differs from the native save.");
+            }
             else
             {
                 ProposalFiles.RejectReparseAncestors(destination);
@@ -96,8 +109,10 @@ internal static class DrawingWriter
                 saved.CopyTo(original);
                 original.SetLength(saved.Length);
                 original.Flush(true);
+                createdHash = ProposalFiles.Hash(original);
             }
         });
+        return createdHash ?? throw new InvalidDataException("Native save did not capture a model drawing digest.");
     }
 
     internal static void WithReservedScratchDrawing(string destination, Action<string> saveAndPublish)
