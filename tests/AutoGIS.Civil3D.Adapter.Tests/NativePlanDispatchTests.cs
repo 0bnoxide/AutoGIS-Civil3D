@@ -56,6 +56,43 @@ public sealed class NativePlanDispatchTests
         Assert.False(NativeProposalVerifier.HasWorldNormal(double.NaN, 0, 1));
     }
 
+    [Fact]
+    public void ReservedScratchSavePreservesExistingTargetAndForeignEntries()
+    {
+        string parent = Path.Combine(Path.GetTempPath(), "AutoGIS-scratch-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(parent);
+        string destination = Path.Combine(parent, "target.dwg");
+        byte[] existing = [1, 2, 3];
+        byte[] foreign = [4, 5, 6];
+        File.WriteAllBytes(destination, existing);
+        string? scratch = null;
+        try
+        {
+            Assert.Throws<IOException>(() => DrawingWriter.WithReservedScratchDrawing(destination, temporary =>
+            {
+                scratch = Path.GetDirectoryName(temporary)!;
+                Assert.Equal(parent, Path.GetDirectoryName(scratch));
+                File.WriteAllBytes(temporary, [7, 8, 9]);
+                File.WriteAllBytes(Path.Combine(scratch, "foreign.bin"), foreign);
+                File.Move(temporary, destination);
+            }));
+            Assert.Equal(existing, File.ReadAllBytes(destination));
+            Assert.Equal(foreign, File.ReadAllBytes(Path.Combine(scratch!, "foreign.bin")));
+            Assert.True(File.Exists(Path.Combine(scratch!, "drawing.dwg")));
+        }
+        finally
+        {
+            if (scratch is not null && Directory.Exists(scratch))
+            {
+                File.Delete(Path.Combine(scratch, "drawing.dwg"));
+                File.Delete(Path.Combine(scratch, "foreign.bin"));
+                Directory.Delete(scratch);
+            }
+            File.Delete(destination);
+            Directory.Delete(parent);
+        }
+    }
+
     private static ProposalPlan Plan()
     {
         byte[] manifestBytes = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Fixtures", "synthetic-standards.json"));

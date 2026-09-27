@@ -57,47 +57,68 @@ internal static class DrawingWriter
         string activeName = active.Name;
         Database previous = HostApplicationServices.WorkingDatabase;
         Database? side = null;
-        string temporary = Path.Combine(Path.GetDirectoryName(destination)!,
-            $".autogis-{Guid.NewGuid():N}.dwg");
         ProposalFiles.RejectReparseAncestors(source);
         ProposalFiles.RejectReparseAncestors(destination);
         using FileStream? original = replace
             ? new FileStream(destination, FileMode.Open, FileAccess.ReadWrite, FileShare.Read)
             : null;
+        WithReservedScratchDrawing(destination, temporary =>
+        {
+            try
+            {
+                ProposalFiles.RejectReparseAncestors(destination);
+                side = new Database(false, true);
+                side.ReadDwgFile(source, FileOpenMode.OpenForReadAndAllShare, false, null);
+                side.CloseInput(true);
+                if (side.NeedsRecovery) throw new InvalidDataException("A source drawing requires recovery.");
+                HostApplicationServices.WorkingDatabase = side;
+                change?.Invoke(side);
+                side.SaveAs(temporary, DwgVersion.AC1032);
+            }
+            finally
+            {
+                try { HostApplicationServices.WorkingDatabase = previous; }
+                finally { side?.Dispose(); }
+            }
+            if (!activeDatabase.Equals(AcApplication.DocumentManager.MdiActiveDocument?.Database) ||
+                !string.Equals(activeName, AcApplication.DocumentManager.MdiActiveDocument?.Name, StringComparison.Ordinal) ||
+                !previous.Equals(HostApplicationServices.WorkingDatabase))
+                throw new InvalidOperationException("Native drawing work changed the active document or working database.");
+            ProposalFiles.RejectReparseAncestors(temporary);
+            if (!replace)
+                File.Move(temporary, destination);
+            else
+            {
+                ProposalFiles.RejectReparseAncestors(destination);
+                using var saved = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    4096, FileOptions.DeleteOnClose);
+                original!.Position = 0;
+                saved.CopyTo(original);
+                original.SetLength(saved.Length);
+                original.Flush(true);
+            }
+        });
+    }
+
+    internal static void WithReservedScratchDrawing(string destination, Action<string> saveAndPublish)
+    {
+        string scratch = Path.Combine(Path.GetDirectoryName(destination)!,
+            $".autogis-save-{Guid.NewGuid():N}");
+        string temporary = Path.Combine(scratch, "drawing.dwg");
+        // ponytail: Managed SaveAs takes a path; strict same-user scratch-leaf exclusion needs a native handle-based save.
+        ProposalFiles.ReserveStage(scratch);
+        bool committed = false;
         try
         {
-            ProposalFiles.RejectReparseAncestors(destination);
+            ProposalFiles.RejectReparseAncestors(temporary);
             if (ProposalFiles.EntryExists(temporary)) throw new IOException("Temporary drawing path already exists.");
-            side = new Database(false, true);
-            side.ReadDwgFile(source, FileOpenMode.OpenForReadAndAllShare, false, null);
-            side.CloseInput(true);
-            if (side.NeedsRecovery) throw new InvalidDataException("A source drawing requires recovery.");
-            HostApplicationServices.WorkingDatabase = side;
-            change?.Invoke(side);
-            side.SaveAs(temporary, DwgVersion.AC1032);
+            saveAndPublish(temporary);
+            committed = true;
         }
         finally
         {
-            try { HostApplicationServices.WorkingDatabase = previous; }
-            finally { side?.Dispose(); }
+            string? cleanup = ProposalFiles.Cleanup(scratch);
+            if (committed && cleanup is not null) throw new IOException(cleanup);
         }
-        if (!activeDatabase.Equals(AcApplication.DocumentManager.MdiActiveDocument?.Database) ||
-            !string.Equals(activeName, AcApplication.DocumentManager.MdiActiveDocument?.Name, StringComparison.Ordinal) ||
-            !previous.Equals(HostApplicationServices.WorkingDatabase))
-            throw new InvalidOperationException("Native drawing work changed the active document or working database.");
-        if (!replace)
-        {
-            File.Move(temporary, destination);
-            return;
-        }
-
-        ProposalFiles.RejectReparseAncestors(destination);
-        ProposalFiles.RejectReparseAncestors(temporary);
-        using var saved = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read,
-            4096, FileOptions.DeleteOnClose);
-        original!.Position = 0;
-        saved.CopyTo(original);
-        original.SetLength(saved.Length);
-        original.Flush(true);
     }
 }
