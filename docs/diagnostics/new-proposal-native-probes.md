@@ -49,4 +49,18 @@ Selected-layout DWT evidence is also synthetic. A2 and A4 each saved and indepen
 
 Data Shortcuts association remains unverified. The installed 13.8 API exposes local project-folder and drawing-association members, and a disposable probe passed source/build/reporting review, but no native command ran. Autodesk documents that project discovery uses a system-maintained [`ShortcutFolders.xml` for the Windows login](https://help.autodesk.com/cloudhelp/2026/ENU/Civil3D-UserGuide/files/GUID-0AC8F3A4-13D5-4C75-8CF0-64AD071CB2D9.htm). Neither the shared host nor a second process has qualified isolation of that state. The release must not claim automatic association. An explicit manual receipt step is proposed, pending owner disposition of the approved design's fallback condition; a future native probe needs a separately qualified login and output/profile containment.
 
+## Task 5 scratch-save behavior observed on 2026-09-26
+
+A disposable Civil 3D 2026 x64 probe called managed `Database.SaveAs` against five synthetic target states. The frozen probe DLL SHA-256 was `7D8B31D5FD8BEE721666464CA6D148304D5E873F0EABA3D194526D7FED73006B`; the report SHA-256 was `BC056C0448724DAECC45CAD5B54C7D6B647445A15844B5D211DD38CFA81022C6`. Independent disk hashes and DWG headers matched the report. The active drawing's disk hash was unchanged.
+
+| Target state | Observed `SaveAs` result |
+| --- | --- |
+| Absent | Created an AC1032 DWG. |
+| Existing valid DWG | Replaced its bytes with another AC1032 DWG. |
+| Existing non-DWG sentinel | Replaced its bytes with an AC1032 DWG. |
+| Exclusively created file held for read | Returned `eFilerError`; original bytes remained. |
+| Exclusively created file held with delete-on-close | Returned `eFilerError`; the target was absent after the held handle closed. |
+
+[Managed `Database.SaveAs`](https://help.autodesk.com/cloudhelp/2019/ENU/OARX-ManagedRefGuide/files/OREFNET-__OVERLOADED_SaveAs_Autodesk_AutoCAD_DatabaseServices_Database.html) accepts a pathname, and this probe did not establish a held-handle mode that both preserves exclusive creation and permits `SaveAs`. PR #148 therefore reserves a fresh sibling scratch directory before the native save and publishes new final DWGs with no-overwrite `File.Move`; overlay updates keep the original staged host DWG locked through the copy. A same-user process could still insert the scratch leaf after the absence check and before `SaveAs`, so this does **not** satisfy the approved plan's literal all-leaf-exclusive rule against that race. Full Create stays disabled. The separate model/Xref native probe and a disposition of this remaining race are required before calling Task 5 complete. This behavior experiment preceded the task-owned `LOGFILEPATH` correction and is not counted as the fully contained Task 5 qualification run.
+
 The [receipt lifecycle and fault-injection gate](../superpowers/plans/2026-09-04-new-proposal-implementation-plan.md#task-3-prove-native-operations-before-committing-their-implementation) has [separate evidence on issue #101](https://github.com/0bnoxide/AutoGIS-Civil3D/issues/101#issuecomment-5740833534). These probes add no receipt evidence. Complete company compatibility and final qualification require the approved manifest, DWTs, sheet conventions, and placeholder decisions in [#140](https://github.com/0bnoxide/AutoGIS-Civil3D/issues/140).
