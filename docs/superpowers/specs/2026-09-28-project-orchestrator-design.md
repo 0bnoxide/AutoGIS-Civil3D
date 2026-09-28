@@ -182,13 +182,20 @@ as the owner's, and that merges are bound to SHAs.
 | General, Polls, Show and tell | Unused. |
 
 **Approving a spec.** The owner approves with a footer-less reply in the
-`[spec]` thread whose first word is `approve`, in any letter case. The
-supervisor then merges with `--match-head-commit`,
-using the SHA the question named, so a push after approval makes the merge
-fail. Any other reply is feedback. Feedback goes to the worker as a repair,
-and the supervisor posts the new verified SHA in the same thread and asks
-again. After acting, the supervisor marks the owner's reply as the answer
-and closes the discussion. `[gate]` approvals and every item on the
+`[spec]` thread whose first word is `approve` or `approved`, in any letter
+case. The supervisor then merges with `--match-head-commit`, using the SHA
+the question named, so a push after approval makes the merge fail. The
+owner's other replies are handled as follows:
+
+- A reply that asks for changes goes to the worker as a repair. The
+  supervisor then posts the new verified SHA in the same thread and asks
+  again.
+- Any other reply, such as "looks good", gets a one-line follow-up asking
+  for an explicit `approve`.
+
+An unclear reply is never treated as approval, and never as a request for
+a repair. After acting, the supervisor marks the owner's reply as the
+answer and closes the discussion. `[gate]` approvals and every item on the
 approval list work the same way.
 
 **Reaching the owner.** GitHub doesn't notify an account about its own
@@ -227,14 +234,13 @@ on its task issue. The Q&A post asks for the owner's decision and links to
 that issue.
 
 **Worker claim identity.** The write hook identifies a session by the
-harness payload's `session_id`. Claude subagents run under their parent
-conversation, so the claims its workers hold belong to the supervisor's
-own session. The registry therefore can't keep one supervisor's workers
-apart, and the supervisor's overlap check in step 3 does that job. The
+harness payload's `session_id`, falling back to `AGENT_SESSION_ID`. The
 invariant is that the supervisor can release every claim its workers hold
-and no other claim. The implementation plan verifies how a Codex worker
-identifies itself to the hook and makes that invariant hold for Codex
-before a Codex supervisor may dispatch workers.
+and no other claim. If workers share the supervisor's session, the
+registry can't keep them apart, and the supervisor's overlap check in step
+3 does that job. The implementation plan verifies, for each harness, which
+session a worker presents to the hook. It makes the invariant hold before
+that harness's supervisor may dispatch workers.
 
 ## Authority limits
 
@@ -244,9 +250,14 @@ before a Codex supervisor may dispatch workers.
 - ADRs;
 - changes to roadmap phase status or to the gate-change log;
 - anything that changes the rules the supervisor runs under:
-  `docs/orchestration.md`, the vendored skill, the agent guide,
-  CONTRIBUTING, `.githooks/`, `tools/agent-coordination/`, harness hook
-  settings, and CI workflows.
+  - `docs/orchestration.md`;
+  - `tools/agent-assets/`, which holds the vendored skill and the
+    `pr-reviewer` review contract, and the copies rendered from it;
+  - `tools/checks/`;
+  - the agent guide, `CLAUDE.md`, `AGENTS.md` and CONTRIBUTING;
+  - `.githooks/` and `tools/agent-coordination/`;
+  - harness hook settings;
+  - CI workflows.
 
 The last item exists because the supervisor can merge anything that meets
 ADR-0004. Without it, a PR could weaken the supervisor's own hooks or CI
