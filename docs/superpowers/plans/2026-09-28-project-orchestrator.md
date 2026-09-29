@@ -1,6 +1,6 @@
 # Project Orchestrator Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task, natively in the main session (see **Before you start**; Task 1's child probe must be dispatched from the main session). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a supervisor agent that runs the owner's `project-orchestrator`
 skill against this repository. It coordinates through GitHub Discussions,
@@ -175,16 +175,23 @@ git worktree add --detach ../verify+pr139 <H139>
 ```
 Next, run this from `C:\Users\ichbi\AutoGIS-Civil3D\.worktrees\verify+pr139`
 (start the command with `cd "C:/Users/ichbi/AutoGIS-Civil3D/.worktrees/verify+pr139" &&`):
+The prompt goes directly after `-p`, because `--allowedTools` takes every
+argument after it. The allowlist is read-only apart from the test runners.
+A detached verify worktree has no branch, so the claim hook does not guard
+it, and the allowlist is the only thing preventing writes.
 ```bash
-claude -p --agent pr-reviewer --allowedTools "Read" "Grep" "Glob" "Bash(git:*)" "Bash(gh:*)" "Bash(python:*)" "Bash(dotnet:*)" "Review pull request #139 at head <H139> as your review contract defines. The change is git diff <B139>...<H139>, and the working tree is checked out at <H139>. The proposed ADR-0004 tier is light; you may raise it, never lower it. Do not post to GitHub and do not modify tracked files; print your complete review. The last line of your output must be exactly 'verdict: PASS <H139>' or 'verdict: FAIL <H139>'. Any P1 or P2 finding, or any failed probe, means FAIL." > "<SCRATCH>/claude-verifier-probe.md"
+claude -p "Review pull request #139 at head <H139> as your review contract defines. The change is git diff <B139>...<H139>, and the working tree is checked out at <H139>. The proposed ADR-0004 tier is light; you may raise it, never lower it. Do not post to GitHub and do not modify tracked files; print your complete review. The last line of your output must be exactly 'verdict: PASS <H139>' or 'verdict: FAIL <H139>'. Any P1 or P2 finding, or any failed probe, means FAIL." --agent pr-reviewer --allowedTools "Read" "Grep" "Glob" "Bash(git diff *)" "Bash(git log *)" "Bash(git show *)" "Bash(git status *)" "Bash(gh pr view *)" "Bash(gh pr diff *)" "Bash(python -m unittest *)" "Bash(python tools/checks/docs_checks.py *)" "Bash(dotnet restore *)" "Bash(dotnet build *)" "Bash(dotnet test *)" "Bash(dotnet format *)" > "<SCRATCH>/claude-verifier-probe.md"
 ```
 Then assert:
 ```bash
 tail -n 1 "<SCRATCH>/claude-verifier-probe.md" | tr -d '\r' | grep -E "^verdict: (PASS|FAIL) <H139>$"
 ```
-Expected: one matching line, exit 0. If there is no match, adjust only the
-prompt's wording and re-run. If it still doesn't match after two attempts,
-stop and report.
+Expected: one matching line, exit 0.
+
+If there is no match, read the output to find the cause. It may be command
+syntax (for example, the prompt was not received) or the prompt's wording.
+Fix that and re-run. If it still doesn't match after two attempts, stop and
+report.
 
 - [ ] **Step 8: Codex verifier dry run on a Claude-written PR (#122)**
 
@@ -197,7 +204,11 @@ git worktree add --detach ../verify+pr122 <H122>
 codex exec -C "C:/Users/ichbi/AutoGIS-Civil3D/.worktrees/verify+pr122" -s workspace-write -c sandbox_workspace_write.network_access=true -o "<SCRATCH>/codex-verifier-probe.md" "Your review contract is the developer_instructions in .codex/agents/pr-reviewer.toml. Review pull request #122 at head <H122> as your review contract defines. The change is git diff <B122>...<H122>, and the working tree is checked out at <H122>. The proposed ADR-0004 tier is light; you may raise it, never lower it. Do not post to GitHub and do not modify tracked files; print your complete review. The last line of your output must be exactly 'verdict: PASS <H122>' or 'verdict: FAIL <H122>'. Any P1 or P2 finding, or any failed probe, means FAIL."
 tail -n 1 "<SCRATCH>/codex-verifier-probe.md" | tr -d '\r' | grep -E "^verdict: (PASS|FAIL) <H122>$"
 ```
-Expected: one matching line, exit 0. The same retry rule as Step 7 applies.
+Expected: one matching line, exit 0.
+
+If there is no match, read the output to find the cause. It may be command
+syntax or the prompt's wording. Fix that and re-run. If it still doesn't
+match after two attempts, stop and report.
 
 - [ ] **Step 9: Clean up the verifier worktrees**
 
@@ -369,9 +380,13 @@ approving this plan.
 
 - [ ] **Step 1: Create the implementing issue**
 
+Set `<HEAD>` from `git rev-parse HEAD`. It is a commit permalink, so it
+keeps resolving after the branch is deleted on merge. It resolves once
+Task 7 pushes the branch.
+
 Write `<SCRATCH>/issue-body.md` with this content:
 ```markdown
-Implements the approved [project-orchestrator design](https://github.com/0bnoxide/AutoGIS-Civil3D/blob/claude/project-orchestrator-design/docs/superpowers/specs/2026-09-28-project-orchestrator-design.md) under its [implementation plan](https://github.com/0bnoxide/AutoGIS-Civil3D/blob/claude/project-orchestrator-design/docs/superpowers/plans/2026-09-28-project-orchestrator.md).
+Implements the approved [project-orchestrator design](https://github.com/0bnoxide/AutoGIS-Civil3D/blob/<HEAD>/docs/superpowers/specs/2026-09-28-project-orchestrator-design.md) under its [implementation plan](https://github.com/0bnoxide/AutoGIS-Civil3D/blob/<HEAD>/docs/superpowers/plans/2026-09-28-project-orchestrator.md).
 
 Evidence required before this closes:
 - [ ] Harness probe results (worker session identity, verifier dry runs)
@@ -618,7 +633,7 @@ Everyone posts as `0bnoxide`, and the repository is public.
 A PR needs the owner's approval before merge if this command prints anything:
 
 ```bash
-gh pr diff <n> --name-only | grep -E '^(docs/superpowers/specs/|docs/adr/|docs/roadmap\.md|docs/orchestration\.md|docs/agent-guide\.md|CLAUDE\.md|AGENTS\.md|CONTRIBUTING\.md|tools/agent-assets/|tools/checks/|tools/agent-coordination/|\.githooks/|\.claude/|\.agents/|\.codex/|\.github/workflows/)'
+gh pr diff <n> --name-only | grep -E '^(docs/superpowers/specs/|docs/adr/|docs/roadmap\.md|docs/orchestration\.md|docs/agent-guide\.md|CLAUDE\.md|AGENTS\.md|CONTRIBUTING\.md|tools/agent-assets/|tools/checks/|tools/agent-coordination/|tools/agent-hooks/|\.githooks/|\.claude/|\.agents/|\.codex/|\.github/workflows/)'
 ```
 
 Ask for approval with a Q&A question that names the PR and its verified
@@ -702,7 +717,7 @@ their own PR, and verifier output reaches the PR through the supervisor.
 | CI is red | Find the root cause in the repair. If `main` is also red, file an issue and fix that first as maintenance. Never skip or disable a test. |
 | Merge conflict | Send a repair brief that merges `main` into the branch. The result is a new SHA and needs a new verdict. |
 | No verifier is available | The bar doesn't drop. The PR waits, and the owner is the reviewer of last resort. |
-| GitHub refuses the merge | Never use `--admin`. Verify the new head, resolve dispositioned threads, or ask the owner. |
+| GitHub refuses the merge | Never use `--admin`. Verify the new head, or resolve dispositioned threads. If the refusal cites a required approval, stop and ask the owner, because the ruleset's extra-approval rule has no bypass here. |
 | A task needs a native Civil 3D run | That evidence comes from the owner's licensed work computer ([ADR-0009](adr/0009-hosted-ci-manual-integration.md)). Ask a `[blocker]` question and continue with other work. |
 | The owner doesn't reply | Hold that item and keep working on the rest. Silence is never approval. |
 | Accepted work has a defect | Open a new issue that links the accepted PR, and comment `reopened:` in the State log. Unrelated accepted work stays closed. |
@@ -809,15 +824,22 @@ complete review. The last line of your output must be exactly
 failed probe, means FAIL.
 ```
 
-*Claude verifier, for Codex-written PRs.* Run it from the verify worktree:
+*Claude verifier, for Codex-written PRs.* Run it from the verify
+worktree. The prompt must come directly after `-p`. The allowlist is
+read-only apart from the test runners, because a detached worktree has no
+branch claim to guard it.
 ```bash
-claude -p --agent pr-reviewer --allowedTools "Read" "Grep" "Glob" "Bash(git:*)" "Bash(gh:*)" "Bash(python:*)" "Bash(dotnet:*)" "<verifier prompt>" > "<scratch>/review-pr<n>.md"
+claude -p "<verifier prompt>" --agent pr-reviewer --allowedTools "Read" "Grep" "Glob" "Bash(git diff *)" "Bash(git log *)" "Bash(git show *)" "Bash(git status *)" "Bash(gh pr view *)" "Bash(gh pr diff *)" "Bash(python -m unittest *)" "Bash(python tools/checks/docs_checks.py *)" "Bash(dotnet restore *)" "Bash(dotnet build *)" "Bash(dotnet test *)" "Bash(dotnet format *)" > "<scratch>/review-pr<n>.md"
 ```
 
 *Codex verifier, for Claude-written PRs:*
 ```bash
 codex exec -C "<absolute path>/.worktrees/verify+pr<n>" -s workspace-write -c sandbox_workspace_write.network_access=true -o "<scratch>/review-pr<n>.md" "Your review contract is the developer_instructions in .codex/agents/pr-reviewer.toml. <verifier prompt>"
 ```
+Known limit: the Codex verifier needs network access to restore packages,
+so only its prompt stops it from writing to GitHub. Compare its output with
+the PR's activity; a verifier that posted or pushed anything counts as no
+verdict.
 ````
 
 - [ ] **Step 2: Check the file against its own rules**
@@ -1005,7 +1027,7 @@ Expected: every command passes. The .NET job is unaffected, because no
 
 Write `<SCRATCH>/pr-body.md` with this content:
 ```markdown
-Adds the project orchestrator per the approved [design](docs/superpowers/specs/2026-09-28-project-orchestrator-design.md) and [plan](docs/superpowers/plans/2026-09-28-project-orchestrator.md). Refs #<I> (closed after the live acceptance run).
+Adds the project orchestrator per the approved [design](https://github.com/0bnoxide/AutoGIS-Civil3D/blob/claude/project-orchestrator-design/docs/superpowers/specs/2026-09-28-project-orchestrator-design.md) and [plan](https://github.com/0bnoxide/AutoGIS-Civil3D/blob/claude/project-orchestrator-design/docs/superpowers/plans/2026-09-28-project-orchestrator.md). Refs #<I> (closed after the live acceptance run).
 
 - `supervisor` claim kind: one supervisor at a time across Claude and Codex
 - `project-orchestrator` skill vendored into `tools/agent-assets/` and rendered for both harnesses
@@ -1024,7 +1046,7 @@ Record `<PR>`.
 - [ ] **Step 3: Pin Review Focus line 4 by running the approval-path check on this PR**
 
 ```bash
-gh pr diff <PR> --name-only | grep -E '^(docs/superpowers/specs/|docs/adr/|docs/roadmap\.md|docs/orchestration\.md|docs/agent-guide\.md|CLAUDE\.md|AGENTS\.md|CONTRIBUTING\.md|tools/agent-assets/|tools/checks/|tools/agent-coordination/|\.githooks/|\.claude/|\.agents/|\.codex/|\.github/workflows/)'
+gh pr diff <PR> --name-only | grep -E '^(docs/superpowers/specs/|docs/adr/|docs/roadmap\.md|docs/orchestration\.md|docs/agent-guide\.md|CLAUDE\.md|AGENTS\.md|CONTRIBUTING\.md|tools/agent-assets/|tools/checks/|tools/agent-coordination/|tools/agent-hooks/|\.githooks/|\.claude/|\.agents/|\.codex/|\.github/workflows/)'
 ```
 Expected: the output includes `docs/orchestration.md`, `docs/roadmap.md`
 and `tools/agent-coordination/coordination.py`. If it prints nothing, the
@@ -1095,6 +1117,26 @@ gh pr view <PR> --json state,mergeCommit -q '.state + " " + .mergeCommit.oid'
 Expected: `MERGED <merge sha>`. The local branch deletion may report that
 `main` is in use by another worktree. That doesn't matter.
 
+If GitHub refuses the merge and cites a required approval (the ruleset has
+`require_extra_approval_for_unattributed_changes` enabled), stop and ask
+the owner. Never bypass it.
+
+- [ ] **Step 9: Release this branch's claims (collaboration step 10)**
+
+```bash
+python tools/agent-coordination/coordination.py status
+```
+Find the `branch` and `worktree` claims for `claude/project-orchestrator-design`
+that `<SESSION>` holds, and release each one:
+```bash
+python tools/agent-coordination/coordination.py release --id <claim id> --session <SESSION>
+```
+Then remove the worktree. Run this from `C:\Users\ichbi\AutoGIS-Civil3D`:
+```bash
+git worktree remove .worktrees/claude+project-orchestrator-design
+```
+The ADR claim stays consumed, and `release` refuses it by design.
+
 ---
 
 ### Task 8: Bounded live acceptance
@@ -1137,11 +1179,18 @@ this cycle with the owner acting as the worker, or to stop here.
 
 - [ ] **Step 4: Pin Review Focus line 2 with the live second-supervisor probe while the supervisor runs**
 
+Run the probe as soon as the supervisor's `supervisor` claim appears in
+`python tools/agent-coordination/coordination.py status`. Don't wait: once
+the bounded run has released its claim, the probe would succeed and leave a
+claim behind that never expires.
 ```bash
 python tools/agent-coordination/coordination.py claim --session codex-supervisor-probe --kind supervisor --value codex
 ```
 Expected: exit 1, and stderr says
 `deny: supervisor 'codex' is claimed by session <supervisor session> (claim <id>)`.
+If it unexpectedly succeeds, release it straight away with
+`python tools/agent-coordination/coordination.py release --id <printed id> --session codex-supervisor-probe`
+and report to the owner.
 This command runs directly because the refusal lives in the shared
 registry, not in either harness. Codex's `workspace-write` sandbox may not
 be able to write the registry, which would make a Codex-run probe fail for
