@@ -1,8 +1,8 @@
 # Project orchestrator on the Discussions board — Design
 
-**Status:** Proposed 2026-09-28. The owner made the decisions below section
-by section in a brainstorming session from 2026-09-26 to 2026-09-28. This
-becomes the approved design only when the owner approves this document.
+**Status:** Approved 2026-09-28 by the owner ("Approved, write the plan").
+The owner made the decisions below section by section in a brainstorming
+session from 2026-09-26 to 2026-09-28.
 
 **Gate:** this is new agent-tooling capability. Phase 0 is Accepted, and
 the [roadmap](../../roadmap.md) requires an owner gate decision for new
