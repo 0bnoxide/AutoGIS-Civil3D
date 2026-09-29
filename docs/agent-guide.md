@@ -15,6 +15,7 @@ states a rule that conflicts with this file, this file wins.
 | Executable work and live status | GitHub issues and pull requests |
 | Checkout and worktree procedure | [docs/collaboration.md](collaboration.md) |
 | Contribution and review rules | [CONTRIBUTING.md](../CONTRIBUTING.md) |
+| Orchestrator operation | [docs/orchestration.md](orchestration.md) |
 
 Never write live status (who is working on what, what is in progress) into a
 document — GitHub carries it. Never restate another document's list, table,
