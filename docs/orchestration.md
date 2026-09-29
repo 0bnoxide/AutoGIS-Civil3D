@@ -84,23 +84,31 @@ Everyone posts as `0bnoxide`, and the repository is public.
    - `COORD status`;
    - the open gate in the [roadmap](roadmap.md);
    - open Q&A discussions and new Ideas posts ([Commands](#commands)).
+
+   A crash can land between a merge and its `accepted:` log entry. So
+   check each `orchestrator` PR that merged but has no `accepted:` entry:
+   confirm that its merge commit's head equals a PASS SHA posted on it. If
+   it does, write the missing entry now. If it doesn't, ask a `[blocker]`
+   question.
 2. **Find work.** A ready issue is one that is open, labelled
-   `orchestrator`, and whose `Depends on: #n` issues are all closed by merged
-   PRs. Take ready issues first. If there are none, take the next item in the
-   open gate:
+   `orchestrator`, and whose every `Depends on: #n` issue has an `accepted:`
+   entry in the State log. A closed issue or a merged PR alone is not
+   enough: acceptance must be saved before dependents are dispatched. Take
+   ready issues first. If there are none, take the next item in the open
+   gate:
    - **No approved spec:** dispatch a worker to draft one under
      `docs/superpowers/specs/`. After its PASS, ask a `[spec]` question.
    - **Approved spec but no plan:** dispatch a worker to write the plan
      under `docs/superpowers/plans/`. The plan merges on PASS, like code.
-   - **Merged plan:** split into issues only a plan that meets both
-     conditions:
-     - the supervisor accepted its PR (an `accepted:` entry in the State
-       log);
-     - no `orchestrator` issue names it yet, open or closed.
-
-     Open one issue per plan task, labelled `orchestrator`. Each body starts
-     with `Plan: <path>, Task <n>`, then the task text, then one
-     `Depends on: #n` line per dependency, then the footer.
+   - **Merged plan:** split into issues only a plan whose PR the supervisor
+     accepted (an `accepted:` entry in the State log).
+     - Each task gets exactly one `orchestrator` issue, identified by the
+       first line of its body: `Plan: <path>, Task <n>`.
+     - Create the missing ones in task order, and skip any task that
+       already has an issue, open or closed. An interrupted split resumes
+       where it stopped.
+     - Each body holds that first line, then the task text, then one
+       `Depends on: #n` line per dependency, then the footer.
 
      A merged plan that was carried out outside the orchestrator may be
      partly or wholly done. For such a plan, ask a `[gate]` question that
@@ -195,7 +203,7 @@ name as well. Otherwise, moving a guardrail file out of these paths would
 slip past the check.
 
 ```bash
-gh api repos/0bnoxide/AutoGIS-Civil3D/pulls/<n>/files --paginate --jq '.[] | .filename, (.previous_filename // empty) | select(test("^(docs/superpowers/specs/|docs/adr/|docs/roadmap[.]md|docs/orchestration[.]md|docs/agent-guide[.]md|CLAUDE[.]md|AGENTS[.]md|CONTRIBUTING[.]md|tools/agent-assets/|tools/checks/|tools/agent-coordination/|tools/agent-hooks/|[.]githooks/|[.]claude/|[.]agents/|[.]codex/|[.]github/workflows/)"))'
+gh api repos/0bnoxide/AutoGIS-Civil3D/pulls/<n>/files --paginate --jq '.[] | .filename, (.previous_filename // empty) | select(test("^(docs/superpowers/specs/|docs/adr/|docs/roadmap[.]md|docs/orchestration[.]md|docs/agent-guide[.]md|docs/collaboration[.]md|CLAUDE[.]md|AGENTS[.]md|CONTRIBUTING[.]md|tools/agent-assets/|tools/checks/|tools/agent-coordination/|tools/agent-hooks/|[.]githooks/|[.]claude/|[.]agents/|[.]codex/|[.]github/workflows/)"))'
 ```
 
 Ask for approval with a Q&A question that names the PR and its verified
@@ -389,8 +397,11 @@ The verifier prompt:
 Review pull request #<n> at head <sha> as your review contract defines. The
 change is git diff <base>...<sha>, and the working tree is checked out at
 <sha>. The proposed ADR-0004 tier is <tier>; you may raise it, never lower
-it. Do not post to GitHub and do not modify tracked files; print your
-complete review. The last line of your output must be exactly
+it. This prompt overrides your contract's rules on publishing and filing:
+do not post to GitHub, do not file issues, and do not modify tracked
+files. Print your complete review, and list any out-of-scope bugs in it
+under "Out-of-scope bugs"; the supervisor posts the review and files
+them. The last line of your output must be exactly
 'verdict: PASS <sha>' or 'verdict: FAIL <sha>'. Any P1 or P2 finding, or any
 failed probe, means FAIL.
 ```
