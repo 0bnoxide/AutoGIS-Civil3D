@@ -54,8 +54,9 @@ Skip it when `COORD status` already shows this session holding a
 `supervisor` claim, so that a repeated wake doesn't stack duplicate records.
 Use the session id that the write hook sees; on Claude, that is the UUID in
 the session's scratchpad path. If the claim is refused, the message names
-the holder. The supervisor then stops and tells the owner. The supervisor releases its claim only when the
-owner stops it. After a crash, the owner first confirms that the old
+the holder. The supervisor then stops and tells the owner. The supervisor
+releases its claim only when the owner stops it. After a crash, the owner
+first confirms that the old
 session has stopped, then releases that session's claims with
 `COORD release --id <id> --force --reason "<why>"`.
 
@@ -90,10 +91,20 @@ Everyone posts as `0bnoxide`, and the repository is public.
    items, rerun it with a larger limit before acting on it.
 
    A crash can land between a merge and its `accepted:` log entry. So
-   check each `orchestrator` PR that merged but has no `accepted:` entry:
-   confirm that its merge commit's head equals a PASS SHA posted on it. If
-   it does, write the missing entry now. If it doesn't, ask a `[blocker]`
-   question.
+   check each closed `orchestrator` issue that no trusted `accepted:` entry
+   names (`gh issue list --label orchestrator --state closed --limit 1000 --json number`):
+   - Find the PR that closed it with
+     `gh issue view <i> --json closedByPullRequestsReferences`. Get that
+     PR's state and final head with `gh pr view <n> --json state,headRefOid`.
+   - The PR carries a trusted verdict for that head if one of its comments
+     meets all of these:
+     - its author is `0bnoxide`;
+     - it ends with `_orchestrator · verifier · <harness>_`;
+     - its verdict line is `verdict: PASS <head>`.
+   - If the PR merged and carries that verdict, write the missing entry now.
+   - If it merged without that verdict, ask a `[blocker]` question.
+   - If no merged PR closed the issue, list it under Unknowns. Its
+     dependents stay unready until the owner decides.
 2. **Find work.** A ready issue is one that is open and labelled
    `orchestrator`, and whose every `Depends on: #n` issue is currently
    accepted.
@@ -189,7 +200,8 @@ Everyone posts as `0bnoxide`, and the repository is public.
    - Release the worker's claims with
      `COORD release --id <id> --session <supervisor session>`, then run
      `git worktree remove .worktrees/<agent>+<slug>`.
-   - Issues whose dependencies have now all merged become ready.
+   - Issues whose every dependency is now currently accepted (step 2)
+     become ready.
 
    Never use `--admin`. If GitHub refuses the merge, verify the new head or
    ask the owner.
@@ -234,7 +246,9 @@ of the diff. Each Q&A post also pings the owner, with `PushNotification`
 on Claude or the async user-input tool on Codex.
 
 An owner reply is a footer-less `0bnoxide` comment or nested reply,
-posted after the supervisor's latest comment or reply in that thread.
+posted after the supervisor's latest post in that thread. That post is its
+latest comment or reply, or, when it has made none, the question itself,
+which is the thread's original post.
 
 Before classifying, read the whole thread with the thread commands in
 [Commands](#commands). If the completeness check prints anything, the read
@@ -299,8 +313,11 @@ decision needed, the options, a recommendation, what is blocked, and what
 continues. A blocker is also described on its task issue, following the
 agent guide's "When blocked" rule.
 
-**Ideas.** Reply to each new post from the owner with how it will be
-handled. Anything outside the open gate becomes a `[gate]` question.
+**Ideas.** An Ideas thread is the owner's when its original post is a
+footer-less `0bnoxide` post, read with the thread commands in
+[Commands](#commands). It is new until the supervisor has replied in it.
+Reply to each new owner post with how it will be handled. Anything outside
+the open gate becomes a `[gate]` question.
 
 **Writers.** Only the supervisor posts on the board. Workers post only on
 their own PR, and verifier output reaches the PR through the supervisor.
@@ -367,10 +384,16 @@ list paginates:
 gh api graphql --paginate -f query='query($endCursor:String){repository(owner:"0bnoxide",name:"AutoGIS-Civil3D"){discussions(first:100,after:$endCursor,categoryId:"DIC_kwDOTr9duc4DGbO3",states:[OPEN]){pageInfo{hasNextPage endCursor} nodes{id number title}}}}' --jq '.data.repository.discussions.nodes[] | "\(.number) \(.id) \(.title)"'
 ```
 
-**Read one thread in full, then check that the read is complete.** Owners
-often reply by nesting a reply under a comment, and a nested reply can
-arrive under any comment, however old. So read every page of comments,
-each with its nested replies:
+**Read one thread in full, then check that the read is complete.** Read
+the thread's original post first: the question the supervisor asked, or the
+owner's Ideas post. It carries the text, author and time that the comment
+reads do not:
+```bash
+gh api graphql -f query='query{repository(owner:"0bnoxide",name:"AutoGIS-Civil3D"){discussion(number:<q>){id number title createdAt author{login} body}}}'
+```
+Then read the comments. Owners often reply by nesting a reply under a
+comment, and a nested reply can arrive under any comment, however old. So
+read every page of comments, each with its nested replies:
 ```bash
 gh api graphql --paginate -f query='query($endCursor:String){repository(owner:"0bnoxide",name:"AutoGIS-Civil3D"){discussion(number:<q>){comments(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{id author{login} body createdAt viewerCanMarkAsAnswer replies(first:100){totalCount nodes{id author{login} body createdAt viewerCanMarkAsAnswer}}}}}}}' --jq '.data.repository.discussion.comments.nodes[]'
 ```
