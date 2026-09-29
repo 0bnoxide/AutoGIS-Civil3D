@@ -90,11 +90,20 @@ Everyone posts as `0bnoxide`, and the repository is public.
    confirm that its merge commit's head equals a PASS SHA posted on it. If
    it does, write the missing entry now. If it doesn't, ask a `[blocker]`
    question.
-2. **Find work.** A ready issue is one that is open, labelled
-   `orchestrator`, and whose every `Depends on: #n` issue has an `accepted:`
-   entry in the State log. A closed issue or a merged PR alone is not
-   enough: acceptance must be saved before dependents are dispatched. Take
-   ready issues first. If there are none, take the next item in the open
+2. **Find work.** A ready issue is one that is open and labelled
+   `orchestrator`, and whose every `Depends on: #n` issue is currently
+   accepted.
+   - An issue is currently accepted when the latest State-log entry that
+     names it (`issue #n` or `reaccepts issue #n`) is an `accepted:`
+     entry.
+   - A later `reopened:` entry naming it withdraws that acceptance until a
+     new `accepted:` entry names it again.
+   - A closed issue or a merged PR alone is not enough: acceptance must be
+     saved before dependents are dispatched.
+   - Read the whole log with the paginated query in
+     [Commands](#commands), never only its latest page.
+
+   Take ready issues first. If there are none, take the next item in the open
    gate:
    - **No approved spec:** dispatch a worker to draft one under
      `docs/superpowers/specs/`. After its PASS, ask a `[spec]` question.
@@ -167,7 +176,9 @@ Everyone posts as `0bnoxide`, and the repository is public.
      Deleting the local branch fails while the primary checkout holds
      `main`, so confirm the merge with `gh pr view <n> --json state`.
    - Comment `accepted: PR #<n> at <sha>, issue #<i>, verdict <url>` on the
-     State discussion.
+     State discussion. For a PR that fixes a reopened producer, add
+     `, reaccepts issue #<p>`, naming the producer's original issue, before
+     `verdict`.
    - Close the issue if the PR didn't close it.
    - Release the worker's claims with
      `COORD release --id <id> --session <supervisor session>`, then run
@@ -297,7 +308,7 @@ their own PR, and verifier output reaches the PR through the supervisor.
 | GitHub refuses the merge | Never use `--admin`. Verify the new head, or resolve dispositioned threads. If the refusal cites a required approval, stop and ask the owner, because the ruleset's extra-approval rule has no bypass here. |
 | A task needs a native Civil 3D run | That evidence comes from the owner's licensed work computer ([ADR-0009](adr/0009-hosted-ci-manual-integration.md)). Ask a `[blocker]` question and continue with other work. |
 | The owner doesn't reply | Hold that item and keep working on the rest. Silence is never approval. |
-| Accepted work has a defect | Open a new issue that links the accepted PR, and comment `reopened:` in the State log. Unrelated accepted work stays closed. |
+| Accepted work has a defect | Open a new issue `#<d>` that links the accepted PR. Comment `reopened: PR #<n>, issue #<p>, defect #<d>` in the State log, where `#<p>` is the producer's original issue. From then on, dependents of `#<p>` are not ready, and any in-flight dependent holds its merge until a fix PR's `accepted:` entry says `reaccepts issue #<p>`. Unrelated accepted work stays closed. |
 
 ## Never
 
@@ -313,9 +324,12 @@ their own PR, and verifier output reaches the PR through the supervisor.
 Write every body to a file outside the repository, such as your session
 scratch directory, and pass it as `@<file>`.
 
-**Read the State discussion:**
+**Read the State discussion.** Read the body, then the whole log. The log
+query paginates, because acceptance entries are permanent and older ones
+must stay visible:
 ```bash
-gh api graphql -f query='query($n:Int!){repository(owner:"0bnoxide",name:"AutoGIS-Civil3D"){discussion(number:$n){id body comments(last:20){nodes{author{login} body createdAt}}}}}' -F n=152
+gh api graphql -f query='query{repository(owner:"0bnoxide",name:"AutoGIS-Civil3D"){discussion(number:152){id body}}}'
+gh api graphql --paginate -f query='query($endCursor:String){repository(owner:"0bnoxide",name:"AutoGIS-Civil3D"){discussion(number:152){comments(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{author{login} body createdAt}}}}}' --jq '.data.repository.discussion.comments.nodes[] | .createdAt + " " + .body'
 ```
 
 **Rewrite the State body:**
