@@ -189,9 +189,9 @@ Everyone posts as `0bnoxide`, and the repository is public.
    Before merging, resolve each review thread whose finding has been
    dispositioned as in step 5. The ruleset requires resolved threads, and
    [Commands](#commands) has the queries. Then:
-   - Run `gh pr merge <n> --merge --match-head-commit <sha> --delete-branch`.
-     Deleting the local branch fails while the primary checkout holds
-     `main`, so confirm the merge with `gh pr view <n> --json state`.
+   - Run `gh pr merge <n> --merge --match-head-commit <sha>`. Confirm the
+     result with `gh pr view <n> --json state`: `MERGED` means the
+     acceptance may be logged; anything else means the PR is not merged.
    - Comment `accepted: PR #<n> at <sha>, issue #<i>, verdict <url>` on the
      State discussion. For a PR that fixes a reopened producer, add
      `, reaccepts issue #<p>`, naming the producer's original issue, before
