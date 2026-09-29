@@ -79,11 +79,15 @@ Everyone posts as `0bnoxide`, and the repository is public.
    claims disagree, trust the claims and list the difference under
    Unknowns.
    - the State discussion ([Commands](#commands));
-   - `gh issue list --label orchestrator --state open --json number,title,body`;
-   - `gh pr list --state open --json number,title,headRefName,headRefOid,isDraft,body`;
+   - `gh issue list --label orchestrator --state open --limit 1000 --json number,title,body`;
+   - `gh pr list --state open --limit 1000 --json number,title,headRefName,headRefOid,isDraft,body`;
    - `COORD status`;
    - the open gate in the [roadmap](roadmap.md);
    - open Q&A discussions and new Ideas posts ([Commands](#commands)).
+
+   Every list here is read in full: the GraphQL reads paginate, and the
+   `gh` lists use `--limit 1000`. If a `gh` list returns exactly 1000
+   items, rerun it with a larger limit before acting on it.
 
    A crash can land between a merge and its `accepted:` log entry. So
    check each `orchestrator` PR that merged but has no `accepted:` entry:
@@ -115,8 +119,9 @@ Everyone posts as `0bnoxide`, and the repository is public.
      - Each task gets exactly one `orchestrator` issue, identified by the
        first line of its body: `Plan: <path>, Task <n>`.
      - Create the missing ones in task order, and skip any task that
-       already has an issue, open or closed. An interrupted split resumes
-       where it stopped.
+       already has an issue, open or closed. Find existing issues with
+       `gh issue list --label orchestrator --state all --limit 1000 --json number,body`.
+       An interrupted split resumes where it stopped.
      - Each body holds that first line, then the task text, then one
        `Depends on: #n` line per dependency, then the footer.
 
@@ -228,9 +233,18 @@ every later worker and verifier behaves, so the owner should read that part
 of the diff. Each Q&A post also pings the owner, with `PushNotification`
 on Claude or the async user-input tool on Codex.
 
-An owner reply is a footer-less `0bnoxide` comment or nested reply. It
-must be posted after the supervisor's latest comment or reply in that
-thread.
+An owner reply is a footer-less `0bnoxide` comment or nested reply,
+posted after the supervisor's latest comment or reply in that thread.
+
+Before classifying, read the whole thread with the thread commands in
+[Commands](#commands). If the completeness check prints anything, the read
+is incomplete and nothing in the thread is acted on. Instead, ask the same
+question again in a new Q&A thread that links the old one, then close the
+old one as outdated.
+
+When several owner replies follow the supervisor's latest post, act only if
+they all fall in the same row of the table below. Otherwise, follow up with
+"Approve as is, or repair first?".
 
 | Owner reply | Action |
 |---|---|
@@ -240,8 +254,9 @@ thread.
 | Starts with approve but also asks for a change, such as "approve, but fix the typo" | Follow up with "Approve as is, or repair first?" |
 | Anything else, such as "looks good", "👍" or "1" | Follow up by asking for an explicit `approve`. |
 
-An unclear reply is never approval and never a repair. After acting, mark
-the owner's reply as the answer and close the discussion.
+An unclear reply is never approval and never a repair. After acting, close
+the discussion. Before closing, mark the owner's reply as the answer if the
+thread read shows `viewerCanMarkAsAnswer: true` for it.
 
 The supervisor may ask for a gate to open with a `[gate]` question. Only
 the owner opens a gate.
@@ -346,11 +361,24 @@ gh api graphql -f query='mutation($id:ID!,$body:String!){updateDiscussion(input:
 gh api graphql -f query='mutation($id:ID!,$body:String!){addDiscussionComment(input:{discussionId:$id,body:$body}){comment{url}}}' -f id=<discussion id> -F body=@<file>
 ```
 
-**List open Q&A, or open Ideas with the Ideas category id.** Owners often
-reply by nesting a reply under a comment, so the query also reads nested
-replies:
+**List open Q&A threads, or open Ideas with the Ideas category id.** The
+list paginates:
 ```bash
-gh api graphql -f query='query{repository(owner:"0bnoxide",name:"AutoGIS-Civil3D"){discussions(first:50,categoryId:"DIC_kwDOTr9duc4DGbO3",states:[OPEN]){nodes{id number title body comments(last:50){nodes{id author{login} body createdAt replies(first:20){nodes{id author{login} body createdAt}}}}}}}}'
+gh api graphql --paginate -f query='query($endCursor:String){repository(owner:"0bnoxide",name:"AutoGIS-Civil3D"){discussions(first:100,after:$endCursor,categoryId:"DIC_kwDOTr9duc4DGbO3",states:[OPEN]){pageInfo{hasNextPage endCursor} nodes{id number title}}}}' --jq '.data.repository.discussions.nodes[] | "\(.number) \(.id) \(.title)"'
+```
+
+**Read one thread in full, then check that the read is complete.** Owners
+often reply by nesting a reply under a comment, and a nested reply can
+arrive under any comment, however old. So read every page of comments,
+each with its nested replies:
+```bash
+gh api graphql --paginate -f query='query($endCursor:String){repository(owner:"0bnoxide",name:"AutoGIS-Civil3D"){discussion(number:<q>){comments(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{id author{login} body createdAt viewerCanMarkAsAnswer replies(first:100){totalCount nodes{id author{login} body createdAt viewerCanMarkAsAnswer}}}}}}}' --jq '.data.repository.discussion.comments.nodes[]'
+```
+The completeness check runs the same query and prints each comment whose
+nested replies were cut off. Any output means the read is incomplete (see
+[Owner approval](#owner-approval)):
+```bash
+gh api graphql --paginate -f query='query($endCursor:String){repository(owner:"0bnoxide",name:"AutoGIS-Civil3D"){discussion(number:<q>){comments(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{id replies(first:100){totalCount nodes{id}}}}}}}' --jq '.data.repository.discussion.comments.nodes[] | select(.replies.totalCount > (.replies.nodes | length)) | .id'
 ```
 
 **Ask a question or post an announcement.** Use the Q&A or Announcements
@@ -359,7 +387,10 @@ category id:
 gh api graphql -f query='mutation($r:ID!,$c:ID!,$t:String!,$b:String!){createDiscussion(input:{repositoryId:$r,categoryId:$c,title:$t,body:$b}){discussion{number url}}}' -f r=R_kgDOTr9duQ -f c=DIC_kwDOTr9duc4DGbO3 -f t='[spec] <subject>' -F b=@<file>
 ```
 
-**Mark the owner's reply as the answer, then close:**
+**Mark the owner's reply as the answer (only when its
+`viewerCanMarkAsAnswer` is true), then close.** Use `reason:OUTDATED` in
+place of `reason:RESOLVED` when closing an incomplete thread that was asked
+again:
 ```bash
 gh api graphql -f query='mutation($c:ID!){markDiscussionCommentAsAnswer(input:{id:$c}){discussion{number}}}' -f c=<owner comment id>
 gh api graphql -f query='mutation($d:ID!){closeDiscussion(input:{discussionId:$d,reason:RESOLVED}){discussion{number}}}' -f d=<discussion id>
