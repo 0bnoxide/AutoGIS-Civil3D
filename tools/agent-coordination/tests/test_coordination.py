@@ -675,6 +675,40 @@ class TestClaims(TempRepoCase):
         disjoint = coordination.claim(self.repo, "s2", "file_glob", "docs/*")
         self.assertIn("claimed", disjoint)
 
+    def test_second_supervisor_rejected_whatever_its_value(self):
+        first = coordination.claim(self.repo, "s1", "supervisor", "claude")
+        self.assertIn("claimed", first)
+        second = coordination.claim(self.repo, "s2", "supervisor", "codex")
+        self.assertIn("rejected", second)
+        self.assertEqual(second["rejected"]["session"], "s1")
+
+    def test_supervisor_reclaim_by_same_session_allowed(self):
+        coordination.claim(self.repo, "s1", "supervisor", "claude")
+        again = coordination.claim(self.repo, "s1", "supervisor", "claude")
+        self.assertIn("claimed", again)
+
+    def test_supervisor_claim_leaves_other_kinds_alone(self):
+        coordination.claim(self.repo, "s1", "supervisor", "claude")
+        other = coordination.claim(self.repo, "s2", "branch", "feature")
+        self.assertIn("claimed", other)
+
+    def test_supervisor_claimable_after_release(self):
+        held = coordination.claim(self.repo, "s1", "supervisor", "claude")
+        coordination.release(self.repo, held["claimed"]["id"], session="s1")
+        taken = coordination.claim(self.repo, "s2", "supervisor", "codex")
+        self.assertIn("claimed", taken)
+
+    def test_claim_cli_second_supervisor_denied_naming_holder(self):
+        coordination.claim(self.repo, "s1", "supervisor", "claude")
+        buffer = io.StringIO()
+        with mock.patch.object(coordination, "discover", return_value=self.repo):
+            with redirect_stderr(buffer):
+                rc = coordination.main(
+                    ["claim", "--session", "s2",
+                     "--kind", "supervisor", "--value", "codex"])
+        self.assertEqual(rc, coordination.DENY)
+        self.assertIn("claimed by session s1", buffer.getvalue())
+
     def test_adapter_fails_closed_on_corrupt_registry_with_session(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
         self.repo = coordination.discover(self.repo_path)

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Orchestrator"
+  short_description: "Supervise workers, verify gates, and recover project state"
+  default_prompt: "Use $project-orchestrator to supervise this project's approved tasks, preserve current ownership, and accept results only after independent verification."

@@ -44,7 +44,7 @@ HOOKSPATH_KEY = "core.hooksPath"
 REGISTRY_NAME = "claims.json"
 LOCK_SUFFIX = ".lock"
 STALE_SUSPECT_HOURS = 24
-CLAIM_KINDS = ("branch", "worktree", "file_glob", "adr")
+CLAIM_KINDS = ("branch", "worktree", "file_glob", "adr", "supervisor")
 
 ALLOW, DENY, MISUSE, OPFAIL = 0, 1, 2, 3
 
@@ -960,7 +960,9 @@ def claim(repo, session, kind, value, harness=""):
         for existing in data["claims"]:
             if existing["kind"] != kind or existing["session"] == session:
                 continue
-            if _same_value(kind, existing["value"], value):
+            # One supervisor at a time: any other session's supervisor claim
+            # conflicts, whatever value it names.
+            if kind == "supervisor" or _same_value(kind, existing["value"], value):
                 return {"rejected": existing}
             if kind == "file_glob" and _globs_overlap(value, existing["value"]):
                 return {"rejected": existing}
