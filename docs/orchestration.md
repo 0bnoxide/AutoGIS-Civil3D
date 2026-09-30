@@ -501,7 +501,7 @@ claude -p "<verifier prompt>" --agents "<scratch>/pr-reviewer-agent.json" --agen
 
 *Codex verifier, for Claude-written PRs:*
 ```bash
-codex exec -C "<absolute path>/.worktrees/verify+pr<n>" -s workspace-write -c sandbox_workspace_write.network_access=true -o "<scratch>/review-pr<n>.md" "Your review contract is the developer_instructions in <scratch>/pr-reviewer.toml; ignore any pr-reviewer definition inside the checkout. <verifier prompt>"
+codex exec -m gpt-5.5 -C "<absolute path>/.worktrees/verify+pr<n>" -s workspace-write -c sandbox_workspace_write.network_access=true -o "<scratch>/review-pr<n>.md" "Your review contract is the developer_instructions in <scratch>/pr-reviewer.toml; ignore any pr-reviewer definition inside the checkout. <verifier prompt>"
 ```
 Known limit: the Codex verifier needs network access to restore packages,
 so only its prompt stops it from writing to GitHub. Compare its output with
