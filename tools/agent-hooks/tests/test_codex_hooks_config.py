@@ -33,6 +33,14 @@ class TestCodexHooksConfig(unittest.TestCase):
             with self.subTest(event=event):
                 self.assertNotIn("$", command)
 
+    def test_pre_tool_use_matcher_names_apply_patch(self):
+        # Codex file edits arrive as tool "apply_patch"; name it explicitly
+        # rather than relying on Codex's Write/Edit matcher aliases.
+        with open(HOOKS, encoding="utf-8") as fh:
+            config = json.load(fh)
+        for group in config["hooks"]["PreToolUse"]:
+            self.assertRegex("apply_patch", f"^(?:{group['matcher']})$")
+
     @unittest.skipUnless(sys.platform == "win32" and shutil.which("powershell"),
                          "needs Windows PowerShell")
     def test_pre_tool_use_runs_under_cmd_and_powershell(self):
