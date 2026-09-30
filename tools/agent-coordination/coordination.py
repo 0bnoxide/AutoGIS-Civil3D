@@ -1670,6 +1670,12 @@ def hook_pre_push(stdin_lines):
     return ALLOW
 
 
+# Files an apply_patch payload writes: every Add/Update/Delete header and the
+# destination of a Move (#153).
+PATCH_TARGET_RE = re.compile(
+    r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\s*$", re.M)
+
+
 def hook_pre_tool_use(payload_text):
     """Harness PreToolUse adapter: normalize payload, apply the same rules.
 
@@ -1684,12 +1690,19 @@ def hook_pre_tool_use(payload_text):
         cwd = payload.get("cwd") or os.getcwd()
         repo = discover(cwd)
         reason = None
-        if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
-            target = tool_input.get("file_path") or tool_input.get("notebook_path")
-            if target:
-                if not os.path.isabs(target):
-                    target = os.path.join(cwd, target)
-                reason = deny_reason_for_target(target, repo)
+        if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"):
+            if tool == "apply_patch":
+                # Codex file edits: the raw patch text, one header per file.
+                targets = PATCH_TARGET_RE.findall(tool_input.get("command", ""))
+            else:
+                target = tool_input.get("file_path") \
+                    or tool_input.get("notebook_path")
+                targets = [target] if target else []
+            targets = [t if os.path.isabs(t) else os.path.join(cwd, t)
+                       for t in targets]
+            if targets:
+                reason = next(filter(None, (
+                    deny_reason_for_target(t, repo) for t in targets)), None)
                 if reason is None and repo is not None:
                     # Claim-aware layer: with a session identity available,
                     # an edit inside another session's file_glob is denied
@@ -1699,7 +1712,7 @@ def hook_pre_tool_use(payload_text):
                     if session:
                         try:
                             reason = claim_denial(
-                                list_claims(repo), session, [target])
+                                list_claims(repo), session, targets)
                         except RegistryError as exc:
                             # Claim-dependent writes are blocked on corrupt
                             # state (architecture rule) — there is no
