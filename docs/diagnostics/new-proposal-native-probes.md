@@ -37,6 +37,8 @@ The DWG SHA-256 stayed `B7EEB65E9FD671FD178B50D8A2C9BD1C2B917EA818D1FF4D422F88F0
 
 [`OpenDatabase(path, true)`](https://help.autodesk.com/cloudhelp/2016/ENU/AutoCAD-ActiveX/files/GUID-7EA3FFF8-FCE3-4B06-A66F-52B039D41816.htm) uses `true` for **fail if already open**, not for read-only access. The relocated verification made no mutation calls, and unchanged post-close hashes support the narrower nonmutation observation. The move succeeded after the probe's COM close cycle, but that does not independently prove every possible OS handle was released.
 
+The 2026-09-25 run did not inject native API failures, start a fresh host process, or use a UNC path or a second machine, and both returned layout paths were absolute, so it does not establish how sheet paths are serialized.
+
 ## Extended synthetic observations on 2026-09-26
 
 The [A3 creation run](https://github.com/0bnoxide/AutoGIS-Civil3D/issues/106#issuecomment-5844390195) saved and independently reopened five DWGs and a two-sheet DST. Its existing-DST property edit persisted, but the title-block fields showed `####` when the DST was closed. A [read-only diagnostic](https://github.com/0bnoxide/AutoGIS-Civil3D/issues/106#issuecomment-5844519053) found that evaluating the fields while the DST remained open produced the edited property value in memory. A5 stopped on an incorrect copied-DST path assumption before mutation; its source fixtures remained unchanged. These failed attempts are retained, not counted as passes.
