@@ -1219,6 +1219,45 @@ class TestPreToolUseAdapter(TempRepoCase):
             })
         self.assertEqual(out, "")
 
+    def apply_patch(self, *headers, session="s1"):
+        # Codex sends file edits as tool "apply_patch" with the raw patch
+        # text in tool_input.command (#153).
+        patch = "*** Begin Patch\n" + "".join(
+            f"{h}\n+x\n" for h in headers) + "*** End Patch\n"
+        with mock.patch.dict(os.environ, {"AGENT_SESSION_ID": ""}):
+            return self.decide({
+                "session_id": session,
+                "tool_name": "apply_patch",
+                "tool_input": {"command": patch},
+                "cwd": self.repo_path,
+            })
+
+    def test_apply_patch_on_main_emits_deny(self):
+        rc, out = self.apply_patch("*** Add File: probe.txt")
+        self.assertIn("deny", out)
+
+    def test_apply_patch_on_unclaimed_branch_denied(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        rc, out = self.apply_patch("*** Add File: probe.txt")
+        self.assertIn("no claim for branch 'feature'", out)
+
+    def test_apply_patch_checks_every_file_in_the_patch(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s1", "file_glob", "src/*")
+        rc, out = self.apply_patch(
+            "*** Update File: src/a.cs", "*** Delete File: docs/x.md")
+        self.assertIn("outside your claimed file scope", out)
+        rc, out = self.apply_patch(
+            "*** Update File: src/a.cs\n*** Move to: docs/x.md")
+        self.assertIn("outside your claimed file scope", out)
+
+    def test_apply_patch_on_claimed_branch_silent(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        rc, out = self.apply_patch("*** Add File: probe.txt")
+        self.assertEqual(out, "")
+
     def test_malformed_payload_fails_open(self):
         rc = coordination.hook_pre_tool_use("this is not json")
         self.assertEqual(rc, coordination.ALLOW)

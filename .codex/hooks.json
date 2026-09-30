@@ -7,19 +7,19 @@
           {
             "type": "command",
             "command": "bash \"$(git rev-parse --show-toplevel)/tools/agent-hooks/session-start.sh\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$r = git rev-parse --show-toplevel 2>$null; if ($r) { & (Join-Path $r 'tools/agent-hooks/session-start.ps1') }\""
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path (git rev-parse --show-toplevel) 'tools/agent-hooks/session-start.ps1')\""
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell|apply_patch",
         "hooks": [
           {
             "type": "command",
             "command": "python \"$(git rev-parse --show-toplevel)/tools/agent-coordination/coordination.py\" hook pre-tool-use",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$r = git rev-parse --show-toplevel 2>$null; if ($r) { python (Join-Path $r 'tools/agent-coordination/coordination.py') hook pre-tool-use }\""
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"python (Join-Path (git rev-parse --show-toplevel) 'tools/agent-coordination/coordination.py') hook pre-tool-use\""
           }
         ]
       }
@@ -31,7 +31,7 @@
           {
             "type": "command",
             "command": "python \"$(git rev-parse --show-toplevel)/tools/agent-hooks/post_tool_use.py\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$r = git rev-parse --show-toplevel 2>$null; if ($r) { python (Join-Path $r 'tools/agent-hooks/post_tool_use.py') }\""
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"python (Join-Path (git rev-parse --show-toplevel) 'tools/agent-hooks/post_tool_use.py')\""
           }
         ]
       }
