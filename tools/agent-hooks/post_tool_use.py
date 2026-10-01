@@ -36,6 +36,10 @@ Runner = Callable[[list], "tuple[int, str]"]
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
 SHELL_TOOLS = ("Bash", "PowerShell")
 
+# Parsing must survive a broken module whose test failures the hook reports.
+PATCH_TARGET_RE = re.compile(
+    r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\s*$", re.M)
+
 # Opt-in marker for the slow .NET leg. `dotnet test` builds first and that
 # build dominates edit latency, so it stays off unless the developer asks.
 # ponytail: touched-project scope only (nearest .csproj, or its <Name>.Tests
@@ -272,9 +276,6 @@ def _patch_feedback(payload: dict, root: str, env: dict, run: Runner) -> Optiona
     lines = patch.strip().splitlines()
     if not lines or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
         return None
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "agent-coordination"))
-    from coordination import PATCH_TARGET_RE
-
     cwd = payload.get("cwd") or root
     feedback, seen = [], set()
 
