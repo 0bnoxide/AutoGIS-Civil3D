@@ -5,8 +5,10 @@ layouts that the logic inspects (a tool's tests/ dir, a src project and its
 convention-mapped .Tests project) are built in a tempdir.
 """
 
+import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -274,6 +276,40 @@ class PostPushTests(unittest.TestCase):
 
 
 class RobustnessTests(unittest.TestCase):
+    def test_broken_coordination_preserves_edit_feedback_and_patch_is_quiet(self):
+        with tempfile.TemporaryDirectory(prefix="post-tool-broken-") as root:
+            hook_dir = os.path.join(root, "tools", "agent-hooks")
+            coord_dir = os.path.join(root, "tools", "agent-coordination")
+            os.makedirs(hook_dir)
+            os.makedirs(os.path.join(coord_dir, "tests"))
+            shutil.copyfile(os.path.join(TOOL_DIR, "post_tool_use.py"),
+                            os.path.join(hook_dir, "post_tool_use.py"))
+            with open(os.path.join(coord_dir, "coordination.py"), "w") as fh:
+                fh.write("def broken(:\n")
+            script = """
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import post_tool_use
+root = sys.argv[2]
+payload = {"tool_name": "Edit", "tool_input": {"file_path":
+    os.path.join(root, "tools", "agent-coordination", "coordination.py")}}
+context = post_tool_use.handle(payload, root, {}, lambda argv: (1, "FAILED"))
+assert "Tests for tools/agent-coordination FAILED" in context, context
+post_tool_use._git_toplevel = lambda cwd: root
+sys.exit(post_tool_use.main())
+"""
+            patch = {"tool_name": "apply_patch", "cwd": root,
+                     "tool_input": "*** Begin Patch\n"
+                                   "*** Delete File: tools/agent-coordination/coordination.py\n"
+                                   "*** End Patch",
+                     "tool_response": {"exit_code": 0}}
+            result = subprocess.run([sys.executable, "-c", script, hook_dir, root],
+                                    input=json.dumps(patch), capture_output=True,
+                                    text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr, "")
+
     def test_unknown_tool_is_silent(self):
         run = stub()
         self.assertIsNone(handle({"tool_name": "Read", "tool_input": {}},

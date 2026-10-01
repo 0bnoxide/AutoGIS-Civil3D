@@ -29,9 +29,6 @@ import subprocess
 import sys
 from typing import Callable, Optional
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "agent-coordination"))
-from coordination import PATCH_TARGET_RE
-
 # A Runner maps an argv list to (returncode, combined-output). Injected so the
 # self-check drives the logic without running tests, dotnet, or gh for real.
 Runner = Callable[[list], "tuple[int, str]"]
@@ -275,6 +272,9 @@ def _patch_feedback(payload: dict, root: str, env: dict, run: Runner) -> Optiona
     lines = patch.strip().splitlines()
     if not lines or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
         return None
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "agent-coordination"))
+    from coordination import PATCH_TARGET_RE
+
     cwd = payload.get("cwd") or root
     feedback, seen = [], set()
 
