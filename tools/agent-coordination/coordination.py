@@ -518,11 +518,12 @@ def _ps_write_targets(argv):
 
 
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+_PS_QUOTE_RE = re.compile(r"'(?:''|[^'])*'|\"(?:`[\s\S]|\"\"|[^\"`])*\"")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
 
 
-def _mask_literals(command, cmd=False):
+def _mask_literals(command, cmd=False, ps=False):
     """Blank quoted-string contents and heredoc bodies, preserving positions.
 
     Operator and redirect scanning runs on the masked text so commit
@@ -532,7 +533,10 @@ def _mask_literals(command, cmd=False):
     def blank(m):
         s = m.group(0)
         return s[0] + " " * (len(s) - 2) + s[-1]
-    quote_re = re.compile(r'"[^"]*"') if cmd else _QUOTE_RE
+    # PowerShell backslashes are literal; backticks and doubled quotes escape.
+    quote_re = _PS_QUOTE_RE if ps else _QUOTE_RE
+    if cmd:
+        quote_re = re.compile(r'"[^"]*"')
     masked = quote_re.sub(blank, command)
     if cmd:
         return masked  # cmd has neither single-quoted strings nor heredocs
@@ -739,7 +743,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     write form covered by one is covered by the other.
     """
     effective_cwd = cwd
-    masked_all = _mask_literals(command, cmd=cmd)
+    masked_all = _mask_literals(command, cmd=cmd, ps=ps)
     for segment, seg_masked in _shell_segments(command, masked_all, cmd=cmd):
         stages = _pipeline_stages(segment, seg_masked)
         first = _argv_of(stages[0], ps=ps, cmd=cmd)

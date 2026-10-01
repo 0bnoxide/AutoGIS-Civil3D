@@ -1208,6 +1208,58 @@ class TestPreToolUseAdapter(TempRepoCase):
         })
         self.assertIn("deny", out)
 
+    def test_powershell_literal_backslash_quote_keeps_main_writes_visible(self):
+        for command in (
+                r'Write-Output "x\"; Set-Content seed.txt boom; Write-Output "y"',
+                r'Write-Output "x\"; git reset --hard; Write-Output "y"'):
+            for tool, shell in (("PowerShell", ""), ("Bash", "pwsh")):
+                with self.subTest(command=command, tool=tool):
+                    rc, out = self.decide({
+                        "tool_name": tool, "tool_input": {
+                            "command": command, "shell": shell,
+                        }, "cwd": self.repo_path,
+                    })
+                    self.assertIn("main is read-only", out)
+
+    def test_powershell_literal_backslash_quote_keeps_claim_writes_visible(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        command = r'Write-Output "x\"; Remove-Item src/code.cs; Write-Output "y"'
+        rc, out = self.decide({
+            "tool_name": "PowerShell", "tool_input": {"command": command},
+            "cwd": self.repo_path, "session_id": "s1",
+        })
+        self.assertIn("claimed by session s2", out)
+
+    def test_powershell_quote_escapes_keep_statement_text_literal(self):
+        for command in (
+                r'Write-Output "x`"; Remove-Item seed.txt; y"',
+                r"Write-Output 'x''; Remove-Item seed.txt; y'",
+                r'Write-Output "x""; Remove-Item seed.txt; y"'):
+            with self.subTest(command=command):
+                self.assertEqual(coordination.shell_write_targets(
+                    command, self.repo_path, ps=True), [])
+                rc, out = self.decide({
+                    "tool_name": "PowerShell", "tool_input": {"command": command},
+                    "cwd": self.repo_path,
+                })
+                self.assertEqual(out, "")
+
+    def test_bash_and_cmd_quote_rules_are_preserved(self):
+        rc, out = self.decide({
+            "tool_name": "Bash", "tool_input": {
+                "command": r'printf "x\"; rm seed.txt; y"', "shell": "/bin/bash",
+            }, "cwd": self.repo_path,
+        })
+        self.assertEqual(out, "")
+        rc, out = self.decide({
+            "tool_name": "Bash", "tool_input": {
+                "command": r'echo "x\" & del seed.txt & echo "y"', "shell": "cmd.exe",
+            }, "cwd": self.repo_path,
+        })
+        self.assertIn("main is read-only", out)
+
     def test_cmd_scripts_preserve_windows_git_paths(self):
         other = make_repo(self.base, "other-main")
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
