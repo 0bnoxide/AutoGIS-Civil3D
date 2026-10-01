@@ -1208,6 +1208,74 @@ class TestPreToolUseAdapter(TempRepoCase):
         })
         self.assertIn("deny", out)
 
+    def test_cmd_scripts_preserve_windows_git_paths(self):
+        other = make_repo(self.base, "other-main")
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        commands = (
+            (r'cmd /c "C:\Git\cmd\git.exe reset --hard"', other),
+            (f'cmd /c "git -C {other} reset --hard"', self.repo_path),
+            (f'cmd /c "git -C {other} checkout -- ."', self.repo_path),
+            (f'cmd /c "cd /d {other} & git reset --hard"', self.repo_path),
+            (f'''cmd /c "echo 'literal & git -C {other} reset --hard & echo 'rest"''',
+             self.repo_path),
+        )
+        for tool, shell in (("PowerShell", "pwsh"), ("Bash", "/bin/bash")):
+            for command, cwd in commands:
+                with self.subTest(tool=tool, command=command):
+                    rc, out = self.decide({
+                        "tool_name": tool, "tool_input": {
+                            "command": command, "shell": shell,
+                        }, "cwd": cwd,
+                    })
+                    self.assertIn("main is read-only", out)
+
+    def test_cmd_write_aliases_reach_claims_without_powershell_aliases(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for outer, shell in (("cmd /c ", "pwsh"), ("", "cmd.exe")):
+            for command in (r'del /q src\code.cs', r'copy own.txt src\code.cs',
+                            r'move src\code.cs own.txt'):
+                with self.subTest(outer=outer, command=command):
+                    rc, out = self.decide({
+                        "tool_name": "Bash", "tool_input": {
+                            "command": outer + '"' + command + '"' if outer else command,
+                            "shell": shell,
+                        }, "cwd": self.repo_path, "session_id": "s1",
+                    })
+                    self.assertIn("claimed by session s2", out)
+            for command in ("sc query", r'copy src\code.cs own.txt',
+                            r"Set-Content src\code.cs value"):
+                with self.subTest(outer=outer, command=command):
+                    rc, out = self.decide({
+                        "tool_name": "Bash", "tool_input": {
+                            "command": outer + '"' + command + '"' if outer else command,
+                            "shell": shell,
+                        }, "cwd": self.repo_path, "session_id": "s1",
+                    })
+                    self.assertEqual(out, "")
+
+    def test_non_string_shell_metadata_keeps_existing_protection(self):
+        for shell in (None, ["pwsh"], 5):
+            with self.subTest(shell=shell):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {
+                        "command": "git reset --hard", "shell": shell,
+                    }, "cwd": self.repo_path,
+                })
+                self.assertIn("main is read-only", out)
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for shell in (None, ["pwsh"], 5):
+            with self.subTest(shell=shell):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {
+                        "command": "rm src/code.cs", "shell": shell,
+                    }, "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
+
     def test_codex_windows_bash_powershell_writes_on_main_denied(self):
         for command in ("Set-Content seed.txt boom",
                         "'boom' | Out-File seed.txt",
