@@ -41,6 +41,12 @@ class TestCodexHooksConfig(unittest.TestCase):
         for group in config["hooks"]["PreToolUse"]:
             self.assertRegex("apply_patch", f"^(?:{group['matcher']})$")
 
+    def test_post_tool_use_matcher_names_apply_patch(self):
+        with open(HOOKS, encoding="utf-8") as fh:
+            config = json.load(fh)
+        for group in config["hooks"]["PostToolUse"]:
+            self.assertRegex("apply_patch", f"^(?:{group['matcher']})$")
+
     @unittest.skipUnless(sys.platform == "win32" and shutil.which("powershell"),
                          "needs Windows PowerShell")
     def test_pre_tool_use_runs_under_cmd_and_powershell(self):
