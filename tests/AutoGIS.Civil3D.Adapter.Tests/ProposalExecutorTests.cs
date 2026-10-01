@@ -313,6 +313,30 @@ public sealed class ProposalExecutorTests
         Assert.False(Directory.Exists(harness.StageRoot));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnusableDrawingScratchRootIsPreflightFailure(bool available)
+    {
+        using var harness = new Harness();
+        string localData = "";
+        if (available)
+        {
+            // A file where the AutoGIS folder belongs makes the scratch root uncreatable.
+            localData = Path.Combine(harness.FailureDirectory, "LocalData");
+            Directory.CreateDirectory(localData);
+            File.WriteAllText(Path.Combine(localData, "AutoGIS"), "blocks the scratch root");
+        }
+        var result = new ProposalExecutor().Run(harness.Plan, harness.Approval, new NativeProposalHost(localData),
+            harness.RunId, Harness.FixedTime, harness.FailureDirectory);
+        Assert.Equal("Refused", result.Outcome);
+        var issue = Assert.Single(result.FailedChecks);
+        Assert.Equal(ExecutionIssueCodes.PreflightFailed, issue.Code);
+        Assert.Contains("scratch", issue.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(Directory.Exists(harness.StageRoot));
+        Assert.Empty(Directory.GetFileSystemEntries(harness.BaseRoot));
+    }
+
     [Fact]
     public void EmptyRunIdIsPreflightFailure()
     {

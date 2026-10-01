@@ -89,10 +89,10 @@ public sealed class NativePlanDispatchTests
         string? digest = null;
         try
         {
-            DrawingWriter.WithReservedScratchDrawing(temporary =>
+            DrawingWriter.WithReservedScratchDrawing(LocalData, temporary =>
             {
                 scratch = Path.GetDirectoryName(temporary)!;
-                Assert.StartsWith(ProposalFiles.Full(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)) +
+                Assert.StartsWith(ProposalFiles.Full(LocalData) +
                     Path.DirectorySeparatorChar, scratch, StringComparison.OrdinalIgnoreCase);
                 Assert.False(ProposalFiles.Within(scratch, parent));
                 File.WriteAllBytes(temporary, saved);
@@ -116,7 +116,7 @@ public sealed class NativePlanDispatchTests
         string? scratch = null;
         try
         {
-            var error = Assert.Throws<ProposalConditionException>(() => DrawingWriter.WithReservedScratchDrawing(temporary =>
+            var error = Assert.Throws<ProposalConditionException>(() => DrawingWriter.WithReservedScratchDrawing(LocalData, temporary =>
             {
                 scratch = Path.GetDirectoryName(temporary)!;
                 File.WriteAllBytes(temporary, [7, 8, 9]);
@@ -136,7 +136,7 @@ public sealed class NativePlanDispatchTests
         string? scratch = null;
         try
         {
-            Assert.Throws<IOException>(() => DrawingWriter.WithReservedScratchDrawing(temporary =>
+            Assert.Throws<IOException>(() => DrawingWriter.WithReservedScratchDrawing(LocalData, temporary =>
             {
                 scratch = Path.GetDirectoryName(temporary)!;
                 File.WriteAllBytes(Path.Combine(scratch, "foreign.bin"), foreign);
@@ -145,6 +145,8 @@ public sealed class NativePlanDispatchTests
         }
         finally { if (scratch is not null && Directory.Exists(scratch)) Directory.Delete(scratch, recursive: true); }
     }
+
+    private static readonly string LocalData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
     private static ProposalPlan Plan()
     {

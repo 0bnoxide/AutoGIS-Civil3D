@@ -208,7 +208,8 @@ Inputs
 ```
 
 Preflight, before anything is created, verifies that the final target root
-does not exist; that staging and target locations are writable; that the
+does not exist; that staging, target, and drawing scratch locations are
+writable; that the
 client/site-derived name is valid and safe; that required templates exist
 and are readable; that the orientation-and-size combination is supported;
 that required page setups and title-block definitions exist; that Civil 3D
