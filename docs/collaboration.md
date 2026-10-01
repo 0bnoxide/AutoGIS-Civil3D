@@ -32,15 +32,16 @@ Every command below is run from the repository unless noted.
 
    Keep that id stable and export it as `AGENT_SESSION_ID` (`export
    AGENT_SESSION_ID='<id>'` in Bash, or `$env:AGENT_SESSION_ID='<id>'` in
-   PowerShell). `COORD check` defaults to this environment variable. The
-   hook uses the payload's `session_id` first and falls back to
+   PowerShell). `COORD check` defaults to this environment variable. Set it
+   in each shell invocation that relies on the default, or pass
+   `--session <id>` explicitly; an export in an earlier tool call may be
+   lost when the next call starts a fresh shell. The hook uses the payload's
+   `session_id` first and falls back to
    `AGENT_SESSION_ID` only when the payload has no id; exporting a different
    value cannot override the payload identity.
 
-   Supervisor-owned worker claims follow
-   [orchestration.md](orchestration.md#each-wake); workers use the supervisor's
-   claim identity for explicit checks instead of creating separate claims.
-   This does not change the hook's payload identity precedence.
+   For supervisor-owned worker claims, follow
+   [orchestration.md](orchestration.md#each-wake).
 
    ```
    COORD claim --session <id> --kind branch --value <agent>/<slug>
