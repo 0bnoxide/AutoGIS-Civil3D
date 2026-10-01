@@ -393,9 +393,16 @@ def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False):
     return None
 
 
-def _argv_of(stage):
+def _argv_of(stage, ps=False):
     try:
-        return shlex.split(stage.strip(), posix=True)
+        lexer = shlex.shlex(stage.strip(), posix=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        if ps:
+            # Backslashes are literal in PowerShell, including child-shell
+            # script strings. Normalize paths only after unwrapping them.
+            lexer.escape = ""
+        return list(lexer)
     except ValueError:
         return stage.split()
 
@@ -701,6 +708,8 @@ def _target_events(raw_targets, cwd, ps):
     """Yield resolved target events for raw shell write operands."""
     for target in raw_targets:
         target = target.strip("\"'")
+        if ps:
+            target = target.replace("\\", "/")
         if ps and re.match(r"[A-Za-z]{2,}:", target):
             continue
         target = os.path.expanduser(target)
@@ -718,25 +727,21 @@ def _shell_events(command, cwd, ps=False, _depth=0):
     write form covered by one is covered by the other.
     """
     effective_cwd = cwd
-    if ps:
-        # PowerShell's escape character is the backtick, never the
-        # backslash, so flipping separators is semantics-preserving and
-        # keeps `C:\repo\file` from being eaten by the POSIX tokenizer
-        # (which would silently drop the write target).
-        command = command.replace("\\", "/")
     masked_all = _mask_literals(command)
     for segment, seg_masked in _shell_segments(command, masked_all):
         stages = _pipeline_stages(segment, seg_masked)
-        first = _argv_of(stages[0])
+        first = _argv_of(stages[0], ps=ps)
         # `cd` moves the parent shell only outside a pipeline; inside one it
         # runs in a subshell and must NOT move later segments.
         if len(stages) == 1 and first and first[0] == "cd" and len(first) > 1:
+            if ps:
+                first[1] = first[1].replace("\\", "/")
             effective_cwd = first[1] if os.path.isabs(first[1]) \
                 else os.path.join(effective_cwd or ".", first[1])
             continue
         raw_targets = _redirect_targets(segment, seg_masked)
         for stage in stages:
-            argv = _strip_cmd_prefixes(_argv_of(stage))
+            argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps))
             if argv and argv[0].lower() in _CMD_PREFIXES:
                 # `_strip_cmd_prefixes` leaves a wrapper at its depth cap.
                 # That opaque remainder could hide a mutator, so surface the
@@ -1720,7 +1725,15 @@ def hook_pre_tool_use(payload_text):
                             reason = str(exc)
         elif tool == "Bash" or tool == "PowerShell":
             command = tool_input.get("command", "")
-            ps = tool == "PowerShell"
+            shell = _git_executable_name(tool_input.get("shell", ""))
+            # Codex labels its Windows default PowerShell commands "Bash".
+            # Explicit shells win; Claude's Bash remains Bash, including
+            # when a Claude subprocess inherits the Codex thread marker.
+            ps = tool == "PowerShell" or (
+                shell in ("powershell", "powershell.exe", "pwsh", "pwsh.exe")
+                if shell else sys.platform == "win32"
+                and bool(os.environ.get("CODEX_THREAD_ID"))
+                and not os.environ.get("CLAUDECODE"))
             reason = deny_reason_for_shell(command, cwd, repo, ps=ps)
             if reason is None and repo is not None:
                 # Shell write forms get the same claim layer as Edit/Write.

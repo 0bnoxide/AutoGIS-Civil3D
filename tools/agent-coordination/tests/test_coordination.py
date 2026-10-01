@@ -1208,6 +1208,106 @@ class TestPreToolUseAdapter(TempRepoCase):
         })
         self.assertIn("deny", out)
 
+    def test_codex_windows_bash_powershell_writes_on_main_denied(self):
+        for command in ("Set-Content seed.txt boom",
+                        "'boom' | Out-File seed.txt",
+                        r"Set-Content .\seed.txt boom",
+                        r"'boom' > .\seed.txt"):
+            with self.subTest(command=command), mock.patch.object(
+                    sys, "platform", "win32"), mock.patch.dict(os.environ, {
+                        "CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": "",
+                    }):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {"command": command},
+                    "cwd": self.repo_path,
+                })
+                self.assertIn("main is read-only", out)
+
+    def test_codex_windows_powershell_writes_reach_claim_layer(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for command in ("Set-Content src/code.cs boom",
+                        "'boom' | Out-File src/code.cs",
+                        r"'boom' > src\code.cs"):
+            with self.subTest(command=command), mock.patch.object(
+                    sys, "platform", "win32"), mock.patch.dict(os.environ, {
+                        "CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": "",
+                    }):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {"command": command},
+                    "session_id": "s1", "cwd": self.repo_path,
+                })
+                self.assertIn("claimed by session s2", out)
+
+    def test_codex_windows_nested_bash_keeps_raw_script(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        command = r"bash -c 'rm s\rc/code.cs'"
+        # Bash removes the backslash escape: the real target is src/code.cs.
+        self.assertEqual(coordination.shell_write_targets(command, self.repo_path),
+                         [os.path.join(self.repo_path, "src/code.cs")])
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.dict(
+                os.environ, {"CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": ""}):
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {"command": command},
+                "session_id": "s1", "cwd": self.repo_path,
+            })
+            self.assertIn("claimed by session s2", out)
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {
+                    "command": "Set-Content own.txt boom",
+                }, "session_id": "s1", "cwd": self.repo_path,
+            })
+            self.assertEqual(out, "")
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {
+                    "command": r"rm src\code.cs", "shell": "bash.exe",
+                }, "session_id": "s1", "cwd": self.repo_path,
+            })
+            self.assertEqual(out, "")
+
+    def test_explicit_shell_overrides_codex_bash_label(self):
+        for shell in ("powershell", "pwsh.exe",
+                      r"C:\Program Files\PowerShell\7\pwsh.exe"):
+            with self.subTest(shell=shell):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {
+                        "command": "Set-Content seed.txt boom", "shell": shell,
+                    }, "cwd": self.repo_path,
+                })
+                self.assertIn("main is read-only", out)
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.dict(
+                os.environ, {"CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": ""}):
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {
+                    "command": "printf x > /dev/null", "shell": "/bin/bash",
+                }, "cwd": self.repo_path,
+            })
+            self.assertEqual(out, "")
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {
+                    "command": "printf x > se\\ed.txt", "shell": "/bin/bash",
+                }, "cwd": self.repo_path,
+            })
+            self.assertIn("main is read-only", out)
+
+    def test_claude_bash_on_windows_keeps_bash_semantics(self):
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.dict(
+                os.environ, {"CODEX_THREAD_ID": "inherited-codex-thread",
+                             "CLAUDECODE": "1"}):
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {"command": "sc query"},
+                "cwd": self.repo_path,
+            })
+            self.assertEqual(out, "")
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {"command": "printf x > se\\ed.txt"},
+                "cwd": self.repo_path,
+            })
+            self.assertIn("main is read-only", out)
+
     def test_benign_edit_on_branch_silent(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
         # This case exercises the no-session path, independent of the caller.
