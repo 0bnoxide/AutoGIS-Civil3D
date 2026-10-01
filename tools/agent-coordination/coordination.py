@@ -369,7 +369,7 @@ def _git_executable_name(token):
     return token.replace("\\", "/").rsplit("/", 1)[-1].rstrip(". ").lower()
 
 
-def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False):
+def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False, cmd=False):
     """Deny shell commands that write files on main or run git mutators there.
 
     ponytail: tokenizes each `&&`/`;`-separated segment and checks git
@@ -378,7 +378,7 @@ def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False):
     `ps` marks a PowerShell payload: cmdlet write forms apply and
     backslash paths are preserved.
     """
-    for event in _shell_events(command, cwd, ps=ps):
+    for event in _shell_events(command, cwd, ps=ps, cmd=cmd):
         if event[0] == "git":
             reason = deny_reason_for_git_argv(event[1], event[2])
         elif event[0] == "opaque":
@@ -393,9 +393,18 @@ def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False):
     return None
 
 
-def _argv_of(stage):
+def _argv_of(stage, ps=False, cmd=False):
     try:
-        return shlex.split(stage.strip(), posix=True)
+        lexer = shlex.shlex(stage.strip(), posix=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        if ps or cmd:
+            # Backslashes are literal in Windows shells, including child-shell
+            # script strings. Normalize paths only after unwrapping them.
+            lexer.escape = ""
+        if cmd:
+            lexer.quotes = '"'  # cmd treats apostrophes as literal characters
+        return list(lexer)
     except ValueError:
         return stage.split()
 
@@ -509,11 +518,12 @@ def _ps_write_targets(argv):
 
 
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+_PS_QUOTE_RE = re.compile(r"'(?:''|[^'])*'|\"(?:`[\s\S]|\"\"|[^\"`])*\"")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
 
 
-def _mask_literals(command):
+def _mask_literals(command, cmd=False, ps=False):
     """Blank quoted-string contents and heredoc bodies, preserving positions.
 
     Operator and redirect scanning runs on the masked text so commit
@@ -523,7 +533,13 @@ def _mask_literals(command):
     def blank(m):
         s = m.group(0)
         return s[0] + " " * (len(s) - 2) + s[-1]
-    masked = _QUOTE_RE.sub(blank, command)
+    # PowerShell backslashes are literal; backticks and doubled quotes escape.
+    quote_re = _PS_QUOTE_RE if ps else _QUOTE_RE
+    if cmd:
+        quote_re = re.compile(r'"[^"]*"')
+    masked = quote_re.sub(blank, command)
+    if cmd:
+        return masked  # cmd has neither single-quoted strings nor heredocs
     # Openers are found in the real text (quote-masking blanks a quoted
     # delimiter like <<'EOF'); masking preserves offsets, so requiring the
     # << itself to be unmasked skips heredoc lookalikes inside strings.
@@ -579,7 +595,7 @@ def _strip_cmd_prefixes(argv, _depth=0):
 
 def _nested_script(argv):
     """If argv is an interpreter invoked on an inline script string, return
-    (inner_command, ps) to re-parse; else None. Covers bash/sh/zsh/dash/ksh
+    (inner_command, ps, cmd) to re-parse; else None. Covers bash/sh/zsh/dash/ksh
     -c, pwsh/powershell -Command/-c, cmd /c, eval, and iex (#46). Arbitrary
     language interpreters (python -c, perl -e) and `$(...)`/backtick command
     substitution are the structural residual — inspecting them means running
@@ -591,10 +607,10 @@ def _nested_script(argv):
         return None
     head, rest = argv[0].lower(), argv[1:]
 
-    def after(match, ps):
+    def after(match, ps, cmd=False):
         for j, tok in enumerate(rest):
             if match(tok.lower()) and j + 1 < len(rest):
-                return rest[j + 1], ps
+                return rest[j + 1], ps, cmd
         return None
 
     if head in _SH_DASH_C:
@@ -605,11 +621,11 @@ def _nested_script(argv):
     if head in _PS_DASH_C:
         return after(lambda t: t in ("-command", "-c"), True)
     if head in ("cmd", "cmd.exe"):
-        return after(lambda t: t in ("/c", "/k"), False)
+        return after(lambda t: t in ("/c", "/k"), False, cmd=True)
     if head == "eval" and rest:
-        return " ".join(rest), False
+        return " ".join(rest), False, False
     if head in ("iex", "invoke-expression") and rest:
-        return rest[0], True
+        return rest[0], True, False
     return None
 
 
@@ -634,9 +650,10 @@ def _strip_ps_call_block(argv):
     return stripped
 
 
-def _shell_segments(command, masked_all):
+def _shell_segments(command, masked_all, cmd=False):
     """Yield non-literal command segments with aligned masked text."""
-    cuts = [m.span() for m in re.finditer(r"&&|\|\||;|\n", masked_all)]
+    separators = r"&&|\|\||&|\n" if cmd else r"&&|\|\||;|\n"
+    cuts = [m.span() for m in re.finditer(separators, masked_all)]
     cuts.append((len(command), len(command)))
     seg_start = 0
     for cut_start, cut_end in cuts:
@@ -671,36 +688,44 @@ def _redirect_targets(segment, segment_masked):
     return targets
 
 
-def _argv_write_targets(argv, ps):
+def _argv_write_targets(argv, ps, cmd=False):
     """Return raw target operands for the write form represented by argv."""
-    cmd = argv[0].rstrip(". ")
+    name = argv[0].rstrip(". ")
     targets = []
-    if cmd == "tee":
+    if name == "tee":
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
-    if cmd == "sed" and any(arg.startswith("-i") for arg in argv[1:]):
+    if name == "sed" and any(arg.startswith("-i") for arg in argv[1:]):
         targets += [arg for arg in argv[1:] if not arg.startswith("-")][-1:]
-    if cmd == "dd":
+    if name == "dd":
         targets += [arg[3:] for arg in argv if arg.startswith("of=")]
-    if cmd == "truncate":
+    if name == "truncate":
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
-    if cmd in ("rm", "unlink", "shred"):
+    if name in ("rm", "unlink", "shred"):
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
     low = argv[0].lower()
     if ps and (low in _PS_WRITE_CMDLETS or low in _PS_COPY_CMDLETS):
         targets += _ps_write_targets(argv)
-    if cmd in ("cp", "mv", "install"):
+    if cmd:
+        operands = [arg for arg in argv[1:] if not arg.startswith("/")]
+        if low in ("del", "erase", "rd", "rmdir", "move", "ren", "rename"):
+            targets += operands
+        elif low == "copy":
+            targets += operands[-1:]
+    if name in ("cp", "mv", "install"):
         dest, sources = _copy_move_operands(argv)
         if dest:
             targets.append(dest)
-        if cmd == "mv":
+        if name == "mv":
             targets += sources
     return targets
 
 
-def _target_events(raw_targets, cwd, ps):
+def _target_events(raw_targets, cwd, ps, cmd=False):
     """Yield resolved target events for raw shell write operands."""
     for target in raw_targets:
         target = target.strip("\"'")
+        if ps or cmd:
+            target = target.replace("\\", "/")
         if ps and re.match(r"[A-Za-z]{2,}:", target):
             continue
         target = os.path.expanduser(target)
@@ -711,32 +736,31 @@ def _target_events(raw_targets, cwd, ps):
         yield ("target", resolved)
 
 
-def _shell_events(command, cwd, ps=False, _depth=0):
+def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
     One parser feeds both the stateless main rule and the claim layer, so a
     write form covered by one is covered by the other.
     """
     effective_cwd = cwd
-    if ps:
-        # PowerShell's escape character is the backtick, never the
-        # backslash, so flipping separators is semantics-preserving and
-        # keeps `C:\repo\file` from being eaten by the POSIX tokenizer
-        # (which would silently drop the write target).
-        command = command.replace("\\", "/")
-    masked_all = _mask_literals(command)
-    for segment, seg_masked in _shell_segments(command, masked_all):
+    masked_all = _mask_literals(command, cmd=cmd, ps=ps)
+    for segment, seg_masked in _shell_segments(command, masked_all, cmd=cmd):
         stages = _pipeline_stages(segment, seg_masked)
-        first = _argv_of(stages[0])
+        first = _argv_of(stages[0], ps=ps, cmd=cmd)
         # `cd` moves the parent shell only outside a pipeline; inside one it
         # runs in a subshell and must NOT move later segments.
-        if len(stages) == 1 and first and first[0] == "cd" and len(first) > 1:
-            effective_cwd = first[1] if os.path.isabs(first[1]) \
-                else os.path.join(effective_cwd or ".", first[1])
+        if len(stages) == 1 and first and len(first) > 1 and (
+                first[0] == "cd" or cmd and first[0].lower() in ("cd", "chdir")):
+            path = first[2] if cmd and first[1].lower() == "/d" \
+                and len(first) > 2 else first[1]
+            if ps or cmd:
+                path = path.replace("\\", "/")
+            effective_cwd = path if os.path.isabs(path) \
+                else os.path.join(effective_cwd or ".", path)
             continue
         raw_targets = _redirect_targets(segment, seg_masked)
         for stage in stages:
-            argv = _strip_cmd_prefixes(_argv_of(stage))
+            argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
             if argv and argv[0].lower() in _CMD_PREFIXES:
                 # `_strip_cmd_prefixes` leaves a wrapper at its depth cap.
                 # That opaque remainder could hide a mutator, so surface the
@@ -752,19 +776,19 @@ def _shell_events(command, cwd, ps=False, _depth=0):
                 if _depth < _MAX_UNWRAP_DEPTH:
                     yield from _shell_events(
                         nested[0], effective_cwd, ps=nested[1],
-                        _depth=_depth + 1)
+                        _depth=_depth + 1, cmd=nested[2])
                     continue
                 # The opaque remainder could mutate this repository; never
                 # silently discard it at the parser depth limit.
                 yield ("opaque", effective_cwd)
                 continue
             yield ("git", argv, effective_cwd)
-            raw_targets += _argv_write_targets(argv, ps)
-        yield from _target_events(raw_targets, effective_cwd, ps)
+            raw_targets += _argv_write_targets(argv, ps, cmd=cmd)
+        yield from _target_events(raw_targets, effective_cwd, ps, cmd=cmd)
 
 
-def shell_write_targets(command, cwd, ps=False):
-    return [e[1] for e in _shell_events(command, cwd, ps=ps)
+def shell_write_targets(command, cwd, ps=False, cmd=False):
+    return [e[1] for e in _shell_events(command, cwd, ps=ps, cmd=cmd)
             if e[0] == "target"]
 
 
@@ -1720,19 +1744,33 @@ def hook_pre_tool_use(payload_text):
                             reason = str(exc)
         elif tool == "Bash" or tool == "PowerShell":
             command = tool_input.get("command", "")
-            ps = tool == "PowerShell"
-            reason = deny_reason_for_shell(command, cwd, repo, ps=ps)
-            if reason is None and repo is not None:
-                # Shell write forms get the same claim layer as Edit/Write.
-                session = payload.get("session_id") \
-                    or os.environ.get("AGENT_SESSION_ID", "")
-                if session:
-                    try:
-                        reason = claim_denial(
-                            list_claims(repo), session,
-                            shell_write_targets(command, cwd, ps=ps))
-                    except RegistryError as exc:
-                        reason = str(exc)
+            shell = tool_input.get("shell", "")
+            shell = _git_executable_name(shell) if isinstance(shell, str) else ""
+            ps = tool == "PowerShell" or shell in (
+                "powershell", "powershell.exe", "pwsh", "pwsh.exe")
+            # A Codex marker does not identify its shell. Without explicit
+            # metadata, both parsers must allow; inherited Claude stays Bash.
+            ambiguous = (tool == "Bash" and not shell and sys.platform == "win32"
+                and bool(os.environ.get("CODEX_THREAD_ID"))
+                and not os.environ.get("CLAUDECODE"))
+            cmd = not ps and shell in ("cmd", "cmd.exe")
+            for parser_ps in (False, True) if ambiguous else (ps,):
+                reason = deny_reason_for_shell(
+                    command, cwd, repo, ps=parser_ps, cmd=cmd)
+                if reason is None and repo is not None:
+                    # Shell writes get the same claim layer as Edit/Write.
+                    session = payload.get("session_id") \
+                        or os.environ.get("AGENT_SESSION_ID", "")
+                    if session:
+                        try:
+                            reason = claim_denial(
+                                list_claims(repo), session,
+                                shell_write_targets(
+                                    command, cwd, ps=parser_ps, cmd=cmd))
+                        except RegistryError as exc:
+                            reason = str(exc)
+                if reason:
+                    break
         if reason:
             print(json.dumps({
                 "hookSpecificOutput": {

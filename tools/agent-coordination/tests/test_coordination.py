@@ -1208,6 +1208,280 @@ class TestPreToolUseAdapter(TempRepoCase):
         })
         self.assertIn("deny", out)
 
+    def test_ambiguous_codex_commands_check_both_shells_on_main(self):
+        for command in (
+                r'echo "a\"b"; git reset --hard; echo "c"',
+                r'Write-Output "x\"; Set-Content seed.txt boom; Write-Output "y"'):
+            with self.subTest(command=command), mock.patch.object(
+                    sys, "platform", "win32"), mock.patch.dict(os.environ, {
+                        "CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": "",
+                    }):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {"command": command},
+                    "cwd": self.repo_path,
+                })
+                self.assertIn("main is read-only", out)
+
+    def test_ambiguous_codex_commands_check_both_shells_for_claims(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for command in (
+                r'echo "a\"b"; rm src/code.cs; echo "c"',
+                r'Write-Output "x\"; Remove-Item src/code.cs; Write-Output "y"'):
+            with self.subTest(command=command), mock.patch.object(
+                    sys, "platform", "win32"), mock.patch.dict(os.environ, {
+                        "CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": "",
+                        "AGENT_SESSION_ID": "different-environment-session",
+                    }):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {"command": command},
+                    "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
+
+    def test_ambiguous_data_is_conservative_but_explicit_shell_data_allowed(self):
+        # Each string is harmless data in its actual shell; the other parser
+        # sees a prohibited command, so ambiguous input deliberately denies.
+        for shell, command in (
+                ("/bin/bash", r'echo "a\"; git reset --hard; y"'),
+                ("pwsh", r'Write-Output "a`"; git reset --hard; y"')):
+            with self.subTest(shell=shell), mock.patch.object(
+                    sys, "platform", "win32"), mock.patch.dict(os.environ, {
+                        "CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": "",
+                    }):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {
+                        "command": command, "shell": shell,
+                    }, "cwd": self.repo_path,
+                })
+                self.assertEqual(out, "")
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {"command": command},
+                    "cwd": self.repo_path,
+                })
+                self.assertIn("main is read-only", out)
+
+    def test_powershell_literal_backslash_quote_keeps_main_writes_visible(self):
+        for command in (
+                r'Write-Output "x\"; Set-Content seed.txt boom; Write-Output "y"',
+                r'Write-Output "x\"; git reset --hard; Write-Output "y"'):
+            for tool, shell in (("PowerShell", ""), ("Bash", "pwsh")):
+                with self.subTest(command=command, tool=tool):
+                    rc, out = self.decide({
+                        "tool_name": tool, "tool_input": {
+                            "command": command, "shell": shell,
+                        }, "cwd": self.repo_path,
+                    })
+                    self.assertIn("main is read-only", out)
+
+    def test_powershell_literal_backslash_quote_keeps_claim_writes_visible(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        command = r'Write-Output "x\"; Remove-Item src/code.cs; Write-Output "y"'
+        rc, out = self.decide({
+            "tool_name": "PowerShell", "tool_input": {"command": command},
+            "cwd": self.repo_path, "session_id": "s1",
+        })
+        self.assertIn("claimed by session s2", out)
+
+    def test_powershell_quote_escapes_keep_statement_text_literal(self):
+        for command in (
+                r'Write-Output "x`"; Remove-Item seed.txt; y"',
+                r"Write-Output 'x''; Remove-Item seed.txt; y'",
+                r'Write-Output "x""; Remove-Item seed.txt; y"'):
+            with self.subTest(command=command):
+                self.assertEqual(coordination.shell_write_targets(
+                    command, self.repo_path, ps=True), [])
+                rc, out = self.decide({
+                    "tool_name": "PowerShell", "tool_input": {"command": command},
+                    "cwd": self.repo_path,
+                })
+                self.assertEqual(out, "")
+
+    def test_bash_and_cmd_quote_rules_are_preserved(self):
+        rc, out = self.decide({
+            "tool_name": "Bash", "tool_input": {
+                "command": r'printf "x\"; rm seed.txt; y"', "shell": "/bin/bash",
+            }, "cwd": self.repo_path,
+        })
+        self.assertEqual(out, "")
+        rc, out = self.decide({
+            "tool_name": "Bash", "tool_input": {
+                "command": r'echo "x\" & del seed.txt & echo "y"', "shell": "cmd.exe",
+            }, "cwd": self.repo_path,
+        })
+        self.assertIn("main is read-only", out)
+
+    def test_cmd_scripts_preserve_windows_git_paths(self):
+        other = make_repo(self.base, "other-main")
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        commands = (
+            (r'cmd /c "C:\Git\cmd\git.exe reset --hard"', other),
+            (f'cmd /c "git -C {other} reset --hard"', self.repo_path),
+            (f'cmd /c "git -C {other} checkout -- ."', self.repo_path),
+            (f'cmd /c "cd /d {other} & git reset --hard"', self.repo_path),
+            (f'''cmd /c "echo 'literal & git -C {other} reset --hard & echo 'rest"''',
+             self.repo_path),
+        )
+        for tool, shell in (("PowerShell", "pwsh"), ("Bash", "/bin/bash")):
+            for command, cwd in commands:
+                with self.subTest(tool=tool, command=command):
+                    rc, out = self.decide({
+                        "tool_name": tool, "tool_input": {
+                            "command": command, "shell": shell,
+                        }, "cwd": cwd,
+                    })
+                    self.assertIn("main is read-only", out)
+
+    def test_cmd_write_aliases_reach_claims_without_powershell_aliases(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for outer, shell in (("cmd /c ", "pwsh"), ("", "cmd.exe")):
+            for command in (r'del /q src\code.cs', r'copy own.txt src\code.cs',
+                            r'move src\code.cs own.txt'):
+                with self.subTest(outer=outer, command=command):
+                    rc, out = self.decide({
+                        "tool_name": "Bash", "tool_input": {
+                            "command": outer + '"' + command + '"' if outer else command,
+                            "shell": shell,
+                        }, "cwd": self.repo_path, "session_id": "s1",
+                    })
+                    self.assertIn("claimed by session s2", out)
+            for command in ("sc query", r'copy src\code.cs own.txt',
+                            r"Set-Content src\code.cs value"):
+                with self.subTest(outer=outer, command=command):
+                    rc, out = self.decide({
+                        "tool_name": "Bash", "tool_input": {
+                            "command": outer + '"' + command + '"' if outer else command,
+                            "shell": shell,
+                        }, "cwd": self.repo_path, "session_id": "s1",
+                    })
+                    self.assertEqual(out, "")
+
+    def test_non_string_shell_metadata_keeps_existing_protection(self):
+        for shell in (None, ["pwsh"], 5):
+            with self.subTest(shell=shell):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {
+                        "command": "git reset --hard", "shell": shell,
+                    }, "cwd": self.repo_path,
+                })
+                self.assertIn("main is read-only", out)
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for shell in (None, ["pwsh"], 5):
+            with self.subTest(shell=shell):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {
+                        "command": "rm src/code.cs", "shell": shell,
+                    }, "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
+
+    def test_codex_windows_bash_powershell_writes_on_main_denied(self):
+        for command in ("Set-Content seed.txt boom",
+                        "'boom' | Out-File seed.txt",
+                        r"Set-Content .\seed.txt boom",
+                        r"'boom' > .\seed.txt"):
+            with self.subTest(command=command), mock.patch.object(
+                    sys, "platform", "win32"), mock.patch.dict(os.environ, {
+                        "CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": "",
+                    }):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {"command": command},
+                    "cwd": self.repo_path,
+                })
+                self.assertIn("main is read-only", out)
+
+    def test_codex_windows_powershell_writes_reach_claim_layer(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for command in ("Set-Content src/code.cs boom",
+                        "'boom' | Out-File src/code.cs",
+                        r"'boom' > src\code.cs"):
+            with self.subTest(command=command), mock.patch.object(
+                    sys, "platform", "win32"), mock.patch.dict(os.environ, {
+                        "CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": "",
+                    }):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {"command": command},
+                    "session_id": "s1", "cwd": self.repo_path,
+                })
+                self.assertIn("claimed by session s2", out)
+
+    def test_codex_windows_nested_bash_keeps_raw_script(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        command = r"bash -c 'rm s\rc/code.cs'"
+        # Bash removes the backslash escape: the real target is src/code.cs.
+        self.assertEqual(coordination.shell_write_targets(command, self.repo_path),
+                         [os.path.join(self.repo_path, "src/code.cs")])
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.dict(
+                os.environ, {"CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": ""}):
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {"command": command},
+                "session_id": "s1", "cwd": self.repo_path,
+            })
+            self.assertIn("claimed by session s2", out)
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {
+                    "command": "Set-Content own.txt boom",
+                }, "session_id": "s1", "cwd": self.repo_path,
+            })
+            self.assertEqual(out, "")
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {
+                    "command": r"rm src\code.cs", "shell": "bash.exe",
+                }, "session_id": "s1", "cwd": self.repo_path,
+            })
+            self.assertEqual(out, "")
+
+    def test_explicit_shell_overrides_codex_bash_label(self):
+        for shell in ("powershell", "pwsh.exe",
+                      r"C:\Program Files\PowerShell\7\pwsh.exe"):
+            with self.subTest(shell=shell):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {
+                        "command": "Set-Content seed.txt boom", "shell": shell,
+                    }, "cwd": self.repo_path,
+                })
+                self.assertIn("main is read-only", out)
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.dict(
+                os.environ, {"CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": ""}):
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {
+                    "command": "printf x > /dev/null", "shell": "/bin/bash",
+                }, "cwd": self.repo_path,
+            })
+            self.assertEqual(out, "")
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {
+                    "command": "printf x > se\\ed.txt", "shell": "/bin/bash",
+                }, "cwd": self.repo_path,
+            })
+            self.assertIn("main is read-only", out)
+
+    def test_claude_bash_on_windows_keeps_bash_semantics(self):
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.dict(
+                os.environ, {"CODEX_THREAD_ID": "inherited-codex-thread",
+                             "CLAUDECODE": "1"}):
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {"command": "sc query"},
+                "cwd": self.repo_path,
+            })
+            self.assertEqual(out, "")
+            rc, out = self.decide({
+                "tool_name": "Bash", "tool_input": {"command": "printf x > se\\ed.txt"},
+                "cwd": self.repo_path,
+            })
+            self.assertIn("main is read-only", out)
+
     def test_benign_edit_on_branch_silent(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
         # This case exercises the no-session path, independent of the caller.
