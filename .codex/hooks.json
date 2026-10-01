@@ -26,7 +26,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit|Bash|PowerShell",
+        "matcher": "Edit|Write|MultiEdit|Bash|PowerShell|apply_patch",
         "hooks": [
           {
             "type": "command",

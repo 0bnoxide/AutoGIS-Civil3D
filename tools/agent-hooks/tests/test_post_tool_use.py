@@ -84,6 +84,77 @@ class PostEditPythonTests(unittest.TestCase):
         self.assertIsNone(ctx)
         self.assertEqual(run.calls, [])
 
+    def _patch(self, command, response=None, cwd=None):
+        return {"tool_name": "apply_patch", "tool_input": command,
+                "tool_response": {"exit_code": 0} if response is None else response,
+                "cwd": cwd or self.root}
+
+    def test_patch_checks_add_update_delete_and_both_move_targets(self):
+        for name in ("added", "deleted", "moved", "destination"):
+            os.makedirs(os.path.join(self.root, "tools", name, "tests"))
+        patch = "\n".join((
+            "*** Begin Patch", "*** Add File: tools/added/new.py", "+pass",
+            "*** Update File: tools/mytool/mytool.py", "@@", "-old", "+new",
+            "*** Delete File: tools/deleted/old.py",
+            "*** Update File: tools/moved/old.py",
+            "*** Move to: tools/destination/new.py", "@@", "-old", "+new",
+            "*** End Patch"))
+        run = stub((is_unittest, (1, "FAILED")))
+        ctx = handle(self._patch({"command": patch}), self.root, {}, run)
+        self.assertIsNotNone(ctx)
+        self.assertEqual(len(run.calls), 5)
+        for name in ("added", "mytool", "deleted", "moved", "destination"):
+            self.assertIn(f"tools/{name}", ctx)
+
+    def test_freeform_patch_resolves_paths_against_payload_cwd_and_runs_suite_once(self):
+        patch = ("*** Begin Patch\n*** Update File: mytool.py\n@@\n-old\n+new\n"
+                 "*** Add File: other.py\n+pass\n*** End Patch")
+        run = stub((is_unittest, (1, "FAILED")))
+        response = "Success. Updated the following files:\nM mytool.py\nA other.py"
+        ctx = handle(self._patch(patch, response,
+                                 os.path.join(self.root, "tools", "mytool")),
+                     self.root, {}, run)
+        self.assertIsNotNone(ctx)
+        self.assertEqual(len(run.calls), 1)
+
+    def test_patch_passing_suite_is_silent(self):
+        run = stub((is_unittest, (0, "OK")))
+        patch = "*** Begin Patch\n*** Delete File: tools/mytool/mytool.py\n*** End Patch"
+        self.assertIsNone(handle(self._patch({"command": patch}), self.root, {}, run))
+        self.assertEqual(len(run.calls), 1)
+
+    def test_failed_or_unconfirmed_patch_never_runs_tests(self):
+        patch = "*** Begin Patch\n*** Delete File: tools/mytool/mytool.py\n*** End Patch"
+        responses = ({"exit_code": 1}, {"exit_code": 0, "is_error": True},
+                     {"exit_code": 0, "isError": True}, {"interrupted": True},
+                     "Failed to apply patch", {}, [], 0, {"exit_code": False},
+                     {"exitCode": None})
+        for response in responses:
+            with self.subTest(response=response):
+                run = stub()
+                self.assertIsNone(handle(self._patch(patch, response),
+                                         self.root, {}, run))
+                self.assertEqual(run.calls, [])
+
+    def test_patch_accepts_structured_exit_codes_and_success_output(self):
+        patch = "*** Begin Patch\n*** Delete File: tools/mytool/mytool.py\n*** End Patch"
+        success = "Success. Updated the following files:\nD tools/mytool/mytool.py"
+        for response in ({"exit_code": 0}, {"exitCode": 0}, {"returncode": 0},
+                         {"output": success}, {"stdout": success}):
+            with self.subTest(response=response):
+                run = stub((is_unittest, (1, "FAILED")))
+                self.assertIsNotNone(handle(self._patch(patch, response),
+                                            self.root, {}, run))
+                self.assertEqual(len(run.calls), 1)
+
+    def test_malformed_or_outside_patch_is_silent(self):
+        for command in ({}, {"command": []}, [], 0, "not a patch",
+                        "*** Begin Patch\n*** Delete File: ../../outside.py\n*** End Patch"):
+            with self.subTest(command=command):
+                run = stub()
+                self.assertIsNone(handle(self._patch(command), self.root, {}, run))
+                self.assertEqual(run.calls, [])
+
 
 class PostEditDotnetTests(unittest.TestCase):
     def setUp(self):
@@ -124,6 +195,19 @@ class PostEditDotnetTests(unittest.TestCase):
         env = {"AUTOGIS_HOOK_DOTNET": "1"}
         ctx = handle(self._edit("src/Foo/Thing.cs"), self.root, env, run)
         self.assertIsNone(ctx)
+
+    def test_patch_cs_feedback_remains_marker_gated(self):
+        payload = {"tool_name": "apply_patch", "cwd": self.root,
+                   "tool_input": {"command": "*** Begin Patch\n"
+                                  "*** Update File: src/Foo/Thing.cs\n@@\n"
+                                  "-old\n+new\n*** End Patch"},
+                   "tool_response": {"exit_code": 0}}
+        run = stub((is_dotnet, (1, "Failed!")))
+        self.assertIsNone(handle(payload, self.root, {}, run))
+        self.assertEqual(run.calls, [])
+        ctx = handle(payload, self.root, {"AUTOGIS_HOOK_DOTNET": "1"}, run)
+        self.assertIn("Foo.Tests", ctx)
+        self.assertEqual(len(run.calls), 1)
 
 
 class PostPushTests(unittest.TestCase):

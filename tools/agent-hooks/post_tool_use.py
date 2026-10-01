@@ -29,6 +29,9 @@ import subprocess
 import sys
 from typing import Callable, Optional
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "agent-coordination"))
+from coordination import PATCH_TARGET_RE
+
 # A Runner maps an argv list to (returncode, combined-output). Injected so the
 # self-check drives the logic without running tests, dotnet, or gh for real.
 Runner = Callable[[list], "tuple[int, str]"]
@@ -250,8 +253,53 @@ def _push_feedback(command: str, tool_response, run: Runner) -> Optional[str]:
     return f"Pushed. Open PR: {url}"
 
 
+def _patch_succeeded(response) -> bool:
+    if isinstance(response, dict):
+        if any(response.get(key) for key in ("is_error", "isError", "interrupted")):
+            return False
+        for key in ("exit_code", "exitCode", "returncode"):
+            if key in response:
+                return type(response[key]) is int and response[key] == 0
+        response = response.get("output", response.get("stdout", ""))
+    return (isinstance(response, str)
+            and response.startswith("Success. Updated the following files:"))
+
+
+def _patch_feedback(payload: dict, root: str, env: dict, run: Runner) -> Optional[str]:
+    if not _patch_succeeded(payload.get("tool_response")):
+        return None
+    tool_input = payload.get("tool_input")
+    patch = tool_input.get("command") if isinstance(tool_input, dict) else tool_input
+    if not isinstance(patch, str):
+        return None
+    lines = patch.strip().splitlines()
+    if not lines or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
+        return None
+    cwd = payload.get("cwd") or root
+    feedback, seen = [], set()
+
+    def once(argv):
+        key = tuple(argv)
+        if key in seen:
+            return 0, ""  # already reported this suite's result for this patch
+        seen.add(key)
+        return run(argv)
+
+    for path in PATCH_TARGET_RE.findall(patch):
+        rel = _rel(path if os.path.isabs(path) else os.path.join(cwd, path), root)
+        if rel is None:
+            continue
+        context = (_python_feedback(rel, root, once)
+                   or _dotnet_feedback(rel, root, env, once))
+        if context:
+            feedback.append(context)
+    return "\n\n".join(feedback) or None
+
+
 def handle(payload: dict, root: str, env: dict, run: Runner) -> Optional[str]:
     tool = payload.get("tool_name", "")
+    if tool == "apply_patch":
+        return _patch_feedback(payload, root, env, run)
     tool_input = payload.get("tool_input") or {}
     if tool in EDIT_TOOLS:
         path = tool_input.get("file_path")
