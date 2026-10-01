@@ -68,7 +68,7 @@ internal static class DrawingWriter
             : null;
         if (replace) ProposalFiles.RequireCreatedHash(original!, expectedSourceHash!);
         string? createdHash = null;
-        WithReservedScratchDrawing(destination, temporary =>
+        WithReservedScratchDrawing(temporary =>
         {
             try
             {
@@ -93,12 +93,7 @@ internal static class DrawingWriter
             ProposalFiles.RejectReparseAncestors(temporary);
             if (!replace)
             {
-                using (var saved = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read))
-                    createdHash = ProposalFiles.Hash(saved);
-                File.Move(temporary, destination);
-                using var published = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.Read);
-                if (!string.Equals(ProposalFiles.Hash(published), createdHash, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("Published model drawing differs from the native save.");
+                createdHash = ProposalFiles.PublishScratch(temporary, destination);
             }
             else
             {
@@ -115,12 +110,17 @@ internal static class DrawingWriter
         return createdHash ?? throw new InvalidDataException("Native save did not capture a model drawing digest.");
     }
 
-    internal static void WithReservedScratchDrawing(string destination, Action<string> saveAndPublish)
+    internal static void WithReservedScratchDrawing(Action<string> saveAndPublish)
     {
-        string scratch = Path.Combine(Path.GetDirectoryName(destination)!,
-            $".autogis-save-{Guid.NewGuid():N}");
+        string localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (localData.Length == 0) throw new IOException("The user's local application-data folder is unavailable.");
+        string parent = Path.Combine(localData, "AutoGIS", "scratch");
+        ProposalFiles.RejectReparseAncestors(parent);
+        Directory.CreateDirectory(parent);
+        string scratch = Path.Combine(parent, $"save-{Guid.NewGuid():N}");
         string temporary = Path.Combine(scratch, "drawing.dwg");
-        // ponytail: Managed SaveAs takes a path; strict same-user scratch-leaf exclusion needs a native handle-based save.
+        // ponytail: Managed SaveAs takes a path, so its leaf in this fresh user-private folder is the one
+        // non-exclusive leaf; a same-user process is inside the trust boundary. Close it with a handle-based save.
         ProposalFiles.ReserveStage(scratch);
         bool committed = false;
         try

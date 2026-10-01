@@ -238,6 +238,18 @@ reported with the original diagnostic context. A corrected rerun is
 permitted. Release 1 never merges into an existing proposal, repairs an
 incomplete one, or overwrites existing files.
 
+Every leaf in staging and the final root is created exclusively. The one
+non-exclusive leaf is the native drawing save target, under the
+[owner decision on issue #149](https://github.com/0bnoxide/AutoGIS-Civil3D/issues/149#issuecomment-5927791848):
+managed `Database.SaveAs` takes a path and overwrites an existing file, so
+each save goes into a fresh, uniquely named scratch folder under the user's
+local application-data area, never on the project drive and never adopted
+from an earlier run. The saved drawing reaches staging through an
+exclusively created leaf, and the recorded digest covers the bytes written
+there. A process running as the same Windows user is inside the trust
+boundary, because it can equally change the templates or the published
+output.
+
 Receipt presentation happens after publication. If presentation fails,
 creation remains successful: preserve the completed project and its
 `Succeeded` receipt, report the presentation warning and final-root/receipt

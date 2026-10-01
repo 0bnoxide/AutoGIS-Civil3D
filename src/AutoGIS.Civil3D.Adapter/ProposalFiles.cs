@@ -176,6 +176,31 @@ internal static class ProposalFiles
         return hash;
     }
 
+    // Copies a private scratch save into an exclusively created leaf; the digest covers exactly the bytes written.
+    internal static string PublishScratch(string scratch, string destination)
+    {
+        RejectReparseAncestors(destination);
+        using var source = new FileStream(scratch, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.DeleteOnClose);
+        FileStream target;
+        try { target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None); }
+        catch (IOException) when (EntryExists(destination))
+        {
+            throw new ProposalConditionException(ExecutionIssueCodes.TargetExists, $"A planned output already exists before exclusive creation: {destination}");
+        }
+        using (target)
+        using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+        {
+            byte[] buffer = new byte[81920];
+            for (int read; (read = source.Read(buffer)) > 0;)
+            {
+                hash.AppendData(buffer, 0, read);
+                target.Write(buffer, 0, read);
+            }
+            target.Flush(true);
+            return Convert.ToHexString(hash.GetHashAndReset());
+        }
+    }
+
     internal static void RequireCreatedHash(FileStream file, string expected)
     {
         if (!string.Equals(Hash(file), expected, StringComparison.OrdinalIgnoreCase))
