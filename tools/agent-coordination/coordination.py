@@ -27,6 +27,7 @@ import argparse
 import csv
 import datetime as _dt
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -1338,27 +1339,49 @@ def cmd_init(repo):
     return ALLOW
 
 
-def codex_hook_trust_date(repo):
-    """Return the recorded hook-trust verification date, if complete."""
+def codex_hook_trust_finding(repo):
+    """Return doctor's Codex hook-trust finding.
+
+    Codex keys hook trust by path and content hash, so a record only holds
+    for the exact `.codex/hooks.json` it names. Linked worktrees run the
+    primary checkout's copy, so that is the one hashed.
+    """
+    unverified = ("Codex project-hook trust: unverified until the documented "
+                  "/hooks inspection and activation probe are recorded")
     evidence_path = os.path.join(
         repo.worktree_root, "docs", "verification",
         "codex-project-hook-trust.md")
     try:
         with open(evidence_path, encoding="utf-8") as fh:
             lines = {line.rstrip("\r\n") for line in fh}
+        with open(os.path.join(repo.primary_root, ".codex", "hooks.json"),
+                  "rb") as fh:
+            current = hashlib.sha256(fh.read()).hexdigest()
     except OSError:
-        return None
-    date_prefix = "Verification date: "
-    dates = [line[len(date_prefix):] for line in lines
-             if line.startswith(date_prefix)]
-    if len(dates) != 1 or not {
-            "Hooks inspection: passed", "Activation probe: passed"} <= lines:
-        return None
+        return unverified
+
+    def sole(prefix):
+        values = [line[len(prefix):] for line in lines
+                  if line.startswith(prefix)]
+        return values[0] if len(values) == 1 else None
+
+    date = sole("Verification date: ")
+    recorded = sole("Hooks config SHA-256: ")
+    if (date is None or recorded is None
+            or not re.fullmatch(r"[0-9a-f]{64}", recorded)
+            or not {"Hooks inspection: passed",
+                    "Activation probe: passed"} <= lines):
+        return unverified
     try:
-        _dt.date.fromisoformat(dates[0])
+        _dt.date.fromisoformat(date)
     except ValueError:
-        return None
-    return dates[0]
+        return unverified
+    if recorded != current:
+        return ("Codex project-hook trust: stale — .codex/hooks.json changed "
+                f"since the {date} verification; re-trust it in /hooks from "
+                "the primary checkout, rerun the activation probe, and record "
+                "the new date and hash")
+    return f"Codex project-hook trust: verified ({date})"
 
 
 def _claim_created_utc(record):
@@ -1502,13 +1525,7 @@ def cmd_doctor(repo):
         from shutil import which
         if which(tool) is None:
             findings.append(f"optional tool unavailable: {tool} (advisory)")
-    trust_date = codex_hook_trust_date(repo)
-    if trust_date is not None:
-        findings.append(f"Codex project-hook trust: verified ({trust_date})")
-    else:
-        findings.append("Codex project-hook trust: unverified until the "
-                        "documented /hooks inspection and activation probe "
-                        "are recorded")
+    findings.append(codex_hook_trust_finding(repo))
     if findings:
         print("doctor findings:")
         for finding in findings:
