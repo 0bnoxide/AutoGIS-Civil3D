@@ -1208,6 +1208,60 @@ class TestPreToolUseAdapter(TempRepoCase):
         })
         self.assertIn("deny", out)
 
+    def test_ambiguous_codex_commands_check_both_shells_on_main(self):
+        for command in (
+                r'echo "a\"b"; git reset --hard; echo "c"',
+                r'Write-Output "x\"; Set-Content seed.txt boom; Write-Output "y"'):
+            with self.subTest(command=command), mock.patch.object(
+                    sys, "platform", "win32"), mock.patch.dict(os.environ, {
+                        "CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": "",
+                    }):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {"command": command},
+                    "cwd": self.repo_path,
+                })
+                self.assertIn("main is read-only", out)
+
+    def test_ambiguous_codex_commands_check_both_shells_for_claims(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for command in (
+                r'echo "a\"b"; rm src/code.cs; echo "c"',
+                r'Write-Output "x\"; Remove-Item src/code.cs; Write-Output "y"'):
+            with self.subTest(command=command), mock.patch.object(
+                    sys, "platform", "win32"), mock.patch.dict(os.environ, {
+                        "CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": "",
+                        "AGENT_SESSION_ID": "different-environment-session",
+                    }):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {"command": command},
+                    "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
+
+    def test_ambiguous_data_is_conservative_but_explicit_shell_data_allowed(self):
+        # Each string is harmless data in its actual shell; the other parser
+        # sees a prohibited command, so ambiguous input deliberately denies.
+        for shell, command in (
+                ("/bin/bash", r'echo "a\"; git reset --hard; y"'),
+                ("pwsh", r'Write-Output "a`"; git reset --hard; y"')):
+            with self.subTest(shell=shell), mock.patch.object(
+                    sys, "platform", "win32"), mock.patch.dict(os.environ, {
+                        "CODEX_THREAD_ID": "codex-thread", "CLAUDECODE": "",
+                    }):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {
+                        "command": command, "shell": shell,
+                    }, "cwd": self.repo_path,
+                })
+                self.assertEqual(out, "")
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {"command": command},
+                    "cwd": self.repo_path,
+                })
+                self.assertIn("main is read-only", out)
+
     def test_powershell_literal_backslash_quote_keeps_main_writes_visible(self):
         for command in (
                 r'Write-Output "x\"; Set-Content seed.txt boom; Write-Output "y"',

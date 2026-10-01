@@ -1746,27 +1746,31 @@ def hook_pre_tool_use(payload_text):
             command = tool_input.get("command", "")
             shell = tool_input.get("shell", "")
             shell = _git_executable_name(shell) if isinstance(shell, str) else ""
-            # With a Codex marker and no shell metadata, assume the Windows
-            # default is PowerShell. Explicit shells win for Bash payloads;
-            # Claude's Bash keeps Bash rules even with an inherited marker.
-            ps = tool == "PowerShell" or (
-                shell in ("powershell", "powershell.exe", "pwsh", "pwsh.exe")
-                if shell else sys.platform == "win32"
+            ps = tool == "PowerShell" or shell in (
+                "powershell", "powershell.exe", "pwsh", "pwsh.exe")
+            # A Codex marker does not identify its shell. Without explicit
+            # metadata, both parsers must allow; inherited Claude stays Bash.
+            ambiguous = (tool == "Bash" and not shell and sys.platform == "win32"
                 and bool(os.environ.get("CODEX_THREAD_ID"))
                 and not os.environ.get("CLAUDECODE"))
             cmd = not ps and shell in ("cmd", "cmd.exe")
-            reason = deny_reason_for_shell(command, cwd, repo, ps=ps, cmd=cmd)
-            if reason is None and repo is not None:
-                # Shell write forms get the same claim layer as Edit/Write.
-                session = payload.get("session_id") \
-                    or os.environ.get("AGENT_SESSION_ID", "")
-                if session:
-                    try:
-                        reason = claim_denial(
-                            list_claims(repo), session,
-                            shell_write_targets(command, cwd, ps=ps, cmd=cmd))
-                    except RegistryError as exc:
-                        reason = str(exc)
+            for parser_ps in (False, True) if ambiguous else (ps,):
+                reason = deny_reason_for_shell(
+                    command, cwd, repo, ps=parser_ps, cmd=cmd)
+                if reason is None and repo is not None:
+                    # Shell writes get the same claim layer as Edit/Write.
+                    session = payload.get("session_id") \
+                        or os.environ.get("AGENT_SESSION_ID", "")
+                    if session:
+                        try:
+                            reason = claim_denial(
+                                list_claims(repo), session,
+                                shell_write_targets(
+                                    command, cwd, ps=parser_ps, cmd=cmd))
+                        except RegistryError as exc:
+                            reason = str(exc)
+                if reason:
+                    break
         if reason:
             print(json.dumps({
                 "hookSpecificOutput": {
