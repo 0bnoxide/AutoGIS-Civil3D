@@ -23,7 +23,25 @@ Every command below is run from the repository unless noted.
    git worktree add .worktrees/<agent>+<slug> -b <agent>/<slug> origin/main
    ```
 
-6. Claim it (session id: a stable identifier for your session):
+6. Claim it using the session id the PreToolUse hook sees:
+
+   - **Codex:** the hook payload's `session_id` is the Codex thread id,
+     available as `CODEX_THREAD_ID`. Use that id; do not invent a custom id.
+   - **Claude:** use the session UUID in the session's scratchpad path,
+     which is the hook payload's `session_id`.
+
+   Keep that id stable and export it as `AGENT_SESSION_ID` (`export
+   AGENT_SESSION_ID='<id>'` in Bash, or `$env:AGENT_SESSION_ID='<id>'` in
+   PowerShell). `COORD check` defaults to this environment variable. Set it
+   in each shell invocation that relies on the default, or pass
+   `--session <id>` explicitly; an export in an earlier tool call may be
+   lost when the next call starts a fresh shell. The hook uses the payload's
+   `session_id` first and falls back to
+   `AGENT_SESSION_ID` only when the payload has no id; exporting a different
+   value cannot override the payload identity.
+
+   For supervisor-owned worker claims, follow
+   [orchestration.md](orchestration.md#each-wake).
 
    ```
    COORD claim --session <id> --kind branch --value <agent>/<slug>
