@@ -5,6 +5,7 @@ under a temp directory — the real primary worktree is never a target.
 """
 
 import datetime as _dt
+import hashlib
 import json
 import io
 import os
@@ -60,19 +61,68 @@ class TempRepoCase(unittest.TestCase):
 
 
 class TestCodexHookTrust(TempRepoCase):
-    def write_hook_trust_evidence(self, content):
+    def write_hook_trust_evidence(self, content, root=None):
         evidence_dir = os.path.join(
-            self.repo_path, "docs", "verification")
+            root or self.repo_path, "docs", "verification")
         os.makedirs(evidence_dir, exist_ok=True)
         with open(os.path.join(evidence_dir, "codex-project-hook-trust.md"),
                   "w", encoding="utf-8") as fh:
             fh.write(content)
 
+    def write_hooks_config(self, root, content):
+        os.makedirs(os.path.join(root, ".codex"), exist_ok=True)
+        with open(os.path.join(root, ".codex", "hooks.json"), "wb") as fh:
+            fh.write(content)
+        return hashlib.sha256(content).hexdigest()
+
+    def write_complete_evidence(self, digest, root=None):
+        self.write_hook_trust_evidence(
+            "Verification date: 2026-08-05\n"
+            "Hooks inspection: passed\n"
+            "Activation probe: passed\n"
+            f"Hooks config SHA-256: {digest}", root)
+
     def test_doctor_reports_valid_hook_trust_evidence_as_verified(self):
+        self.write_complete_evidence(
+            self.write_hooks_config(self.repo_path, b"{}\n"))
+
+        self.assertIn("Codex project-hook trust: verified (2026-08-05)",
+                      self.doctor_output())
+
+    def test_doctor_reports_changed_hooks_config_as_stale(self):
+        self.write_complete_evidence(hashlib.sha256(b"old").hexdigest())
+        self.write_hooks_config(self.repo_path, b"{}\n")
+
+        output = self.doctor_output()
+        self.assertNotIn("Codex project-hook trust: verified", output)
+        self.assertIn("Codex project-hook trust: stale", output)
+
+    def test_doctor_reports_record_without_config_hash_as_unverified(self):
+        self.write_hooks_config(self.repo_path, b"{}\n")
         self.write_hook_trust_evidence(
             "Verification date: 2026-08-05\n"
             "Hooks inspection: passed\n"
             "Activation probe: passed")
+
+        self.assertIn("Codex project-hook trust: unverified",
+                      self.doctor_output())
+
+    def test_doctor_reports_missing_hooks_config_as_unverified(self):
+        self.write_complete_evidence(hashlib.sha256(b"{}\n").hexdigest())
+
+        self.assertIn("Codex project-hook trust: unverified",
+                      self.doctor_output())
+
+    def test_doctor_hashes_primary_checkout_hooks_config(self):
+        digest = self.write_hooks_config(self.repo_path, b"{}\n")
+        run_git(["add", "."], self.repo_path)
+        run_git(["commit", "-q", "-m", "hooks"], self.repo_path)
+        wt = os.path.join(self.base, "wt")
+        run_git(["worktree", "add", "-q", wt, "-b", "wt-branch"],
+                self.repo_path)
+        self.write_hooks_config(wt, b'{"changed": true}\n')
+        self.write_complete_evidence(digest, root=wt)
+        self.repo = coordination.discover(wt)
 
         self.assertIn("Codex project-hook trust: verified (2026-08-05)",
                       self.doctor_output())
