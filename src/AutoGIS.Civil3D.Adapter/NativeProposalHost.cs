@@ -7,6 +7,11 @@ public sealed class NativeProposalHost : IProposalHost
     private ProposalPlan? inspectedPlan;
     private string? appliedRoot;
     private readonly Dictionary<string, string> createdSha256 = new(StringComparer.OrdinalIgnoreCase);
+    private readonly string localData;
+
+    public NativeProposalHost() : this(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)) { }
+
+    internal NativeProposalHost(string localData) => this.localData = localData;
 
     public PreflightReport Inspect(ProposalPlan plan)
     {
@@ -14,6 +19,13 @@ public sealed class NativeProposalHost : IProposalHost
         inspectedPlan = null;
         appliedRoot = null;
         createdSha256.Clear();
+        try { ProposalFiles.ProbeWritable(DrawingWriter.ScratchRoot(localData), Guid.NewGuid()); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new([new(ex is ProposalConditionException condition ? condition.Code : ExecutionIssueCodes.PreflightFailed,
+                @"The drawing scratch folder %LOCALAPPDATA%\AutoGIS\scratch must be creatable and writable by this user " +
+                $"before a proposal runs: {ex.Message}")]);
+        }
         foreach (var action in plan.Actions)
         {
             if (!IsModelAction(action))
@@ -41,7 +53,7 @@ public sealed class NativeProposalHost : IProposalHost
                     ProposalFiles.ReserveStage(ProposalFiles.Child(stagingRoot, action.RelativePath));
                 break;
             case ProposalOperation.CreateModelDrawing:
-                createdSha256[action.RelativePath] = DrawingWriter.CreateModel(action, stagingRoot);
+                createdSha256[action.RelativePath] = DrawingWriter.CreateModel(action, stagingRoot, localData);
                 break;
             case ProposalOperation.AddXref:
                 var xref = (XrefData)action.Data;
@@ -50,7 +62,7 @@ public sealed class NativeProposalHost : IProposalHost
                     !createdSha256.TryGetValue(target, out string? targetHash))
                     throw new InvalidDataException("Model overlay lacks writer-captured drawing digests.");
                 createdSha256[action.RelativePath] = DrawingWriter.AddModelOverlay(
-                    action, stagingRoot, hostHash, targetHash);
+                    action, stagingRoot, hostHash, targetHash, localData);
                 break;
             default:
                 throw new NotSupportedException($"Native proposal operation is not implemented: {action.Operation}.");

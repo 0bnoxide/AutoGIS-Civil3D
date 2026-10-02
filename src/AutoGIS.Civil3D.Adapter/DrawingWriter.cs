@@ -8,7 +8,7 @@ namespace AutoGIS.Civil3D.Adapter;
 
 internal static class DrawingWriter
 {
-    internal static string CreateModel(PlannedAction action, string stagingRoot)
+    internal static string CreateModel(PlannedAction action, string stagingRoot, string localData)
     {
         if (action is not { Operation: ProposalOperation.CreateModelDrawing, Data: ModelDrawingData data })
             throw new InvalidDataException("Expected a model drawing action.");
@@ -17,11 +17,11 @@ internal static class DrawingWriter
         if (!File.Exists(data.Template)) throw new FileNotFoundException("The approved model template is missing.", data.Template);
         if (ProposalFiles.EntryExists(output))
             throw new ProposalConditionException(ExecutionIssueCodes.TargetExists, "Model drawing output already exists.");
-        return SaveSideDatabase(data.Template, output, null, replace: false, expectedSourceHash: null);
+        return SaveSideDatabase(data.Template, output, null, replace: false, expectedSourceHash: null, localData);
     }
 
     internal static string AddModelOverlay(PlannedAction action, string stagingRoot,
-        string expectedHostHash, string expectedTargetHash)
+        string expectedHostHash, string expectedTargetHash, string localData)
     {
         if (action is not { Operation: ProposalOperation.AddXref, Data: XrefData data } ||
             data.Reference is not { HostRole: "ProposedDesignModel", Mode: "Overlay" })
@@ -49,11 +49,11 @@ internal static class DrawingWriter
             modelSpace.AppendEntity(reference);
             transaction.AddNewlyCreatedDBObject(reference, true);
             transaction.Commit();
-        }, replace: true, expectedSourceHash: expectedHostHash);
+        }, replace: true, expectedSourceHash: expectedHostHash, localData);
     }
 
     private static string SaveSideDatabase(string source, string destination, Action<Database>? change,
-        bool replace, string? expectedSourceHash)
+        bool replace, string? expectedSourceHash, string localData)
     {
         var active = AcApplication.DocumentManager.MdiActiveDocument
             ?? throw new InvalidOperationException("A Civil 3D document must remain active on the host thread.");
@@ -68,7 +68,7 @@ internal static class DrawingWriter
             : null;
         if (replace) ProposalFiles.RequireCreatedHash(original!, expectedSourceHash!);
         string? createdHash = null;
-        WithReservedScratchDrawing(destination, temporary =>
+        WithReservedScratchDrawing(localData, temporary =>
         {
             try
             {
@@ -93,12 +93,7 @@ internal static class DrawingWriter
             ProposalFiles.RejectReparseAncestors(temporary);
             if (!replace)
             {
-                using (var saved = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read))
-                    createdHash = ProposalFiles.Hash(saved);
-                File.Move(temporary, destination);
-                using var published = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.Read);
-                if (!string.Equals(ProposalFiles.Hash(published), createdHash, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("Published model drawing differs from the native save.");
+                createdHash = ProposalFiles.PublishScratch(temporary, destination);
             }
             else
             {
@@ -115,12 +110,22 @@ internal static class DrawingWriter
         return createdHash ?? throw new InvalidDataException("Native save did not capture a model drawing digest.");
     }
 
-    internal static void WithReservedScratchDrawing(string destination, Action<string> saveAndPublish)
+    internal static string ScratchRoot(string localData)
     {
-        string scratch = Path.Combine(Path.GetDirectoryName(destination)!,
-            $".autogis-save-{Guid.NewGuid():N}");
+        if (localData.Length == 0) throw new IOException("The user's local application-data folder is unavailable.");
+        string root = Path.Combine(localData, "AutoGIS", "scratch");
+        ProposalFiles.RejectReparseAncestors(root);
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    internal static void WithReservedScratchDrawing(string localData, Action<string> saveAndPublish)
+    {
+        string parent = ScratchRoot(localData);
+        string scratch = Path.Combine(parent, $"save-{Guid.NewGuid():N}");
         string temporary = Path.Combine(scratch, "drawing.dwg");
-        // ponytail: Managed SaveAs takes a path; strict same-user scratch-leaf exclusion needs a native handle-based save.
+        // ponytail: Managed SaveAs takes a path, so its leaf in this fresh user-private folder is the one
+        // non-exclusive leaf; a same-user process is inside the trust boundary. Close it with a handle-based save.
         ProposalFiles.ReserveStage(scratch);
         bool committed = false;
         try

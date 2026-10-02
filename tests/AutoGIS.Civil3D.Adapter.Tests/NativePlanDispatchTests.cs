@@ -79,41 +79,74 @@ public sealed class NativePlanDispatchTests
     }
 
     [Fact]
-    public void ReservedScratchSavePreservesExistingTargetAndForeignEntries()
+    public void ScratchPublishCreatesNewLeafWithDigestOfPublishedBytes()
+    {
+        string parent = Path.Combine(Path.GetTempPath(), "AutoGIS-scratch-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(parent);
+        string destination = Path.Combine(parent, "target.dwg");
+        byte[] saved = [7, 8, 9];
+        string? scratch = null;
+        string? digest = null;
+        try
+        {
+            DrawingWriter.WithReservedScratchDrawing(LocalData, temporary =>
+            {
+                scratch = Path.GetDirectoryName(temporary)!;
+                Assert.StartsWith(ProposalFiles.Full(LocalData) +
+                    Path.DirectorySeparatorChar, scratch, StringComparison.OrdinalIgnoreCase);
+                Assert.False(ProposalFiles.Within(scratch, parent));
+                File.WriteAllBytes(temporary, saved);
+                digest = ProposalFiles.PublishScratch(temporary, destination);
+            });
+            Assert.Equal(saved, File.ReadAllBytes(destination));
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(destination))), digest);
+            Assert.False(Directory.Exists(scratch));
+        }
+        finally { Directory.Delete(parent, recursive: true); }
+    }
+
+    [Fact]
+    public void ScratchPublishPreservesExistingTargetAndCleansScratch()
     {
         string parent = Path.Combine(Path.GetTempPath(), "AutoGIS-scratch-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(parent);
         string destination = Path.Combine(parent, "target.dwg");
         byte[] existing = [1, 2, 3];
-        byte[] foreign = [4, 5, 6];
         File.WriteAllBytes(destination, existing);
         string? scratch = null;
         try
         {
-            Assert.Throws<IOException>(() => DrawingWriter.WithReservedScratchDrawing(destination, temporary =>
+            var error = Assert.Throws<ProposalConditionException>(() => DrawingWriter.WithReservedScratchDrawing(LocalData, temporary =>
             {
                 scratch = Path.GetDirectoryName(temporary)!;
-                Assert.Equal(parent, Path.GetDirectoryName(scratch));
                 File.WriteAllBytes(temporary, [7, 8, 9]);
-                File.WriteAllBytes(Path.Combine(scratch, "foreign.bin"), foreign);
-                File.Move(temporary, destination);
+                ProposalFiles.PublishScratch(temporary, destination);
             }));
+            Assert.Equal(ExecutionIssueCodes.TargetExists, error.Code);
             Assert.Equal(existing, File.ReadAllBytes(destination));
-            Assert.Equal(foreign, File.ReadAllBytes(Path.Combine(scratch!, "foreign.bin")));
-            Assert.True(File.Exists(Path.Combine(scratch!, "drawing.dwg")));
+            Assert.False(Directory.Exists(scratch));
         }
-        finally
-        {
-            if (scratch is not null && Directory.Exists(scratch))
-            {
-                File.Delete(Path.Combine(scratch, "drawing.dwg"));
-                File.Delete(Path.Combine(scratch, "foreign.bin"));
-                Directory.Delete(scratch);
-            }
-            File.Delete(destination);
-            Directory.Delete(parent);
-        }
+        finally { Directory.Delete(parent, recursive: true); }
     }
+
+    [Fact]
+    public void ScratchCleanupRetainsForeignEntries()
+    {
+        byte[] foreign = [4, 5, 6];
+        string? scratch = null;
+        try
+        {
+            Assert.Throws<IOException>(() => DrawingWriter.WithReservedScratchDrawing(LocalData, temporary =>
+            {
+                scratch = Path.GetDirectoryName(temporary)!;
+                File.WriteAllBytes(Path.Combine(scratch, "foreign.bin"), foreign);
+            }));
+            Assert.Equal(foreign, File.ReadAllBytes(Path.Combine(scratch!, "foreign.bin")));
+        }
+        finally { if (scratch is not null && Directory.Exists(scratch)) Directory.Delete(scratch, recursive: true); }
+    }
+
+    private static readonly string LocalData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
     private static ProposalPlan Plan()
     {
