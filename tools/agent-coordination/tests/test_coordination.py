@@ -420,10 +420,12 @@ class TestMainRule(TempRepoCase):
         # `cd x &` runs in a background subshell/job: the parent stays put.
         safe = os.path.join(self.base, "safe").replace(os.sep, "/")
         os.makedirs(safe, exist_ok=True)
-        for ps in (False, True):
-            self.assertIsNotNone(coordination.deny_reason_for_shell(
-                f"cd {safe} & git reset --hard", self.repo_path, self.repo,
-                ps=ps), ps)
+        # `&` binds looser than `&&`/`||`, so the whole list is the job.
+        for cmd in (f"cd {safe} & git reset --hard",
+                    f"cd {safe} && true & git reset --hard"):
+            for ps in (False, True):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    cmd, self.repo_path, self.repo, ps=ps), (cmd, ps))
 
     def test_ampersand_lookalikes_are_not_separators(self):
         # Redirect forms, a trailing &, quoted text and the PowerShell call

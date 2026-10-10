@@ -657,15 +657,17 @@ def _shell_segments(command, masked_all, cmd=False):
     Outside cmd a lone `&` ends a statement and backgrounds it (Bash,
     PowerShell 7), so the next statement is checked on its own (#190).
     `&&`, the redirect forms (`2>&1`, `>&2`, `<&3`, `&>`) and `|&` are not
-    statement ends.
+    statement ends. `&` binds looser than `&&`/`||`, so every segment of
+    the list it ends is backgrounded with it.
     """
     separators = r"&&|\|\||&|\n" if cmd \
         else r"&&|\|\||;|\n|(?<![<>|])&(?!>)"
-    cuts = [(m.start(), m.end(), not cmd and m.group() == "&")
+    cuts = [(m.start(), m.end(), m.group())
             for m in re.finditer(separators, masked_all)]
-    cuts.append((len(command), len(command), False))
-    seg_start = 0
-    for cut_start, cut_end, background in cuts:
+    cuts.append((len(command), len(command), ""))
+    seg_start, pending = 0, []
+    for cut_start, cut_end, sep in cuts:
+        background = not cmd and sep == "&"
         seg_real, seg_masked = (command[seg_start:cut_start],
                                 masked_all[seg_start:cut_start])
         if background and seg_masked.rstrip()[-1:] in ("", "|"):
@@ -675,7 +677,11 @@ def _shell_segments(command, masked_all, cmd=False):
         segment = seg_real.strip()
         seg_masked = seg_masked[pad:pad + len(segment)]
         if segment and seg_masked.strip():
-            yield segment, seg_masked, background
+            pending.append((segment, seg_masked))
+        if sep not in ("&&", "||"):
+            for item in pending:
+                yield (*item, background)
+            pending = []
 
 
 def _pipeline_stages(segment, segment_masked):
