@@ -652,20 +652,36 @@ def _strip_ps_call_block(argv):
 
 
 def _shell_segments(command, masked_all, cmd=False):
-    """Yield non-literal command segments with aligned masked text."""
-    separators = r"&&|\|\||&|\n" if cmd else r"&&|\|\||;|\n"
-    cuts = [m.span() for m in re.finditer(separators, masked_all)]
-    cuts.append((len(command), len(command)))
-    seg_start = 0
-    for cut_start, cut_end in cuts:
+    """Yield (segment, aligned masked text, background job) per statement.
+
+    Outside cmd a lone `&` ends a statement and backgrounds it (Bash,
+    PowerShell 7), so the next statement is checked on its own (#190).
+    `&&`, the redirect forms (`2>&1`, `>&2`, `<&3`, `&>`) and `|&` are not
+    statement ends. `&` binds looser than `&&`/`||`, so every segment of
+    the list it ends shares one job id (None in the foreground).
+    """
+    separators = r"&&|\|\||&|\n" if cmd \
+        else r"&&|\|\||;|\n|(?<![<>|])&(?!>)"
+    cuts = [(m.start(), m.end(), m.group())
+            for m in re.finditer(separators, masked_all)]
+    cuts.append((len(command), len(command), ""))
+    seg_start, pending = 0, []
+    for cut_start, cut_end, sep in cuts:
+        background = not cmd and sep == "&"
         seg_real, seg_masked = (command[seg_start:cut_start],
                                 masked_all[seg_start:cut_start])
+        if background and seg_masked.rstrip()[-1:] in ("", "|"):
+            continue  # PowerShell call operator: `& cmd`, `x | & cmd`
         seg_start = cut_end
         pad = len(seg_real) - len(seg_real.lstrip())
         segment = seg_real.strip()
         seg_masked = seg_masked[pad:pad + len(segment)]
         if segment and seg_masked.strip():
-            yield segment, seg_masked
+            pending.append((segment, seg_masked))
+        if sep not in ("&&", "||"):
+            for item in pending:
+                yield (*item, cut_start if background else None)
+            pending = []
 
 
 def _pipeline_stages(segment, segment_masked):
@@ -743,9 +759,15 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     One parser feeds both the stateless main rule and the claim layer, so a
     write form covered by one is covered by the other.
     """
-    effective_cwd = cwd
+    effective_cwd = parent_cwd = cwd
+    job = None
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
-    for segment, seg_masked in _shell_segments(command, masked_all, cmd=cmd):
+    for segment, seg_masked, seg_job in _shell_segments(
+            command, masked_all, cmd=cmd):
+        if seg_job != job:
+            # A background job's `cd` moves the rest of that job only; the
+            # parent shell resumes where it was.
+            job, effective_cwd = seg_job, parent_cwd
         stages = _pipeline_stages(segment, seg_masked)
         first = _argv_of(stages[0], ps=ps, cmd=cmd)
         # `cd` moves the parent shell only outside a pipeline; inside one it
@@ -758,6 +780,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
                 path = path.replace("\\", "/")
             effective_cwd = path if os.path.isabs(path) \
                 else os.path.join(effective_cwd or ".", path)
+            if job is None:
+                parent_cwd = effective_cwd
             continue
         raw_targets = _redirect_targets(segment, seg_masked)
         for stage in stages:
