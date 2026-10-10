@@ -422,10 +422,23 @@ class TestMainRule(TempRepoCase):
         os.makedirs(safe, exist_ok=True)
         # `&` binds looser than `&&`/`||`, so the whole list is the job.
         for cmd in (f"cd {safe} & git reset --hard",
-                    f"cd {safe} && true & git reset --hard"):
+                    f"cd {safe} && true & git reset --hard",
+                    f"cd {safe} & git reset --hard &"):
             for ps in (False, True):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     cmd, self.repo_path, self.repo, ps=ps), (cmd, ps))
+
+    def test_backgrounded_cd_moves_the_rest_of_its_own_list(self):
+        # The job runs its later segments after its own `cd`.
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe, exist_ok=True)
+        main = self.repo_path.replace(os.sep, "/")
+        for ps in (False, True):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                f"cd {main} && git reset --hard &", safe, None, ps=ps), ps)
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                f"cd {main} && true & git reset --hard", safe, None,
+                ps=ps), ps)
 
     def test_ampersand_lookalikes_are_not_separators(self):
         # Redirect forms, a trailing &, quoted text and the PowerShell call

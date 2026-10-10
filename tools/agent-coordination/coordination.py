@@ -652,13 +652,13 @@ def _strip_ps_call_block(argv):
 
 
 def _shell_segments(command, masked_all, cmd=False):
-    """Yield (segment, aligned masked text, backgrounded) per statement.
+    """Yield (segment, aligned masked text, background job) per statement.
 
     Outside cmd a lone `&` ends a statement and backgrounds it (Bash,
     PowerShell 7), so the next statement is checked on its own (#190).
     `&&`, the redirect forms (`2>&1`, `>&2`, `<&3`, `&>`) and `|&` are not
     statement ends. `&` binds looser than `&&`/`||`, so every segment of
-    the list it ends is backgrounded with it.
+    the list it ends shares one job id (None in the foreground).
     """
     separators = r"&&|\|\||&|\n" if cmd \
         else r"&&|\|\||;|\n|(?<![<>|])&(?!>)"
@@ -680,7 +680,7 @@ def _shell_segments(command, masked_all, cmd=False):
             pending.append((segment, seg_masked))
         if sep not in ("&&", "||"):
             for item in pending:
-                yield (*item, background)
+                yield (*item, cut_start if background else None)
             pending = []
 
 
@@ -759,16 +759,20 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     One parser feeds both the stateless main rule and the claim layer, so a
     write form covered by one is covered by the other.
     """
-    effective_cwd = cwd
+    effective_cwd = parent_cwd = cwd
+    job = None
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
-    for segment, seg_masked, background in _shell_segments(
+    for segment, seg_masked, seg_job in _shell_segments(
             command, masked_all, cmd=cmd):
+        if seg_job != job:
+            # A background job's `cd` moves the rest of that job only; the
+            # parent shell resumes where it was.
+            job, effective_cwd = seg_job, parent_cwd
         stages = _pipeline_stages(segment, seg_masked)
         first = _argv_of(stages[0], ps=ps, cmd=cmd)
-        # `cd` moves the parent shell only outside a pipeline or background
-        # job; inside one it runs apart and must NOT move later segments.
-        if len(stages) == 1 and not background and first \
-                and len(first) > 1 and (
+        # `cd` moves the parent shell only outside a pipeline; inside one it
+        # runs in a subshell and must NOT move later segments.
+        if len(stages) == 1 and first and len(first) > 1 and (
                 first[0] == "cd" or cmd and first[0].lower() in ("cd", "chdir")):
             path = first[2] if cmd and first[1].lower() == "/d" \
                 and len(first) > 2 else first[1]
@@ -776,6 +780,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
                 path = path.replace("\\", "/")
             effective_cwd = path if os.path.isabs(path) \
                 else os.path.join(effective_cwd or ".", path)
+            if job is None:
+                parent_cwd = effective_cwd
             continue
         raw_targets = _redirect_targets(segment, seg_masked)
         for stage in stages:
