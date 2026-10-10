@@ -407,6 +407,44 @@ class TestMainRule(TempRepoCase):
             f"true | cd {safe} && git reset --hard", self.repo_path, self.repo)
         self.assertIsNotNone(reason)
 
+    def test_single_ampersand_separates_statements_on_main(self):
+        # #190: `a & b` backgrounds a and then runs b (Bash, PowerShell 7).
+        for cmd, ps in (("echo x & git reset --hard", False),
+                        ("echo x&git reset --hard", False),
+                        ("Write-Output x & git reset --hard", True),
+                        ("Write-Output x & Remove-Item seed.txt", True)):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=ps), cmd)
+
+    def test_backgrounded_cd_does_not_move_later_segments(self):
+        # `cd x &` runs in a background subshell/job: the parent stays put.
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe, exist_ok=True)
+        for ps in (False, True):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                f"cd {safe} & git reset --hard", self.repo_path, self.repo,
+                ps=ps), ps)
+
+    def test_ampersand_lookalikes_are_not_separators(self):
+        # Redirect forms, a trailing &, quoted text and the PowerShell call
+        # operator must neither over-deny nor lose the command they carry.
+        allowed = [("git status 2>&1", False), ("git log >&2", False),
+                   ("git status |& cat", False), ("git status &", False),
+                   ("git status && git log", False),
+                   ('echo "a & git reset --hard"', False),
+                   ("Write-Output 'a & git reset --hard'", True),
+                   ("& git status", True),
+                   ("Get-Content seed.txt | & { process { $_ } }", True)]
+        for cmd, ps in allowed:
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=ps), cmd)
+        out = os.path.join(self.repo_path, "out.log")
+        for cmd in ("ls &> out.log", "ls &>> out.log", "ls > out.log 2>&1"):
+            self.assertEqual(coordination.shell_write_targets(
+                cmd, self.repo_path), [out], cmd)
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            "& git reset --hard", self.repo_path, self.repo, ps=True))
+
     def test_worktree_and_gitdir_options_resolve_target_tree(self):
         for form in ([f"--work-tree={self.repo_path}"],
                      ["--work-tree", self.repo_path],
@@ -1286,6 +1324,21 @@ class TestPreToolUseAdapter(TempRepoCase):
                     }):
                 rc, out = self.decide({
                     "tool_name": "Bash", "tool_input": {"command": command},
+                    "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
+
+    def test_single_ampersand_keeps_claim_writes_visible(self):
+        # #190: the statement after a single & must reach the claim layer.
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for tool, command in (
+                ("Bash", "echo x & rm src/code.cs"),
+                ("PowerShell", "Write-Output x & Remove-Item src/code.cs")):
+            with self.subTest(command=command):
+                rc, out = self.decide({
+                    "tool_name": tool, "tool_input": {"command": command},
                     "cwd": self.repo_path, "session_id": "s1",
                 })
                 self.assertIn("claimed by session s2", out)

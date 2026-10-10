@@ -652,20 +652,30 @@ def _strip_ps_call_block(argv):
 
 
 def _shell_segments(command, masked_all, cmd=False):
-    """Yield non-literal command segments with aligned masked text."""
-    separators = r"&&|\|\||&|\n" if cmd else r"&&|\|\||;|\n"
-    cuts = [m.span() for m in re.finditer(separators, masked_all)]
-    cuts.append((len(command), len(command)))
+    """Yield (segment, aligned masked text, backgrounded) per statement.
+
+    Outside cmd a lone `&` ends a statement and backgrounds it (Bash,
+    PowerShell 7), so the next statement is checked on its own (#190).
+    `&&`, the redirect forms (`2>&1`, `>&2`, `<&3`, `&>`) and `|&` are not
+    statement ends.
+    """
+    separators = r"&&|\|\||&|\n" if cmd \
+        else r"&&|\|\||;|\n|(?<![<>|])&(?!>)"
+    cuts = [(m.start(), m.end(), not cmd and m.group() == "&")
+            for m in re.finditer(separators, masked_all)]
+    cuts.append((len(command), len(command), False))
     seg_start = 0
-    for cut_start, cut_end in cuts:
+    for cut_start, cut_end, background in cuts:
         seg_real, seg_masked = (command[seg_start:cut_start],
                                 masked_all[seg_start:cut_start])
+        if background and seg_masked.rstrip()[-1:] in ("", "|"):
+            continue  # PowerShell call operator: `& cmd`, `x | & cmd`
         seg_start = cut_end
         pad = len(seg_real) - len(seg_real.lstrip())
         segment = seg_real.strip()
         seg_masked = seg_masked[pad:pad + len(segment)]
         if segment and seg_masked.strip():
-            yield segment, seg_masked
+            yield segment, seg_masked, background
 
 
 def _pipeline_stages(segment, segment_masked):
@@ -745,12 +755,14 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     """
     effective_cwd = cwd
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
-    for segment, seg_masked in _shell_segments(command, masked_all, cmd=cmd):
+    for segment, seg_masked, background in _shell_segments(
+            command, masked_all, cmd=cmd):
         stages = _pipeline_stages(segment, seg_masked)
         first = _argv_of(stages[0], ps=ps, cmd=cmd)
-        # `cd` moves the parent shell only outside a pipeline; inside one it
-        # runs in a subshell and must NOT move later segments.
-        if len(stages) == 1 and first and len(first) > 1 and (
+        # `cd` moves the parent shell only outside a pipeline or background
+        # job; inside one it runs apart and must NOT move later segments.
+        if len(stages) == 1 and not background and first \
+                and len(first) > 1 and (
                 first[0] == "cd" or cmd and first[0].lower() in ("cd", "chdir")):
             path = first[2] if cmd and first[1].lower() == "/d" \
                 and len(first) > 2 else first[1]
