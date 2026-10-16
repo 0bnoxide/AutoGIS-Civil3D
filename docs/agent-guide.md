@@ -66,30 +66,33 @@ to widen a claim elsewhere.
 
 ## Native desktop testing
 
-Use full-desktop capture and control for native UI testing; do not restrict
-control or capture to the main application window. Separate dialogs may
-belong to child processes or distinct top-level windows, so full-desktop
-capture and targeting avoids main-window-only blind spots.
+Full-desktop capture and control are required only when opening a fresh
+Civil 3D instance to locate its separate startup prompt and, with
+authorization for that exact prompt and action, dismiss it. Startup dialogs
+may belong to child processes or distinct top-level windows, so main-window
+capture may miss them. After startup is complete and the intended instance
+is verified, normal native testing may use supported app-window capture and
+control with related dialogs.
 
 Use only the supported computer-use tools required by the repository and
-installed skill for full-desktop capture and input. Full-desktop scope does
-not authorize alternative capture or input APIs.
+installed skill for capture and input. Full-desktop scope does not authorize
+alternative capture or input APIs.
 
-Before each input, verify the intended target against a fresh desktop
-screenshot; recheck after focus, window or dialog changes. Confirm the exact
-dialog/window identity and, when relevant, its owning executable, PID and
-process start time. Coordinate one designated desktop controller across
-sessions before any input; full-desktop scope does not release another agent
-to control the desktop.
+Before each input, verify the intended target against a fresh screenshot
+with the coverage required for that stage; recheck after focus, window or
+dialog changes. Confirm the exact dialog/window identity and, when relevant,
+its owning executable, PID and process start time. Coordinate one designated
+desktop controller across sessions before any input; full-desktop scope does
+not release another agent to control the desktop.
 
 Existing authorization, safety rules and stop conditions still apply.
 Full-desktop access does not authorize clicking unrelated windows,
 dismissing unapproved consequential prompts, accepting terms, changing
-security or bypassing licensing/authentication/trust gates. If full-desktop
-tools are unavailable, report the limitation and stop work that depends on
-that coverage; do not silently substitute main-window capture or claim full
-coverage. Do not infer the cause of a specific licensing-dialog issue from
-targeting mode alone; diagnosis requires separate evidence.
+security or bypassing licensing/authentication/trust gates. If required
+full-desktop startup coverage is unavailable, report the limitation and stop
+the dependent startup step; do not silently substitute narrower capture or
+claim full coverage. Do not infer the cause of a specific licensing-dialog
+issue from targeting mode alone; diagnosis requires separate evidence.
 
 ## Reviews
 
