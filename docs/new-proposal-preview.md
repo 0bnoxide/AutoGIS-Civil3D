@@ -3,6 +3,9 @@
 This artifact is a build-only preview for Civil 3D 2026. It is not evidence
 that proposal creation or the complete Phase 4 workflow has been qualified.
 
+Agents performing native checks must follow the
+[native desktop testing policy](agent-guide.md#native-desktop-testing).
+
 1. Download and extract `autogis-civil3d-preview-2026-<commit>`, using the
    exact commit you intend to check. Confirm that `build-info.json` names that
    commit and that its SHA-256 values match the two product DLLs.
