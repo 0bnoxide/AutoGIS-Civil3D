@@ -60,6 +60,12 @@ placeholder classes, and schema-only slices are not walking skeletons;
 coordination or governance machinery is added only when an active workflow
 needs it; abstractions are added only when a real slice needs them.
 
+The [Task 2 preview milestone](../plans/2026-09-04-new-proposal-implementation-plan.md#task-2-run-the-proposal-preview-inside-civil-3d)
+is exempt from demonstrating time savings, per the owner's 2026-10-16
+direction on [issue #105](https://github.com/0bnoxide/AutoGIS-Civil3D/issues/105).
+Its native functional checks still apply. Complete-workflow qualification
+retains the timing requirements below.
+
 ### Release 1 boundary
 
 Release 1 delivers one Civil 3D command, `New Proposal`, running inside
