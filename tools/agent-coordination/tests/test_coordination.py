@@ -96,6 +96,22 @@ class TestCodexHookTrust(TempRepoCase):
         output = self.doctor_output()
         self.assertNotIn("Codex project-hook trust: verified", output)
         self.assertIn("Codex project-hook trust: stale", output)
+        # Trust is per hook definition (#212): no blanket re-trust advice.
+        self.assertIn("review the changed hook definitions", output)
+        self.assertNotIn("re-trust", output)
+
+    def test_doctor_writes_utf8_when_piped_under_a_legacy_encoding(self):
+        # #195: a Windows pipe defaults stdout to cp1252.
+        self.write_complete_evidence(hashlib.sha256(b"old").hexdigest())
+        self.write_hooks_config(self.repo_path, b"{}\n")
+        env = dict(os.environ, PYTHONIOENCODING="cp1252")
+        result = subprocess.run(
+            [sys.executable, os.path.join(MODULE_DIR, "coordination.py"),
+             "doctor"], cwd=self.repo_path, env=env, capture_output=True,
+            check=False)
+        self.assertEqual(result.returncode, coordination.ALLOW, result.stderr)
+        self.assertIn("Codex project-hook trust: stale \u2014",
+                      result.stdout.decode("utf-8"))
 
     def test_doctor_reports_record_without_config_hash_as_unverified(self):
         self.write_hooks_config(self.repo_path, b"{}\n")
@@ -1514,6 +1530,47 @@ class TestPreToolUseAdapter(TempRepoCase):
                 })
                 self.assertIn("claimed by session s2", out)
 
+    def test_nested_interpreter_forms_reach_main_rule(self):
+        # #182: unquoted cmd /c tails, path- or .exe-supplied interpreters,
+        # Git Bash's //c, and multi-argument pwsh -Command.
+        for command in (
+                "cmd /c git reset --hard",
+                'cmd //c "git reset --hard"',
+                "C:/Windows/System32/cmd.exe /c git reset --hard",
+                'powershell.exe -Command "git reset --hard"',
+                "pwsh.exe -c git reset --hard",
+                '/usr/bin/bash -c "git reset --hard"',
+                'bash.exe -c "git reset --hard"',
+                '/usr/bin/env bash -c "git reset --hard"'):
+            for tool, shell in (("Bash", "/bin/bash"), ("PowerShell", "pwsh")):
+                with self.subTest(tool=tool, command=command):
+                    rc, out = self.decide({
+                        "tool_name": tool, "tool_input": {
+                            "command": command, "shell": shell,
+                        }, "cwd": self.repo_path,
+                    })
+                    self.assertIn("main is read-only", out)
+
+    def test_nested_interpreter_forms_reach_claims(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for command in (
+                r"C:\Windows\System32\cmd.exe /c del /q src\code.cs",
+                r"cmd //c del /q src\code.cs",
+                "pwsh.exe -Command Remove-Item src/code.cs",
+                '/bin/sh -c "rm src/code.cs"'):
+            with self.subTest(command=command):
+                rc, out = self.decide({
+                    "tool_name": "PowerShell", "tool_input": {
+                        "command": command,
+                    }, "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
+        # A quoted cmd argument stays one argument when the tail is re-joined.
+        self.assertEqual(coordination.shell_write_targets(
+            'cmd /c echo "a & del src/code.cs"', self.repo_path), [])
+
     def test_cmd_write_aliases_reach_claims_without_powershell_aliases(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
         coordination.claim(self.repo, "s1", "branch", "feature")
@@ -1704,6 +1761,23 @@ class TestPreToolUseAdapter(TempRepoCase):
         rc, out = self.apply_patch(
             "*** Update File: src/a.cs\n*** Move to: docs/x.md")
         self.assertIn("outside your claimed file scope", out)
+
+    def test_freeform_apply_patch_gets_the_same_guards(self):
+        # #181: a plain-string tool_input must not skip main/claim guards.
+        patch = "*** Begin Patch\n*** Add File: probe.txt\n+x\n*** End Patch\n"
+
+        def decide(tool_input):
+            with mock.patch.dict(os.environ, {"AGENT_SESSION_ID": ""}):
+                return self.decide({"session_id": "s1", "tool_name": "apply_patch",
+                                    "tool_input": tool_input,
+                                    "cwd": self.repo_path})[1]
+
+        self.assertIn("main is read-only", decide(patch))
+        self.assertEqual(decide(patch), decide({"command": patch}))
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        self.assertIn("no claim for branch 'feature'", decide(patch))
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        self.assertEqual(decide(patch), "")
 
     def test_apply_patch_on_claimed_branch_silent(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)

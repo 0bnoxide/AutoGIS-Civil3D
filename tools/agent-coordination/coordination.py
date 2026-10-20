@@ -578,7 +578,7 @@ def _strip_cmd_prefixes(argv, _depth=0):
     wrapped command unchecked (fail toward today's behaviour) and, in the rare
     case the value matches a mutator name (`sudo -u rm …`), over-denies in the
     safe direction. Neither outcome is a silent new bypass."""
-    if _depth >= _MAX_UNWRAP_DEPTH or not argv or argv[0].lower() \
+    if _depth >= _MAX_UNWRAP_DEPTH or not argv or _exe_name(argv[0]) \
             not in _CMD_PREFIXES:
         return argv
     i = 1
@@ -595,6 +595,14 @@ def _strip_cmd_prefixes(argv, _depth=0):
     return _strip_cmd_prefixes(argv[i:], _depth + 1)
 
 
+def _exe_name(token):
+    """Command name with any directory and `.exe` dropped, so a path-supplied
+    interpreter (`/usr/bin/bash`, `powershell.exe`) unwraps like its bare
+    name (#182)."""
+    name = _git_executable_name(token)
+    return name[:-4] if name.endswith(".exe") else name
+
+
 def _nested_script(argv):
     """If argv is an interpreter invoked on an inline script string, return
     (inner_command, ps, cmd) to re-parse; else None. Covers bash/sh/zsh/dash/ksh
@@ -607,12 +615,16 @@ def _nested_script(argv):
     git-hook backstop and per-write claim layer."""
     if not argv:
         return None
-    head, rest = argv[0].lower(), argv[1:]
+    head, rest = _exe_name(argv[0]), argv[1:]
 
-    def after(match, ps, cmd=False):
+    def after(match, ps, cmd=False, join=None):
         for j, tok in enumerate(rest):
             if match(tok.lower()) and j + 1 < len(rest):
-                return rest[j + 1], ps, cmd
+                tail = rest[j + 1:]
+                # cmd /c and pwsh -Command run every remaining argument, not
+                # just the next one (`cmd /c git reset --hard`, #182).
+                script = join(tail) if join and len(tail) > 1 else tail[0]
+                return script, ps, cmd
         return None
 
     if head in _SH_DASH_C:
@@ -621,9 +633,12 @@ def _nested_script(argv):
         # these the common form (cold review).
         return after(lambda t: bool(re.fullmatch(r"-[a-z]*c", t)), False)
     if head in _PS_DASH_C:
-        return after(lambda t: t in ("-command", "-c"), True)
-    if head in ("cmd", "cmd.exe"):
-        return after(lambda t: t in ("/c", "/k"), False, cmd=True)
+        return after(lambda t: t in ("-command", "-c"), True, join=" ".join)
+    if head == "cmd":
+        # `//c` is Git Bash's spelling of /c (MSYS rewrites it). Re-quote the
+        # remaining arguments the way they reach cmd's command line.
+        return after(lambda t: t in ("/c", "/k", "//c", "//k"), False,
+                     cmd=True, join=subprocess.list2cmdline)
     if head == "eval" and rest:
         return " ".join(rest), False, False
     if head in ("iex", "invoke-expression") and rest:
@@ -838,7 +853,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         raw_targets = _redirect_targets(segment, seg_masked)
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
-            if argv and argv[0].lower() in _CMD_PREFIXES:
+            if argv and _exe_name(argv[0]) in _CMD_PREFIXES:
                 # `_strip_cmd_prefixes` leaves a wrapper at its depth cap.
                 # That opaque remainder could hide a mutator, so surface the
                 # same fail-closed event used for nested interpreters.
@@ -1418,9 +1433,10 @@ def cmd_init(repo):
 def codex_hook_trust_finding(repo):
     """Return doctor's Codex hook-trust finding.
 
-    Codex keys hook trust by path and content hash, so a record only holds
-    for the exact `.codex/hooks.json` it names. Linked worktrees run the
-    primary checkout's copy, so that is the one hashed.
+    Codex tracks trust per hook definition, but the record pins the hash of
+    the whole `.codex/hooks.json`, so any change to the file marks it stale
+    for review, even when unchanged definitions stay trusted. Linked
+    worktrees run the primary checkout's copy, so that is the one hashed.
     """
     unverified = ("Codex project-hook trust: unverified until the documented "
                   "/hooks inspection and activation probe are recorded")
@@ -1454,9 +1470,10 @@ def codex_hook_trust_finding(repo):
         return unverified
     if recorded != current:
         return ("Codex project-hook trust: stale — .codex/hooks.json changed "
-                f"since the {date} verification; re-trust it in /hooks from "
-                "the primary checkout, rerun the activation probe, and record "
-                "the new date and hash")
+                f"since the {date} verification; inspect /hooks from the "
+                "primary checkout, review the changed hook definitions, run "
+                "an owner-authorized activation probe, and record the new "
+                "evidence, date, and hash")
     return f"Codex project-hook trust: verified ({date})"
 
 
@@ -1804,6 +1821,9 @@ def hook_pre_tool_use(payload_text):
         payload = json.loads(payload_text or "{}")
         tool = payload.get("tool_name", "")
         tool_input = payload.get("tool_input", {}) or {}
+        if tool == "apply_patch" and isinstance(tool_input, str):
+            # Freeform Codex form: the patch text is the whole input (#181).
+            tool_input = {"command": tool_input}
         cwd = payload.get("cwd") or os.getcwd()
         repo = discover(cwd)
         reason = None
@@ -1923,6 +1943,8 @@ def main(argv=None):
         if args.command == "init":
             return cmd_init(repo)
         if args.command == "doctor":
+            # Findings carry em dashes; a Windows pipe defaults to cp1252 (#195).
+            sys.stdout.reconfigure(encoding="utf-8")
             return cmd_doctor(repo)
         if args.command == "status":
             return cmd_status(repo)
