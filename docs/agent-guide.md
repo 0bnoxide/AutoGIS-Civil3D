@@ -49,7 +49,7 @@ to widen a claim elsewhere.
    or other file-by-file search. If the MCP is unavailable or cannot answer,
    use a search subagent before manual search. Pass this repository's
    project (`C-Users-ichbi-AutoGIS-Civil3D` on the primary machine; the
-   SessionStart hook prints it) on every call, never another repository's or
+   SessionStart hook prints it) on every project-scoped call, never another repository's or
    a worktree's — see [agent-tools.md](agent-tools.md). The index is
    advisory — verify anything load-bearing against the files. Session-start hooks refresh it
    and log the outcome to `~/.cache/codebase-memory-mcp/last-index.log`.
