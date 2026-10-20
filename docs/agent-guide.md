@@ -104,6 +104,12 @@ defined in [ADR-0004](adr/0004-one-adversarial-review-proportioned-to-risk.md).
 Mechanics that reach a reviewer: mark the PR ready for review, or comment
 `@codex review`. Prose asking for review reaches nobody.
 
+A PR gets at most 10 fix-and-re-review rounds in total; each push that
+answers review findings is one round. If findings remain after round 10,
+stop pushing, leave the PR unmerged, and ask the owner how to proceed.
+A tighter limit elsewhere, such as the orchestrator's repair limit in
+[orchestration.md](orchestration.md), still applies.
+
 ## When blocked
 
 Open or update a GitHub issue describing the blocker, release claims you
