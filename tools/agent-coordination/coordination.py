@@ -795,20 +795,27 @@ _PS_SUBTREE_CMDLETS = {"remove-item", "ri", "del", "erase", "rd", "rmdir",
 def _argv_subtree_targets(argv, ps, cmd=False):
     """Return (raw operands, moves) for the paths a delete or move form
     removes or replaces with their whole subtree, so claims under them are
-    checked too (#184). Each move is (destination, sources): an existing
-    destination directory receives the sources instead of being replaced."""
+    checked too (#184). Each move is (destination, sources, into): with
+    `into`, an existing destination directory receives the sources instead
+    of being replaced."""
     name, low = argv[0].rstrip(". "), argv[0].lower()
     if name in ("rm", "rmdir"):
         return [arg for arg in argv[1:] if not arg.startswith("-")], []
     if name == "mv":
         dest, sources = _copy_move_operands(argv)
-        return sources, [(dest, sources)] if dest else []
+        # -T / --no-target-directory: an existing directory is replaced
+        # rather than receiving the sources.
+        into = not any(
+            arg == "--no-target-directory"
+            or (arg[:1] == "-" and arg[1:2] != "-" and "T" in arg.partition("t")[0])
+            for arg in argv[1:])
+        return sources, [(dest, sources, into)] if dest else []
     if ps and low in _PS_SUBTREE_CMDLETS:
         return _ps_write_targets(argv), []
     if cmd and low in ("move", "ren", "rename"):
         operands = [arg for arg in argv[1:] if not arg.startswith("/")]
         if low == "move" and len(operands) > 1:
-            return operands[:-1], [(operands[-1], operands[:-1])]
+            return operands[:-1], [(operands[-1], operands[:-1], True)]
         return operands, []
     if cmd and low in ("del", "erase", "rd", "rmdir"):
         return [arg for arg in argv[1:] if not arg.startswith("/")], []
@@ -819,8 +826,8 @@ def _move_destinations(moves, cwd, ps, cmd=False):
     """Raw paths a move replaces: an existing destination directory gets
     each source's basename under it, any other destination is replaced."""
     raw = []
-    for dest, sources in moves:
-        resolved = next(_target_events([dest], cwd, ps, cmd=cmd), None)
+    for dest, sources, into in moves:
+        resolved = into and next(_target_events([dest], cwd, ps, cmd=cmd), None)
         if resolved and os.path.isdir(resolved[1]):
             raw += [dest.rstrip("/\\") + "/" + re.split(
                 r"[/\\]", src.strip("\"'").rstrip("/\\"))[-1]
@@ -910,7 +917,10 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             yield ("git", argv, effective_cwd)
             raw_targets += _argv_write_targets(argv, ps, cmd=cmd)
             operands, argv_moves = _argv_subtree_targets(argv, ps, cmd=cmd)
-            raw_subtrees += operands
+            # Deleting or moving a symlink touches only the link, never the
+            # directory it points to; `link/` still resolves to the target.
+            raw_subtrees += [op for op in operands if not os.path.islink(
+                os.path.join(effective_cwd, op.strip("\"'")))]
             moves += argv_moves
         yield from _target_events(raw_targets, effective_cwd, ps, cmd=cmd)
         raw_subtrees += _move_destinations(moves, effective_cwd, ps, cmd=cmd)

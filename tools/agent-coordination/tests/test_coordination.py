@@ -1481,6 +1481,23 @@ class TestPreToolUseAdapter(TempRepoCase):
                                ("move src docs\\lib", "cmd.exe")):
             with self.subTest(command=command):
                 self.assertIn("claimed by session s2", decide(command, shell))
+        # -T replaces an existing directory instead of moving into it.
+        for command in ("mv -T src docs", "mv -fT src docs",
+                        "mv --no-target-directory src docs"):
+            with self.subTest(command=command):
+                self.assertIn("contains file_glob 'docs/lib/*'", decide(command))
+        # Unlinking a symlink leaves the directory it points to alone.
+        if hasattr(os, "symlink"):
+            try:
+                os.symlink("docs", os.path.join(self.repo_path, "link"))
+            except OSError:
+                pass
+            else:
+                self.assertEqual(decide("rm link"), "")
+                self.assertEqual(decide("mv link other"), "")
+                self.assertIn("contains file_glob 'docs/lib/*'",
+                              decide("rm -r link/"))
+                os.remove(os.path.join(self.repo_path, "link"))
         shutil.rmtree(os.path.join(self.repo_path, "docs"))
         self.assertIn("contains file_glob 'docs/lib/*'", decide("mv src docs"))
 
