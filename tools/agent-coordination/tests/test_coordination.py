@@ -1452,7 +1452,10 @@ class TestPreToolUseAdapter(TempRepoCase):
                 ("Bash", "cmd.exe", "move src elsewhere"),
                 ("PowerShell", "", "Remove-Item -Recurse src"),
                 ("PowerShell", "", "rd src -Recurse"),
-                ("PowerShell", "", "Move-Item src elsewhere")):
+                ("PowerShell", "", "Move-Item src elsewhere"),
+                ("Bash", "", "rm -rf -- src"),
+                ("PowerShell", "", "Rename-Item -Path lib -NewName src"),
+                ("PowerShell", "", "Rename-Item lib -NewName:src")):
             with self.subTest(shell=shell or tool, command=command):
                 self.assertIn("contains file_glob 'src/lib/*' claimed by "
                               "session s2", decide(tool, command, shell))

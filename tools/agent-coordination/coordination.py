@@ -778,6 +778,17 @@ def _redirect_targets(segment, segment_masked, bash=False, cmd=False):
     return targets
 
 
+def _posix_operands(argv):
+    """Non-option arguments; everything after `--` is an operand."""
+    operands, options = [], True
+    for arg in argv[1:]:
+        if options and arg == "--":
+            options = False
+        elif not (options and arg.startswith("-")):
+            operands.append(arg)
+    return operands
+
+
 def _command_name(token):
     """A bare command name with Windows' trailing `.`/space dropped, or the
     last component of a path-supplied command (`/bin/rm` is rm)."""
@@ -799,7 +810,7 @@ def _argv_write_targets(argv, ps, cmd=False):
     if name == "truncate":
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
     if name in ("rm", "unlink", "shred") or name == "rmdir" and not cmd:
-        targets += [arg for arg in argv[1:] if not arg.startswith("-")]
+        targets += _posix_operands(argv)
     if ps and (low in _PS_WRITE_CMDLETS or low in _PS_COPY_CMDLETS):
         targets += _ps_write_targets(argv)
     if cmd:
@@ -829,7 +840,7 @@ def _argv_subtree_targets(argv, ps, cmd=False):
     of being replaced."""
     name, low = _command_name(argv[0]), argv[0].lower()
     if name in ("rm", "rmdir"):
-        return [arg for arg in argv[1:] if not arg.startswith("-")], []
+        return _posix_operands(argv), []
     if name == "mv":
         dest, sources = _copy_move_operands(argv)
         # -T / --no-target-directory: an existing directory is replaced
@@ -840,7 +851,16 @@ def _argv_subtree_targets(argv, ps, cmd=False):
             for arg in argv[1:])
         return sources, [(dest, sources, into)] if dest else []
     if ps and low in _PS_SUBTREE_CMDLETS:
-        return _ps_write_targets(argv), []
+        operands = _ps_write_targets(argv)
+        if low in ("rename-item", "rni", "ren") and operands:
+            # `-NewName` names the destination beside the source.
+            new_names = [argv[i + 1] for i in range(1, len(argv) - 1)
+                         if argv[i].lower() == "-newname"]
+            new_names += [arg.partition(":")[2] for arg in argv[1:]
+                          if arg.lower().startswith("-newname:")]
+            parent = re.split(r"[/\\]", operands[0].rstrip("/\\"))[:-1]
+            operands += ["/".join(parent + [n]) for n in new_names]
+        return operands, []
     if cmd and low in ("move", "ren", "rename"):
         operands = [arg for arg in argv[1:] if not arg.startswith("/")]
         if low == "move" and len(operands) > 1:
