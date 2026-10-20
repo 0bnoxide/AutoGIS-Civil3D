@@ -530,8 +530,10 @@ _PS_SQ, _PS_DQ = "'\u2018\u2019\u201a\u201b", '"\u201c\u201d\u201e'
 # whole so its `=` counts as a boundary, but only at statement start: in
 # argument mode (`Write-Output $p=@'`) it is a bare word. PowerShell ends a
 # line at CR, LF or CRLF.
-_PS_ASSIGN = (r"(?:(?<=[;\r\n{(])|^)[ \t]*(?:(?:\[[\w.]+\])*\$[\w:]+"
-              r"(?:\.\w+|\[[^\]\r\n]*\])*\s*[-+*/%]?=\s*)+")
+_PS_ASSIGN = (r"(?:(?<=[;\r\n{(])|^)[ \t]*(?:(?:\[[\w.,\[\] ]+\])*"
+              r"\$(?:\{[^}\r\n]*\}|[\w:]+)"
+              r"(?:\.(?:\w+|'[^'\r\n]*'|\"[^\"\r\n]*\")|\[[^\]\r\n]*\])*"
+              r"\s*(?:[-+*/%]|\?\?)?=\s*)+")
 _PS_TOKEN_START = rf"(?:{_PS_ASSIGN}|(?<![^\s;|&(){{}}\[,]))"
 _PS_EOL = r"(?:\r\n?|\n)"
 _PS_QUOTE_RE = re.compile(
