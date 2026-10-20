@@ -926,11 +926,13 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             # `ForEach-Object`, `&`) or not. The braces are dropped from the
             # outer argv, so a block used as an argument value (`-Path {x}`)
             # reads as that value.
-            moved = []
+            # A block may move the location for later sibling blocks
+            # (`try { cd x } finally { ... }`) as well as later statements.
             for start, end in spans:
                 if _depth >= _MAX_UNWRAP_DEPTH:
                     yield ("opaque", effective_cwd)
                     break
+                moved = []
                 for base in cwds():
                     for event in _shell_events(
                             segment[start + 1:end], base, ps=True,
@@ -939,7 +941,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                             moved.append(event[1])
                         else:
                             yield event
-            alt += [c for c in moved if c not in cwds()]
+                alt += [c for c in moved if c not in cwds()]
         stages = _pipeline_stages(segment, seg_masked, bash=bash)
         # `cd` is read before group peeling, as before #209, so peeling
         # never turns `(cd x` or a piped `{ cd x` into a parent-shell `cd`.

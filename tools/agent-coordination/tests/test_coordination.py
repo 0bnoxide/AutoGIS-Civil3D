@@ -489,6 +489,7 @@ class TestMainRule(TempRepoCase):
         os.makedirs(safe, exist_ok=True)
         main = self.repo_path.replace(os.sep, "/")
         for cmd in (f"if ($true) {{ cd {main} }}; git reset --hard",
+                    f"try {{ cd {main} }} finally {{ git reset --hard }}",
                     f"if ($a) {{ if ($b) {{ cd {main} }} }}; git reset --hard",
                     f"if ($true) {{ cd {self.base} }}; cd repo; "
                     "git reset --hard"):
