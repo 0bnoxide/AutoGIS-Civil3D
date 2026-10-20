@@ -985,7 +985,12 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         # wrappers (env, sudo, xargs) start a process that cannot move it.
         # `command -v pushd` only describes pushd, so `-v`/`-V` stop the
         # peel; the stage is then an ordinary command.
+        while bash and first and re.fullmatch(r"[A-Za-z_]\w*\+?=.*", first[0]):
+            first = first[1:]  # `X=1 pushd x` still runs pushd in this shell
         while not (ps or cmd) and first[:1] in (["command"], ["builtin"]):
+            if first[0] == "builtin" and first[1:2] != ["--"] \
+                    and first[1:2] and first[1].startswith("-"):
+                break  # `builtin -p` is an error, not an execution form
             n = 1
             while n < len(first) and first[n].startswith("-") \
                     and first[n] != "--":
@@ -1012,6 +1017,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         # move it too, through a directory stack (#183).
         if len(stages) == 1 and not (ps or cmd) and word == "dirs" and any(
                 a.startswith("-") and "c" in a for a in first[1:]):
+            yield from _target_events(_redirect_targets(
+                segment, seg_masked, bash=bash, cmd=cmd), effective_cwd, ps,
+                cmd=cmd)
             stack = []  # `dirs -c` clears the stack later popds would use
             if job is None:
                 parent_stack = []
@@ -1020,8 +1028,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
                                  _PS_CD_WORDS or cmd and word == "chdir"):
             # Redirects open before the change, in the old directory, and
             # are not location operands.
-            yield from _target_events(_redirect_targets(segment, seg_masked),
-                                      effective_cwd, ps, cmd=cmd)
+            yield from _target_events(_redirect_targets(
+                segment, seg_masked, bash=bash, cmd=cmd), effective_cwd, ps,
+                cmd=cmd)
             path, modeled = _location_change(
                 word, _drop_redirects(first[1:]), ps, cmd)
             if not modeled:
