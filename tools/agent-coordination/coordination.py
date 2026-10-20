@@ -1692,7 +1692,10 @@ def cmd_sync_main(repo):
         print(f"sync-main: primary tree is not on '{MAIN_BRANCH}'",
               file=sys.stderr)
         return MISUSE
-    rc, out, _ = _git(["status", "--porcelain"], cwd=primary)
+    # Untracked files do not count: stray untracked dirs froze AutoGIS's main
+    # for weeks (#218). merge --ff-only still refuses to overwrite one.
+    rc, out, _ = _git(["status", "--porcelain", "--untracked-files=no"],
+                      cwd=primary)
     if out:
         print("sync-main: primary tree is not clean; refusing", file=sys.stderr)
         return DENY
