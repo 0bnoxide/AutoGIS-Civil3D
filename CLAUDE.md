@@ -8,7 +8,8 @@ Harness specifics:
 
 - Hooks are wired in `.claude/settings.json`: SessionStart refreshes the
   codebase-memory index (outcome logged to
-  `~/.cache/codebase-memory-mcp/last-index.log`); PreToolUse denies writes
+  `~/.cache/codebase-memory-mcp/last-index.log`) and prints the project
+  name to pass on every graph query; PreToolUse denies writes
   targeting `main` through the shared rule engine in
   `tools/agent-coordination/`.
 - Skills under `.claude/skills/` and agents under `.claude/agents/` are

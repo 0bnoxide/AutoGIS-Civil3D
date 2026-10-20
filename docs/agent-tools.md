@@ -9,13 +9,26 @@ and no repository check may hard-depend on them.
 - **Registration:** user-scope MCP server (`claude mcp add --scope user`),
   never a committed project `.mcp.json` — no credential or absolute
   executable path belongs in the repository.
+- **Project:** one server instance serves every repository on the machine,
+  and its query tools take an explicit `project`. Always pass this
+  repository's project, the canonical checkout path with `:` dropped and
+  separators turned into `-` (`C:/Users/ichbi/AutoGIS-Civil3D` ->
+  `C-Users-ichbi-AutoGIS-Civil3D`); the SessionStart hook prints it. Never
+  query `C-Users-ichbi-AutoGIS` (the sibling repository, whose name is a
+  prefix of ours), a `...-.claude-worktrees-...` / `...-.worktrees-...`
+  project, or cross-project tools: their results are not this repository's
+  code.
 - **Refresh:** the SessionStart hook re-indexes the repository and appends
   the outcome (or failure) to `~/.cache/codebase-memory-mcp/last-index.log`.
-  A stale index misleads silently; the log line is the diagnosis.
+  A stale index misleads silently; the log line is the diagnosis. The log is
+  shared with other repositories' hooks; this repository's lines carry
+  `AutoGIS-Civil3D` after the timestamp.
 - **Scope:** the index covers the primary checkout, deliberately — the MCP
   keys project identity to the path, so per-worktree indexing would register
   a throwaway project per worktree (rationale in
-  `tools/agent-hooks/session-start.sh`).
+  `tools/agent-hooks/session-start.sh`). The server still auto-indexes its
+  own launch directory, so a worktree session creates such a project anyway;
+  ignore it and query the canonical project above.
 - **Fallback:** Grep/Glob search, or a search subagent. Treat graph results
   as advisory pointers; verify anything load-bearing against the files.
 
