@@ -844,26 +844,67 @@ def _argv_subtree_targets(argv, ps, cmd=False):
     return [], []
 
 
-def _subtree_operands(operands, cwd):
-    """Expand wildcard operands to what they match, so `rm -rf src/*`
-    reaches a `src/lib/*` claim, and drop symlinks: deleting or moving one
-    touches only the link, while `link/` still resolves to its target."""
+def _brace_expand(word):
+    """Bash brace expansion of an unquoted word: `{a,b}` yields each
+    alternative; a group without a top-level comma (`{1..3}`) becomes a
+    `*` glob, which over-approximates what it can expand to."""
+    for start, ch in enumerate(word):
+        if ch != "{":
+            continue
+        depth, commas = 0, []
+        for end in range(start, len(word)):
+            if word[end] == "{":
+                depth += 1
+            elif word[end] == "}":
+                depth -= 1
+                if not depth:
+                    break
+            elif word[end] == "," and depth == 1:
+                commas.append(end)
+        else:
+            return [word]
+        head, tail = word[:start], word[end + 1:]
+        if not commas:
+            if ".." not in word[start:end]:
+                continue
+            return _brace_expand(head + "*" + tail)
+        cuts = [start] + commas + [end]
+        return [w for i in range(len(cuts) - 1)
+                for w in _brace_expand(head + word[cuts[i] + 1:cuts[i + 1]] + tail)]
+    return [word]
+
+
+def _expand_operand(op, cwd, bash):
+    """The paths a delete or move operand can name once the shell expands
+    braces (Bash only) and wildcards; a pattern matching nothing stays as
+    written."""
+    raw = op.strip("\"'")
+    words = _brace_expand(raw) if bash else [raw]
     out = []
-    for op in operands:
-        raw = op.strip("\"'")
-        path = os.path.join(cwd, raw)
-        if re.search(r"[*?[]", raw):
-            out += [m for m in glob.glob(path) if not os.path.islink(m)] or [op]
-        elif raw.endswith(("/", "\\")) or not os.path.islink(path):
-            out.append(op)
+    for word in words:
+        if re.search(r"[*?[]", word):
+            out += glob.glob(os.path.join(cwd, word)) or [word]
+        else:
+            out.append(word)
     return out
+
+
+def _subtree_operands(operands, cwd, bash):
+    """Expand operands to what they name, so `rm -rf src/*` reaches a
+    `src/lib/*` claim, and drop symlinks: deleting or moving one touches
+    only the link, while `link/` still resolves to its target."""
+    return [path for op in operands for path in _expand_operand(op, cwd, bash)
+            if path.endswith(("/", "\\"))
+            or not os.path.islink(os.path.join(cwd, path))]
 
 
 def _move_destinations(moves, cwd, ps, cmd=False):
     """Raw paths a move replaces: an existing destination directory gets
     each source's basename under it, any other destination is replaced."""
-    raw = []
+    raw, bash = [], not ps and not cmd
     for dest, sources, into in moves:
+        sources = [path for src in sources
+                   for path in _expand_operand(src, cwd, bash)]
         resolved = into and next(_target_events([dest], cwd, ps, cmd=cmd), None)
         if resolved and os.path.isdir(resolved[1]):
             raw += [dest.rstrip("/\\") + "/" + re.split(
@@ -966,7 +1007,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             yield ("git", argv, effective_cwd)
             raw_targets += _argv_write_targets(argv, ps, cmd=cmd)
             operands, argv_moves = _argv_subtree_targets(argv, ps, cmd=cmd)
-            raw_subtrees += _subtree_operands(operands, effective_cwd)
+            raw_subtrees += _subtree_operands(operands, effective_cwd, bash)
             moves += argv_moves
         yield from _target_events(raw_targets, effective_cwd, ps, cmd=cmd)
         raw_subtrees += _move_destinations(moves, effective_cwd, ps, cmd=cmd)

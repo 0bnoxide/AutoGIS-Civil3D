@@ -1487,10 +1487,20 @@ class TestPreToolUseAdapter(TempRepoCase):
             with self.subTest(command=command):
                 self.assertIn("contains file_glob 'docs/lib/*'", decide(command))
         # A wildcard operand is checked as what it expands to.
-        for command in ("rm -rf docs/*", "rm -rf d*/l?b", "mv docs/* /tmp"):
+        for command in ("rm -rf docs/*", "rm -rf d*/l?b", "mv docs/* /tmp",
+                        "rm -rf {docs,dummy}", "rm -rf docs/{x,l{a,i}b}",
+                        "rm -rf {d..e}ocs"):
             with self.subTest(command=command):
                 self.assertIn("docs/lib", decide(command))
         self.assertEqual(decide("rm -rf docs/*.md"), "")
+        # A wildcard source moved into a directory lands under its basename.
+        os.makedirs(os.path.join(self.repo_path, "stuff", "lib"))
+        os.makedirs(os.path.join(self.repo_path, "target"))
+        coordination.claim(self.repo, "s2", "file_glob", "target/lib/*")
+        self.assertIn("target/lib", decide("mv stuff/* target"))
+        self.assertEqual(decide("mv stuff target"), "")
+        shutil.rmtree(os.path.join(self.repo_path, "stuff"))
+        shutil.rmtree(os.path.join(self.repo_path, "target"))
         # Unlinking a symlink leaves the directory it points to alone.
         if hasattr(os, "symlink"):
             try:
