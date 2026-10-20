@@ -1752,6 +1752,9 @@ def hook_pre_tool_use(payload_text):
         payload = json.loads(payload_text or "{}")
         tool = payload.get("tool_name", "")
         tool_input = payload.get("tool_input", {}) or {}
+        if tool == "apply_patch" and isinstance(tool_input, str):
+            # Freeform Codex form: the patch text is the whole input (#181).
+            tool_input = {"command": tool_input}
         cwd = payload.get("cwd") or os.getcwd()
         repo = discover(cwd)
         reason = None

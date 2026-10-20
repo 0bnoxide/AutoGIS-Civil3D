@@ -1644,6 +1644,23 @@ class TestPreToolUseAdapter(TempRepoCase):
             "*** Update File: src/a.cs\n*** Move to: docs/x.md")
         self.assertIn("outside your claimed file scope", out)
 
+    def test_freeform_apply_patch_gets_the_same_guards(self):
+        # #181: a plain-string tool_input must not skip main/claim guards.
+        patch = "*** Begin Patch\n*** Add File: probe.txt\n+x\n*** End Patch\n"
+
+        def decide(tool_input):
+            with mock.patch.dict(os.environ, {"AGENT_SESSION_ID": ""}):
+                return self.decide({"session_id": "s1", "tool_name": "apply_patch",
+                                    "tool_input": tool_input,
+                                    "cwd": self.repo_path})[1]
+
+        self.assertIn("main is read-only", decide(patch))
+        self.assertEqual(decide(patch), decide({"command": patch}))
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        self.assertIn("no claim for branch 'feature'", decide(patch))
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        self.assertEqual(decide(patch), "")
+
     def test_apply_patch_on_claimed_branch_silent(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
         coordination.claim(self.repo, "s1", "branch", "feature")

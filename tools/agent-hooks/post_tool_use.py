@@ -333,6 +333,8 @@ def main(argv: list | None = None) -> int:
         payload = json.loads(sys.stdin.read() or "{}")
     except (json.JSONDecodeError, ValueError):
         return 0
+    if not isinstance(payload, dict):
+        return 0  # valid JSON but not a hook payload (#174)
     cwd = payload.get("cwd") or os.getcwd()
     root = _git_toplevel(cwd)
     if not root:

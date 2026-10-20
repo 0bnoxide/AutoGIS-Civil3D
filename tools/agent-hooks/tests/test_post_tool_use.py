@@ -325,6 +325,18 @@ sys.exit(post_tool_use.main())
                                   output["additionalContext"])
                     self.assertEqual(result.stderr, "")
 
+    def test_non_object_json_payload_exits_quietly(self):
+        # #174: exercise the CLI boundary, not just handle().
+        hook = os.path.join(TOOL_DIR, "post_tool_use.py")
+        for text in ("[]", '"text"', "null", "3"):
+            with self.subTest(payload=text):
+                result = subprocess.run([sys.executable, hook], input=text,
+                                        capture_output=True, text=True,
+                                        check=False)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "")
+
     def test_unknown_tool_is_silent(self):
         run = stub()
         self.assertIsNone(handle({"tool_name": "Read", "tool_input": {}},
