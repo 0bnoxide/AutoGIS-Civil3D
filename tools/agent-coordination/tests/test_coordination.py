@@ -400,6 +400,37 @@ class TestMainRule(TempRepoCase):
             f"cd {other} && git reset --hard", self.base, None)
         self.assertIsNotNone(reason)
 
+    def test_directory_stack_commands_move_the_shell(self):
+        # #183: pushd/popd and PowerShell's location cmdlets move the shell
+        # like cd; popd returns to where pushd left.
+        main = self.repo_path.replace(os.sep, "/")
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe, exist_ok=True)
+        denied = (
+            (f"pushd {main} && git reset --hard", {}),
+            (f"pushd {main} & git reset --hard", {"cmd": True}),
+            (f"pushd /d {main} & git reset --hard", {"cmd": True}),
+            (f"Push-Location {main}; git reset --hard", {"ps": True}),
+            (f"Set-Location -Path {main}; Remove-Item seed.txt", {"ps": True}),
+            (f"sl {main}; git reset --hard", {"ps": True}),
+            (f"CD {main}; git reset --hard", {"ps": True}),
+            (f"pushd {safe} && popd && git reset --hard", {}),
+            (f"pushd {safe} && pushd {main} && pushd && pushd && "
+             "git reset --hard", {}),
+        )
+        for command, kw in denied:
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, safe if main in command else self.repo_path,
+                    None, **kw))
+        for command, kw in (
+                (f"pushd {main} && popd && git reset --hard", {}),
+                (f"Push-Location {main}; Pop-Location; git reset --hard",
+                 {"ps": True})):
+            with self.subTest(command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, safe, None, **kw))
+
     def test_cd_inside_pipeline_does_not_move_later_segments(self):
         safe = os.path.join(self.base, "safe").replace(os.sep, "/")
         os.makedirs(safe, exist_ok=True)
@@ -1452,6 +1483,20 @@ class TestPreToolUseAdapter(TempRepoCase):
                         }, "cwd": cwd,
                     })
                     self.assertIn("main is read-only", out)
+
+    def test_pushd_reaches_foreign_claims(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for tool, command in (
+                ("Bash", "pushd src && rm code.cs"),
+                ("PowerShell", "Push-Location src; Remove-Item code.cs")):
+            with self.subTest(command=command):
+                rc, out = self.decide({
+                    "tool_name": tool, "tool_input": {"command": command},
+                    "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
 
     def test_cmd_write_aliases_reach_claims_without_powershell_aliases(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)

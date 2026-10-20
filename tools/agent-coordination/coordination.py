@@ -753,6 +753,12 @@ def _target_events(raw_targets, cwd, ps, cmd=False):
         yield ("target", resolved)
 
 
+_PUSHD_WORDS = {"pushd", "push-location"}
+_POPD_WORDS = {"popd", "pop-location"}
+_CD_WORDS = {"cd", "pushd", "popd"}
+_PS_CD_WORDS = {"chdir", "set-location", "sl"} | _PUSHD_WORDS | _POPD_WORDS
+
+
 def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
@@ -760,6 +766,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     write form covered by one is covered by the other.
     """
     effective_cwd = parent_cwd = cwd
+    stack, parent_stack = [], []
     job = None
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
     for segment, seg_masked, seg_job in _shell_segments(
@@ -768,20 +775,36 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             # A background job's `cd` moves the rest of that job only; the
             # parent shell resumes where it was.
             job, effective_cwd = seg_job, parent_cwd
+            stack = list(parent_stack)
         stages = _pipeline_stages(segment, seg_masked)
         first = _argv_of(stages[0], ps=ps, cmd=cmd)
+        word = first[0].lower() if first and (ps or cmd) \
+            else first[0] if first else ""
         # `cd` moves the parent shell only outside a pipeline; inside one it
-        # runs in a subshell and must NOT move later segments.
-        if len(stages) == 1 and first and len(first) > 1 and (
-                first[0] == "cd" or cmd and first[0].lower() in ("cd", "chdir")):
-            path = first[2] if cmd and first[1].lower() == "/d" \
-                and len(first) > 2 else first[1]
-            if ps or cmd:
-                path = path.replace("\\", "/")
-            effective_cwd = path if os.path.isabs(path) \
-                else os.path.join(effective_cwd or ".", path)
+        # runs in a subshell and must NOT move later segments. pushd/popd
+        # move it too, through a directory stack (#183).
+        if len(stages) == 1 and (word in _CD_WORDS or ps and word in
+                                 _PS_CD_WORDS or cmd and word == "chdir"):
+            args = [a for a in first[1:] if not (
+                a.startswith("-") or cmd and a.lower() == "/d")]
+            if word in _POPD_WORDS:
+                if stack:
+                    effective_cwd = stack.pop()
+            elif args:
+                path = args[0]
+                if ps or cmd:
+                    path = path.replace("\\", "/")
+                if word in _PUSHD_WORDS:
+                    stack.append(effective_cwd)
+                effective_cwd = path if os.path.isabs(path) \
+                    else os.path.join(effective_cwd or ".", path)
+            elif word in _PUSHD_WORDS and stack:
+                # Bare Bash pushd swaps the top two directories.
+                effective_cwd, stack[-1] = stack[-1], effective_cwd
+            else:
+                continue
             if job is None:
-                parent_cwd = effective_cwd
+                parent_cwd, parent_stack = effective_cwd, list(stack)
             continue
         raw_targets = _redirect_targets(segment, seg_masked)
         for stage in stages:
