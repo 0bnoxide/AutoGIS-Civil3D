@@ -530,7 +530,9 @@ def _ps_write_targets(argv):
 
 
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
-# PowerShell also accepts typographic quotes as delimiters, a here-string
+# PowerShell comments (`# x`, `<# x #>`) are matched in the same scan so a
+# quote inside one opens nothing. It also accepts typographic quotes as
+# delimiters, a here-string
 # runs to a line opening with its closing quote whatever it contains, and a
 # backtick outside a string escapes the next character (a quote included)
 # rather than opening a string (#179, #187). The backtick escape matches as
@@ -552,6 +554,7 @@ _PS_QUOTE_RE = re.compile(
     rf"(?:[^\r\n]*{_PS_EOL})*?[{_PS_SQ}]@"
     rf"|{_PS_TOKEN_START}@[{_PS_DQ}][ \t]*{_PS_EOL}"
     rf"(?:[^\r\n]*{_PS_EOL})*?[{_PS_DQ}]@"
+    rf"|<#[\s\S]*?#>|(?<![^\s;|&(){{}}])#[^\r\n]*"
     rf"|`[\s\S]"
     rf"|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*[{_PS_SQ}]"
     rf"|[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*[{_PS_DQ}]")
@@ -570,6 +573,8 @@ def _mask_literals(command, cmd=False, ps=False):
         s = m.group(0)
         if s[0] == "`":
             return "` "  # an escaped character is literal, never syntax
+        if s[0] == "#" or s.startswith("<#"):
+            return re.sub(r"[^\r\n]", " ", s)  # a comment is never code
         return s[0] + " " * (len(s) - 2) + s[-1]
     # PowerShell backslashes are literal; backticks and doubled quotes escape.
     quote_re = _PS_QUOTE_RE if ps else _QUOTE_RE
