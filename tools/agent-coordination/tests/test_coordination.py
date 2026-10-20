@@ -1502,7 +1502,10 @@ class TestPreToolUseAdapter(TempRepoCase):
 
     def test_cmd_caret_escapes_are_literal(self):
         # #185: `^&` and `^>` are text in cmd; unescaped operators still deny.
-        for command, denied in (("echo a ^& git reset --hard", False),
+        # The outer cmd consumes one caret layer before a child cmd reparses.
+        for command, denied in (("cmd /c echo ^& git reset --hard", True),
+                                ("cmd /c echo ^^^& git reset --hard", False),
+                                ("echo a ^& git reset --hard", False),
                                 ("echo a ^> seed.txt", False),
                                 ("echo a & git reset --hard", True),
                                 ("echo a ^^& git reset --hard", True),
