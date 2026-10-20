@@ -822,6 +822,23 @@ _PUSHD_WORDS = {"pushd", "push-location"}
 _POPD_WORDS = {"popd", "pop-location"}
 _CD_WORDS = {"cd", "pushd", "popd"}
 _PS_CD_WORDS = {"chdir", "set-location", "sl"} | _PUSHD_WORDS | _POPD_WORDS
+# A location command the segment model does not read: inside `$( )`,
+# backticks, a `{ }` group, a `case` arm, after `!` or a Bash keyword
+# (`if cd x; then`),
+# inside a PowerShell script block or expression, or anywhere past a cmd
+# segment's first word (`if exist x cd y`, `(cd y)`). It may move the shell
+# in ways the model cannot follow, so it fails closed.
+_HIDDEN_LOCATION_RE = {
+    "bash": re.compile(
+        r"(?:\$\(|`|[({!)]|(?<![\w-])(?:if|then|else|elif|do|while|until|time)"
+        r"(?![\w-]))\s*(?:(?:command|builtin)\s+)?(?:cd|pushd|popd|dirs)"
+        r"(?![\w-])"),
+    "ps": re.compile(
+        r"(?:[{(&=,]|\b(?:if|else|elseif|foreach|while|do|try|finally)\b)"
+        r"\s*(?:cd|chdir|sl|set-location|push-location|pop-location|pushd|"
+        r"popd)(?![\w-])", re.I),
+    "cmd": re.compile(r"(?<![\w-])(?:cd|chdir|pushd|popd)(?![\w-])", re.I),
+}
 
 
 def _location_change(word, args, ps, cmd):
@@ -843,8 +860,8 @@ def _location_change(word, args, ps, cmd):
         if any(a[:1] in ("-", "+") and a not in flags for a in args):
             return None, False
         paths = [a for a in args if a not in flags]
-    if word in _POPD_WORDS and paths:
-        return None, False
+    if word in _POPD_WORDS and paths or len(paths) > 1:
+        return None, False  # popd +N / extra operands: an error or unknown
     if not paths and not cmd and word not in _PUSHD_WORDS | _POPD_WORDS:
         paths = ["~"]  # bare cd / Set-Location goes home
     return (paths[0] if paths else None), True
@@ -880,9 +897,45 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     stack, parent_stack = [], []
     job = None
     bash = not ps and not cmd
+    hidden_re = _HIDDEN_LOCATION_RE["ps" if ps else "cmd" if cmd else "bash"]
+    scopes, closing = [], 0
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
     for segment, seg_masked, seg_job in _shell_segments(
             command, masked_all, cmd=cmd):
+        for _ in range(min(closing, len(scopes))):
+            # The previous segment closed a Bash subshell: its cd is undone.
+            effective_cwd, stack, parent_cwd, parent_stack = scopes.pop()
+        closing = 0
+        check = seg_masked
+        if bash:
+            # `(cd x; git y)` moves the subshell, not the shell after `)`.
+            lead = re.match(r"[\s(]*", seg_masked).group(0)
+            check = " " * len(lead) + seg_masked[len(lead):]
+            for _ in range(lead.count("(")):
+                scopes.append((effective_cwd, list(stack), parent_cwd,
+                               list(parent_stack)))
+            closers, depth = [], 0
+            for i, ch in enumerate(seg_masked):
+                if i < len(lead):
+                    continue
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    if depth:
+                        depth -= 1
+                    else:
+                        closers.append(i)
+            closing = len(closers)
+            for i in [i for i, ch in enumerate(lead) if ch == "("] + closers:
+                segment = segment[:i] + " " + segment[i + 1:]
+                seg_masked = seg_masked[:i] + " " + seg_masked[i + 1:]
+        if cmd:
+            # The segment's own leading location word is the modeled one.
+            check = re.sub(r"^\s*@?(?:cd|chdir|pushd|popd)(?![\w-])",
+                           lambda m: " " * len(m.group(0)), check, flags=re.I)
+        if hidden_re.search(check):
+            yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
+            continue
         if seg_job != job:
             # A background job's `cd` moves the rest of that job only; the
             # parent shell resumes where it was.

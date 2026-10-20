@@ -436,6 +436,15 @@ class TestMainRule(TempRepoCase):
             (f"pushd {safe}; pushd /tmp; dirs -c; cd {main}; popd; "
              "git reset --hard", {}),
             ("command -v pushd /tmp; git reset --hard", {}),
+            (f"if cd {main}; then git reset --hard; fi", {}),
+            (f"{{ cd {main}; }}; git reset --hard", {}),
+            (f"echo $(cd {main}; git reset --hard)", {}),
+            (f"case x in x) cd {main};; esac; git reset --hard", {}),
+            (f"cd {safe} {main}; git reset --hard", {}),
+            (f"& {{ Set-Location {main} }}; git reset --hard", {"ps": True}),
+            (f"if ($true) {{ cd {main} }}; git reset --hard", {"ps": True}),
+            (f"if exist x cd {main} & git reset --hard", {"cmd": True}),
+            (f"(cd {main}) & git reset --hard", {"cmd": True}),
             (f"pushd {safe}; cd /tmp; pushd >/dev/null; git reset --hard", {}),
             (f"cd {safe} > /dev/null 2>&1; pushd {main} 2>$null; "
              "git reset --hard", {"ps": True}),
@@ -549,11 +558,16 @@ class TestMainRule(TempRepoCase):
                     f"(cd {safe} && true) | cat; git reset --hard",
                     f"{{ cd {safe}; true; }} | cat; git reset --hard",
                     f"{{ cd {safe}; true; }} & git reset --hard",
-                    f"(cd {safe} && git reset --hard)",
                     "(git reset --hard) >/dev/null",
                     "cat | { git reset --hard; }"):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo), cmd)
+        # Inside the subshell the cd does apply (#224 review).
+        main = self.repo_path.replace(os.sep, "/")
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"(cd {main} && git reset --hard); true", safe, None))
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            f"(cd {safe} && git reset --hard)", self.repo_path, self.repo))
 
     def test_backgrounded_cd_does_not_move_later_segments(self):
         # `cd x &` runs in a background subshell/job: the parent stays put.
