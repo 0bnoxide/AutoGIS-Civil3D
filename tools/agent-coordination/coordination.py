@@ -531,7 +531,9 @@ def _ps_write_targets(argv):
 
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\[\s\S]|[^\"\\])*\"")
 # PowerShell comments (`# x`, `<# x #>`) are matched in the same scan so a
-# quote inside one opens nothing. It also accepts typographic quotes as
+# quote inside one opens nothing; `#` right after a continued line still
+# belongs to the token being continued. A backtick before CRLF escapes only
+# the CR, so the LF still ends the statement (checked against pwsh's AST). It also accepts typographic quotes as
 # delimiters, a here-string
 # runs to a line opening with its closing quote whatever it contains, and a
 # backtick outside a string escapes the next character (a quote included)
@@ -554,7 +556,8 @@ _PS_QUOTE_RE = re.compile(
     rf"(?:[^\r\n]*{_PS_EOL})*?[{_PS_SQ}]@"
     rf"|{_PS_TOKEN_START}@[{_PS_DQ}][ \t]*{_PS_EOL}"
     rf"(?:[^\r\n]*{_PS_EOL})*?[{_PS_DQ}]@"
-    rf"|<#[\s\S]*?#>|(?<![^\s;|&(){{}}])#[^\r\n]*"
+    rf"|<#[\s\S]*?#>|(?<![^\s;|&(){{}}\[\]=,{_PS_SQ}{_PS_DQ}])(?<!`\n)(?<!`\r)"
+    rf"#[^\r\n]*"
     rf"|`[\s\S]"
     rf"|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*[{_PS_SQ}]"
     rf"|[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*[{_PS_DQ}]")
@@ -575,9 +578,11 @@ def _mask_literals(command, cmd=False, ps=False):
     def blank(m):
         s = m.group(0)
         if s[0] == "`":
-            return "` "  # an escaped character is literal, never syntax
+            return "`" + " " * (len(s) - 1)  # escaped text is never syntax
         if s[0] == "#" or s.startswith("<#"):
-            return re.sub(r"[^\r\n]", " ", s)  # a comment is never code
+            # Matched only so its quotes open nothing; left visible so a
+            # misread comment can at worst over-deny, never hide a command.
+            return s
         return s[0] + " " * (len(s) - 2) + s[-1]
     # PowerShell backslashes are literal; backticks and doubled quotes escape.
     quote_re = _PS_QUOTE_RE if ps else _QUOTE_RE
@@ -692,12 +697,28 @@ def _nested_script(argv):
     return None
 
 
+_PS_ASSIGN_ARG_RE = re.compile(
+    r"(?:\[[^\]]*\])*\$[\w:{}.\[\]']+(?:[-+*/%]|\?\?)?=(.*)", re.S)
+
+
 def _strip_ps_call_block(argv):
     """PowerShell call/dot operator on a script block — `& { cmd }`, `&{cmd}`,
     `. {cmd}`. Strip a leading &/. operator (even when fused to `{`) and all
     brace characters so the inner command reaches the cmdlet checks (#46).
     Top-level `;`/`&&` already split a multi-command block upstream. A leading
     `.\\script.ps1` (dot with no brace) is left untouched."""
+    while argv:
+        # `$x = Set-Content f` runs the cmdlet as the assignment's value.
+        m = _PS_ASSIGN_ARG_RE.fullmatch(argv[0])
+        if m and m.group(1):
+            argv = [m.group(1)] + argv[1:]
+        elif m:
+            argv = argv[1:]
+        elif argv[0].startswith("$") and len(argv) > 1 \
+                and re.fullmatch(r"(?:[-+*/%]|\?\?)?=", argv[1]):
+            argv = argv[2:]
+        else:
+            break
     if not argv:
         return argv
     first = argv[0]
@@ -861,27 +882,42 @@ def _target_events(raw_targets, cwd, ps, cmd=False):
         yield ("target", resolved)
 
 
-_UNMODELED_HERE_STRING = ("a PowerShell here-string opener the parser does "
-                          "not model; command is denied because its "
-                          "statements cannot be told from string data")
+_UNMODELED_HERE_STRING = ("a PowerShell here-string opener or comment the "
+                          "parser does not model; command is denied because "
+                          "its statements cannot be told from string data")
 
 
 def _ps_unmodeled_here_string(command):
-    """True when `@'`/`@"` at a line end was read as an ordinary quote.
+    """True when a quote the scan read as a string may be something else.
 
-    ponytail: the here-string start rules are a subset of PowerShell's
-    grammar; an opener outside them would pair its quote with one in the
-    body and hide real statements, so it fails closed instead.
+    ponytail: the here-string and comment start rules are a subset of
+    PowerShell's grammar. An `@'`/`@"` opener outside them would pair its
+    quote with one in the body, and a `#` read as code that PowerShell reads
+    as a comment (`$x.y# '`) would let its quote open a string; either can
+    hide real statements, so it fails closed.
     """
     # A backtick escape ending right at the quote made its `@` literal.
-    prev_end, escaped = -1, False
+    prev_end, escaped = 0, False
     for m in _PS_QUOTE_RE.finditer(command):
-        if (m.group(0)[0] in _PS_SQ + _PS_DQ and m.start()
-                and command[m.start() - 1] == "@"
-                and not (prev_end == m.start() and escaped)
-                and re.match(rf"[ \t]*{_PS_EOL}", command[m.start() + 1:])):
+        if m.group(0)[0] in _PS_SQ + _PS_DQ:
+            if (m.start() and command[m.start() - 1] == "@"
+                    and not (prev_end == m.start() and escaped)
+                    and re.match(rf"[ \t]*{_PS_EOL}", command[m.start() + 1:])):
+                return True
+        if _ps_ambiguous_hash(command, prev_end, m.start()):
             return True
         prev_end, escaped = m.end(), m.group(0)[0] == "`"
+    return _ps_ambiguous_hash(command, prev_end, len(command))
+
+
+def _ps_ambiguous_hash(command, start, end):
+    """A `#` the scan kept as code (`$x.y#`, `a#b`) is a comment in some
+    PowerShell modes; if a quote or backtick follows it on that line, the
+    two readings disagree about where strings and statements end."""
+    for h in re.finditer("#", command[start:end]):
+        rest = re.match(r"[^\r\n]*", command[start + h.end():]).group(0)
+        if re.search(f"[`{_PS_SQ}{_PS_DQ}]", rest):
+            return True
     return False
 
 
@@ -897,6 +933,12 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     effective_cwd = parent_cwd = cwd
     job = None
     bash = not ps and not cmd
+    if ps:
+        # A backtick before a line break continues the line (CRLF: only the
+        # CR is escaped, so the LF still ends it).
+        command = _PS_QUOTE_RE.sub(
+            lambda m: " " * len(m.group(0))
+            if re.fullmatch(r"`[\r\n]", m.group(0)) else m.group(0), command)
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
     if bash:
         # Bash drops an unquoted backslash-newline before splitting, so
