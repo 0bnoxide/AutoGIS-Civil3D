@@ -446,7 +446,12 @@ class TestMainRule(TempRepoCase):
                     "Remove-Item -Path {seed.txt}",
                     # A quote inside a comment opens no string (review).
                     '<# " #>; Remove-Item seed.txt; Write-Output "x"',
-                    "# '\ngit reset --hard; Write-Output 'x'"):
+                    "# '\ngit reset --hard; Write-Output 'x'",
+                    # `<#` inside a token opens no comment (review).
+                    "Write-Output Foo<#x; Remove-Item seed.txt; #>",
+                    # `--%` ends at a newline or pipe.
+                    "findstr.exe --% x\nRemove-Item seed.txt",
+                    "findstr.exe --% x | ForEach-Object { git reset --hard }"):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo, ps=True), cmd)
         for cmd in ("if ($true) { git status }",
@@ -458,7 +463,10 @@ class TestMainRule(TempRepoCase):
                     "<# { git reset --hard } #>",
                     "Write-Output x # { git reset --hard }",
                     # A `#` inside a string opens no comment.
-                    "Write-Output '#'; git status"):
+                    "Write-Output '#'; git status",
+                    # After `--%` the line is literal native-command text.
+                    "findstr.exe --% { Remove-Item seed.txt }",
+                    "findstr.exe --% x; git reset --hard"):
             self.assertIsNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo, ps=True), cmd)
 

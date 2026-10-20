@@ -528,7 +528,8 @@ def _ps_write_targets(argv):
 
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _PS_QUOTE_RE = re.compile(r"'(?:''|[^'])*'|\"(?:`[\s\S]|\"\"|[^\"`])*\"")
-_PS_COMMENT_RE = re.compile(r"<#[\s\S]*?#>|(?<![^\s;|&{}()])#[^\n]*")
+# Comments open only at a token start: `Foo<#x` is one token, not a comment.
+_PS_COMMENT_RE = re.compile(r"(?<![^\s;|&{}()])(?:<#[\s\S]*?#>|#[^\n]*)")
 # Comments and strings in lexical order: a quote inside a comment opens
 # no string, and a `#` inside a string opens no comment.
 _PS_LEXEME_RE = re.compile(_PS_COMMENT_RE.pattern + "|" + _PS_QUOTE_RE.pattern)
@@ -555,6 +556,10 @@ def _mask_literals(command, cmd=False, ps=False):
         masked = _PS_LEXEME_RE.sub(
             lambda m: blank(m) if m.group()[0] in "'\"" else blank_comment(m),
             command)
+        # After the stop-parsing token `--%`, the rest of the line up to a
+        # pipe is literal native-command text, `;` and braces included.
+        masked = re.sub(r"(?<![^\s;|&{}()])--%[^\n|]*",
+                        lambda m: "--%" + " " * (len(m.group()) - 3), masked)
     elif cmd:
         masked = re.sub(r'"[^"]*"', blank, command)
     else:
