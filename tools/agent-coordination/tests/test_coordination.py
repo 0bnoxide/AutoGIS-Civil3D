@@ -438,13 +438,22 @@ class TestMainRule(TempRepoCase):
                     "if($true){git reset --hard}",
                     "try { git status } catch { git reset --hard }",
                     "foreach ($f in 1) { Remove-Item seed.txt }",
-                    "if ($true) { Set-Content seed.txt x }"):
+                    "if ($true) { Set-Content seed.txt x }",
+                    "if ($true) {\n  git status\n  git reset --hard\n}",
+                    "if ($a) { if ($b) { git reset --hard } }",
+                    "Get-ChildItem | ForEach-Object { git reset --hard }",
+                    # A block bound to a parameter is coerced to its text.
+                    "Remove-Item -Path {seed.txt}"):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo, ps=True), cmd)
         for cmd in ("if ($true) { git status }",
                     "Write-Output '{ git reset --hard }'",
                     "Get-ChildItem | ForEach-Object { $_.Name }",
-                    "Write-Output ${env:TEMP}"):
+                    "Write-Output ${env:TEMP}",
+                    # Comments are data, even when they hold a block.
+                    "# if ($true) { git reset --hard }",
+                    "<# { git reset --hard } #>",
+                    "Write-Output x # { git reset --hard }"):
             self.assertIsNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo, ps=True), cmd)
 

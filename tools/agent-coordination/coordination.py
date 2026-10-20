@@ -520,6 +520,7 @@ def _ps_write_targets(argv):
 
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _PS_QUOTE_RE = re.compile(r"'(?:''|[^'])*'|\"(?:`[\s\S]|\"\"|[^\"`])*\"")
+_PS_COMMENT_RE = re.compile(r"<#[\s\S]*?#>|(?<![^\s;|&{}()])#[^\n]*")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
 
@@ -541,6 +542,11 @@ def _mask_literals(command, cmd=False, ps=False):
     masked = quote_re.sub(blank, command)
     if cmd:
         return masked  # cmd has neither single-quoted strings nor heredocs
+    if ps:
+        # PowerShell comments are data: `<# ... #>`, and `#` to end of line
+        # where a token starts.
+        masked = _PS_COMMENT_RE.sub(
+            lambda m: re.sub(r"[^\n]", " ", m.group()), masked)
     # Openers are found in the real text (quote-masking blanks a quoted
     # delimiter like <<'EOF'); masking preserves offsets, so requiring the
     # << itself to be unmasked skips heredoc lookalikes inside strings.
@@ -666,7 +672,43 @@ def _strip_ps_call_block(argv):
     return stripped
 
 
-def _shell_segments(command, masked_all, cmd=False, ps=False):
+def _ps_block_spans(masked):
+    """Return (open, close) offsets of top-level PowerShell `{ ... }` blocks
+    in masked text. `${name}` is a variable, not a block; an unclosed block
+    runs to the end of the text."""
+    scan = re.sub(r"\$\{[^}]*\}", lambda m: " " * len(m.group()), masked)
+    spans, depth, start = [], 0, 0
+    for i, ch in enumerate(scan):
+        if ch == "{":
+            if not depth:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if not depth:
+                spans.append((start, i))
+    if depth:
+        spans.append((start, len(scan)))
+    return spans
+
+
+def _blank_block_bodies(masked, spans):
+    """Blank each block's body, newlines included, keeping its braces."""
+    for start, end in spans:
+        masked = masked[:start + 1] + " " * (end - start - 1) + masked[end:]
+    return masked
+
+
+def _drop_block_braces(text, spans):
+    """Replace each block's braces with spaces, keeping its body."""
+    for start, end in spans:
+        for i in (start, end):
+            if i < len(text):
+                text = text[:i] + " " + text[i + 1:]
+    return text
+
+
+def _shell_segments(command, masked_all, cmd=False):
     """Yield (segment, aligned masked text, background job) per statement.
 
     Outside cmd a lone `&` ends a statement and backgrounds it (Bash,
@@ -674,18 +716,11 @@ def _shell_segments(command, masked_all, cmd=False, ps=False):
     `&&`, the redirect forms (`2>&1`, `>&2`, `<&3`, `&>`) and `|&` are not
     statement ends. `&` binds looser than `&&`/`||`, so every segment of
     the list it ends shares one job id (None in the foreground).
-    PowerShell script-block braces also end a statement, so the body of
-    `if (...) { cmd }` is checked on its own (#210), and each brace is
-    yielded as a `{`/`}` marker segment; `${name}` variables are not blocks.
     """
     separators = r"&&|\|\||&|\n" if cmd \
         else r"&&|\|\||;|\n|(?<![<>|])&(?!>)"
-    scan = masked_all
-    if ps:
-        separators += r"|[{}]"
-        scan = re.sub(r"\$\{[^}]*\}", lambda m: " " * len(m.group()), scan)
     cuts = [(m.start(), m.end(), m.group())
-            for m in re.finditer(separators, scan)]
+            for m in re.finditer(separators, masked_all)]
     cuts.append((len(command), len(command), ""))
     seg_start, pending = 0, []
     for cut_start, cut_end, sep in cuts:
@@ -704,8 +739,6 @@ def _shell_segments(command, masked_all, cmd=False, ps=False):
             for item in pending:
                 yield (*item, cut_start if background else None)
             pending = []
-        if sep in ("{", "}"):
-            yield sep, sep, None  # block marker; only PowerShell cuts here
 
 
 def _pipeline_stages(segment, segment_masked, bash=False):
@@ -823,21 +856,30 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     job = None
     bash = not ps and not cmd
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
-    blocks = []  # cwds saved at each open PowerShell script block
+    if ps:
+        # Script-block bodies are parsed on their own below (#210), so
+        # their separators must not split the statement that holds them.
+        masked_all = _blank_block_bodies(masked_all,
+                                         _ps_block_spans(masked_all))
     for segment, seg_masked, seg_job in _shell_segments(
-            command, masked_all, cmd=cmd, ps=ps):
-        if ps and segment in ("{", "}"):
-            # A block may never run, so a `cd` inside it moves only the
-            # rest of that block, as before blocks were inspected.
-            if segment == "{":
-                blocks.append((effective_cwd, parent_cwd))
-            elif blocks:
-                effective_cwd, parent_cwd = blocks.pop()
-            continue
+            command, masked_all, cmd=cmd):
         if seg_job != job:
             # A background job's `cd` moves the rest of that job only; the
             # parent shell resumes where it was.
             job, effective_cwd = seg_job, parent_cwd
+        spans = _ps_block_spans(seg_masked) if ps else []
+        if spans:
+            # Check each block body as PowerShell, whether it runs (`if`,
+            # `ForEach-Object`, `&`) or not; its own `cd` stays inside it.
+            # The braces are dropped from the outer argv, so a block used
+            # as an argument value (`-Path {x}`) reads as that value.
+            for start, end in spans:
+                if _depth >= _MAX_UNWRAP_DEPTH:
+                    yield ("opaque", effective_cwd)
+                    break
+                yield from _shell_events(segment[start + 1:end],
+                                         effective_cwd, ps=True,
+                                         _depth=_depth + 1)
         stages = _pipeline_stages(segment, seg_masked, bash=bash)
         # `cd` is read before group peeling, as before #209, so peeling
         # never turns `(cd x` or a piped `{ cd x` into a parent-shell `cd`.
@@ -858,6 +900,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         if bash:
             segment, seg_masked = _peel_bash_grouping(segment, seg_masked)
             stages = _pipeline_stages(segment, seg_masked, bash=True)
+        elif spans:
+            stages = _pipeline_stages(
+                _drop_block_braces(segment, spans), seg_masked)
         raw_targets = _redirect_targets(segment, seg_masked)
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
