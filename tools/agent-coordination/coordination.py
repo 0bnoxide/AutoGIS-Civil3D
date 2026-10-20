@@ -801,8 +801,8 @@ def _command_name(token):
         name = token.replace("\\", "/").rsplit("/", 1)[-1]
     else:
         name = token.rstrip(". ")
-    # Git Bash runs `rm.exe` as rm.
-    return name[:-4] if name.lower().endswith(".exe") else name
+    # Git Bash runs `rm.exe` (or `RM.EXE`, case-insensitively) as rm.
+    return name[:-4].lower() if name.lower().endswith(".exe") else name
 
 
 def _argv_write_targets(argv, ps, cmd=False):
@@ -866,6 +866,8 @@ def _argv_subtree_targets(argv, ps, cmd=False):
                          if argv[i].lower() == "-newname"]
             new_names += [arg.partition(":")[2] for arg in argv[1:]
                           if arg.lower().startswith("-newname:")]
+            # Positional form: `Rename-Item src new`.
+            new_names = new_names or operands[1:]
             parent = re.split(r"[/\\]", operands[0].rstrip("/\\"))[:-1]
             operands += ["/".join(parent + [n]) for n in new_names]
         return operands, []
@@ -920,7 +922,7 @@ def _expand_operand(op, cwd, bash):
         if bash:
             word = os.path.expanduser(word)  # tilde expands before globbing
         if re.search(r"[*?[]", word):
-            out += glob.glob(os.path.join(cwd, word)) or [word]
+            out += sorted(glob.glob(os.path.join(cwd, word))) or [word]
         else:
             out.append(word)
     return out
@@ -942,7 +944,14 @@ def _move_destinations(moves, cwd, ps, cmd=False):
     for dest, sources, into in moves:
         sources = [path for src in sources
                    for path in _expand_operand(src, cwd, bash)]
-        for dest in _expand_operand(dest, cwd, bash):
+        dests = _expand_operand(dest, cwd, bash)
+        if into and len(dests) > 1:
+            # A multi-match destination glob: only the last match is the
+            # target; earlier matches are moved into it as more sources.
+            sources += dests[:-1]
+            raw += dests[:-1]
+            dests = dests[-1:]
+        for dest in dests:
             resolved = into and next(
                 _target_events([dest], cwd, ps, cmd=cmd), None)
             if resolved and os.path.isdir(resolved[1]):

@@ -1458,7 +1458,9 @@ class TestPreToolUseAdapter(TempRepoCase):
                 ("Bash", "", "rm.exe -rf src"),
                 ("Bash", "", "/usr/bin/mv.exe src elsewhere"),
                 ("PowerShell", "", "Rename-Item -Path lib -NewName src"),
-                ("PowerShell", "", "Rename-Item lib -NewName:src")):
+                ("PowerShell", "", "Rename-Item lib -NewName:src"),
+                ("Bash", "", "RM.EXE -rf src"),
+                ("Bash", "", "/usr/bin/MV.EXE src elsewhere")):
             with self.subTest(shell=shell or tool, command=command):
                 self.assertIn("contains file_glob 'src/lib/*' claimed by "
                               "session s2", decide(tool, command, shell))
@@ -1505,6 +1507,10 @@ class TestPreToolUseAdapter(TempRepoCase):
             with self.subTest(command=command):
                 self.assertIn("docs/lib", decide(command))
         self.assertEqual(decide("rm -rf docs/*.md"), "")
+        # A multi-match destination glob moves all but the last match.
+        os.makedirs(os.path.join(self.repo_path, "dummy"))
+        self.assertIn("docs/lib", decide("mv src d*"))
+        shutil.rmtree(os.path.join(self.repo_path, "dummy"))
         with mock.patch.dict(os.environ, {"HOME": self.repo_path,
                                          "USERPROFILE": self.repo_path}):
             self.assertIn("docs/lib", decide("rm -rf ~/docs/*"))
@@ -1515,6 +1521,11 @@ class TestPreToolUseAdapter(TempRepoCase):
         self.assertIn("target/lib", decide("mv stuff/* target"))
         self.assertIn("target/lib", decide("mv stuff/lib t*"))
         self.assertEqual(decide("mv stuff target"), "")
+        # A positional Rename-Item name lands beside the source.
+        self.assertIn("docs/lib", self.decide({
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "Rename-Item docs/x lib"},
+            "cwd": self.repo_path, "session_id": "s1"})[1])
         shutil.rmtree(os.path.join(self.repo_path, "stuff"))
         shutil.rmtree(os.path.join(self.repo_path, "target"))
         # Unlinking a symlink leaves the directory it points to alone.
