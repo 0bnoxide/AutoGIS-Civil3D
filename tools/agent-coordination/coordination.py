@@ -526,11 +526,16 @@ _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 # its own alternative so it is consumed before it can open a string.
 _PS_SQ, _PS_DQ = "'\u2018\u2019\u201a\u201b", '"\u201c\u201d\u201e'
 # A here-string opens only where `@` starts a token; inside a bare word
-# (`x@'`) the quote is ordinary.
-_PS_TOKEN_START = r"(?<![^\s;|&(){}\[=,])"
+# (`x@'`, `x=@'`) the quote is ordinary. An assignment (`$p=@'`) is matched
+# whole so its `=` counts as a boundary. PowerShell ends a line at CR, LF or
+# CRLF.
+_PS_TOKEN_START = r"(?<![^\s;|&(){}\[,])(?:\$[\w:]+\s*[-+*/%]?=\s*)?"
+_PS_EOL = r"(?:\r\n?|\n)"
 _PS_QUOTE_RE = re.compile(
-    rf"{_PS_TOKEN_START}@[{_PS_SQ}][ \t]*\r?\n(?:.*\r?\n)*?[{_PS_SQ}]@"
-    rf"|{_PS_TOKEN_START}@[{_PS_DQ}][ \t]*\r?\n(?:.*\r?\n)*?[{_PS_DQ}]@"
+    rf"{_PS_TOKEN_START}@[{_PS_SQ}][ \t]*{_PS_EOL}"
+    rf"(?:[^\r\n]*{_PS_EOL})*?[{_PS_SQ}]@"
+    rf"|{_PS_TOKEN_START}@[{_PS_DQ}][ \t]*{_PS_EOL}"
+    rf"(?:[^\r\n]*{_PS_EOL})*?[{_PS_DQ}]@"
     rf"|`[\s\S]"
     rf"|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*[{_PS_SQ}]"
     rf"|[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*[{_PS_DQ}]")
@@ -682,7 +687,7 @@ def _strip_ps_call_block(argv):
     return stripped
 
 
-def _shell_segments(command, masked_all, cmd=False):
+def _shell_segments(command, masked_all, cmd=False, ps=False):
     """Yield (segment, aligned masked text, background job) per statement.
 
     Outside cmd a lone `&` ends a statement and backgrounds it (Bash,
@@ -693,6 +698,8 @@ def _shell_segments(command, masked_all, cmd=False):
     """
     separators = r"&&|\|\||&|\n" if cmd \
         else r"&&|\|\||;|\n|(?<![<>|])&(?!>)"
+    if ps:
+        separators += r"|\r"  # PowerShell also ends a line at a bare CR
     cuts = [(m.start(), m.end(), m.group())
             for m in re.finditer(separators, masked_all)]
     cuts.append((len(command), len(command), ""))
@@ -794,7 +801,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     job = None
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
     for segment, seg_masked, seg_job in _shell_segments(
-            command, masked_all, cmd=cmd):
+            command, masked_all, cmd=cmd, ps=ps):
         if seg_job != job:
             # A background job's `cd` moves the rest of that job only; the
             # parent shell resumes where it was.
