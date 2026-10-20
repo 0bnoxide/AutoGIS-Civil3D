@@ -519,7 +519,18 @@ def _ps_write_targets(argv):
 
 
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
-_PS_QUOTE_RE = re.compile(r"'(?:''|[^'])*'|\"(?:`[\s\S]|\"\"|[^\"`])*\"")
+# PowerShell also accepts typographic quotes as delimiters, a here-string
+# runs to a line opening with its closing quote whatever it contains, and a
+# backtick outside a string escapes the next character (a quote included)
+# rather than opening a string (#179, #187). The backtick escape matches as
+# its own alternative so it is consumed before it can open a string.
+_PS_SQ, _PS_DQ = "'\u2018\u2019\u201a\u201b", '"\u201c\u201d\u201e'
+_PS_QUOTE_RE = re.compile(
+    rf"@[{_PS_SQ}][ \t]*\r?\n(?:.*\r?\n)*?[{_PS_SQ}]@"
+    rf"|@[{_PS_DQ}][ \t]*\r?\n(?:.*\r?\n)*?[{_PS_DQ}]@"
+    rf"|`[\s\S]"
+    rf"|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*[{_PS_SQ}]"
+    rf"|[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*[{_PS_DQ}]")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
 
@@ -533,6 +544,8 @@ def _mask_literals(command, cmd=False, ps=False):
     """
     def blank(m):
         s = m.group(0)
+        if s[0] == "`":
+            return s  # an escaped character outside a string
         return s[0] + " " * (len(s) - 2) + s[-1]
     # PowerShell backslashes are literal; backticks and doubled quotes escape.
     quote_re = _PS_QUOTE_RE if ps else _QUOTE_RE
@@ -740,7 +753,7 @@ def _argv_write_targets(argv, ps, cmd=False):
 def _target_events(raw_targets, cwd, ps, cmd=False):
     """Yield resolved target events for raw shell write operands."""
     for target in raw_targets:
-        target = target.strip("\"'")
+        target = target.strip("\"'" + (_PS_SQ + _PS_DQ if ps else ""))
         if ps or cmd:
             target = target.replace("\\", "/")
         if ps and re.match(r"[A-Za-z]{2,}:", target):
