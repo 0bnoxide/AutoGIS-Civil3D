@@ -1429,6 +1429,7 @@ class TestPreToolUseAdapter(TempRepoCase):
         "Write-Output `\"; Set-Content seed.txt boom; Write-Output \"y\"",
         "Write-Output `'; Set-Content seed.txt boom; Write-Output 'y'",
         "Set-Content \u2018seed.txt\u2019 boom",
+        "Write-Output x@'\n'; Set-Content seed.txt boom; Write-Output y'q\n'@z",
     )
     PS_DATA_ONLY = (
         "$p = @'\nprint(targets('echo x > seed.txt'))\n'@\n$p | python -",

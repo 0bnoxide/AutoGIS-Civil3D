@@ -525,9 +525,12 @@ _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 # rather than opening a string (#179, #187). The backtick escape matches as
 # its own alternative so it is consumed before it can open a string.
 _PS_SQ, _PS_DQ = "'\u2018\u2019\u201a\u201b", '"\u201c\u201d\u201e'
+# A here-string opens only where `@` starts a token; inside a bare word
+# (`x@'`) the quote is ordinary.
+_PS_TOKEN_START = r"(?<![^\s;|&(){}\[=,])"
 _PS_QUOTE_RE = re.compile(
-    rf"@[{_PS_SQ}][ \t]*\r?\n(?:.*\r?\n)*?[{_PS_SQ}]@"
-    rf"|@[{_PS_DQ}][ \t]*\r?\n(?:.*\r?\n)*?[{_PS_DQ}]@"
+    rf"{_PS_TOKEN_START}@[{_PS_SQ}][ \t]*\r?\n(?:.*\r?\n)*?[{_PS_SQ}]@"
+    rf"|{_PS_TOKEN_START}@[{_PS_DQ}][ \t]*\r?\n(?:.*\r?\n)*?[{_PS_DQ}]@"
     rf"|`[\s\S]"
     rf"|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*[{_PS_SQ}]"
     rf"|[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*[{_PS_DQ}]")
