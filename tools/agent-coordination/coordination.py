@@ -825,6 +825,15 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     job = None
     bash = not ps and not cmd
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
+    if bash:
+        # Bash drops an unquoted backslash-newline before splitting, so
+        # `> s\<newline>rc/x` writes `src/x` (#178). Quoted and heredoc text
+        # is blanked in the mask, so it keeps its continuations.
+        for m in reversed(list(re.finditer(r"\\+\n", masked_all))):
+            if (m.end() - m.start() - 1) % 2:
+                cut = m.end() - 2
+                command = command[:cut] + command[cut + 2:]
+                masked_all = masked_all[:cut] + masked_all[cut + 2:]
     for segment, seg_masked, seg_job in _shell_segments(
             command, masked_all, cmd=cmd):
         if seg_job != job:

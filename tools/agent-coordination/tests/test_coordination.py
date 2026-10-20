@@ -1426,12 +1426,24 @@ class TestPreToolUseAdapter(TempRepoCase):
                 })
                 self.assertIn("claimed by session s2", out)
 
+    def test_bash_line_continuations_join_before_parsing(self):
+        # Review of #178: Bash drops an unquoted backslash-newline.
+        for command in ("git \\\nreset --hard",
+                        "echo a\\\\\ngit reset --hard",
+                        "cat <<'EOF'\nx\\\nEOF\ngit reset --hard"):
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, self.repo_path, self.repo), command)
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            "echo 'a\\\n' && git status", self.repo_path, self.repo))
+
     def test_bash_redirect_backslash_escape_reaches_claimed_destination(self):
         # #178: Bash reads `s\\rc` as `src`; PowerShell keeps `\\` a separator.
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
         coordination.claim(self.repo, "s1", "branch", "feature")
         coordination.claim(self.repo, "s2", "file_glob", "src/*")
-        for command in (r"printf x > s\rc/code.cs", r"printf x >s\rc/code.cs 2>&1"):
+        for command in (r"printf x > s\rc/code.cs", r"printf x >s\rc/code.cs 2>&1",
+                        "printf x > s\\\nrc/code.cs"):
             with self.subTest(command=command):
                 rc, out = self.decide({
                     "tool_name": "Bash", "tool_input": {"command": command},
