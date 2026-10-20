@@ -527,9 +527,12 @@ _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _PS_SQ, _PS_DQ = "'\u2018\u2019\u201a\u201b", '"\u201c\u201d\u201e'
 # A here-string opens only where `@` starts a token; inside a bare word
 # (`x@'`, `x=@'`) the quote is ordinary. An assignment (`$p=@'`) is matched
-# whole so its `=` counts as a boundary. PowerShell ends a line at CR, LF or
-# CRLF.
-_PS_TOKEN_START = r"(?<![^\s;|&(){}\[,])(?:\$[\w:]+\s*[-+*/%]?=\s*)?"
+# whole so its `=` counts as a boundary, but only at statement start: in
+# argument mode (`Write-Output $p=@'`) it is a bare word. PowerShell ends a
+# line at CR, LF or CRLF.
+_PS_ASSIGN = (r"(?:(?<=[;\r\n{(])|^)[ \t]*(?:(?:\[[\w.]+\])*\$[\w:]+"
+              r"(?:\.\w+|\[[^\]\r\n]*\])*\s*[-+*/%]?=\s*)+")
+_PS_TOKEN_START = rf"(?:{_PS_ASSIGN}|(?<![^\s;|&(){{}}\[,]))"
 _PS_EOL = r"(?:\r\n?|\n)"
 _PS_QUOTE_RE = re.compile(
     rf"{_PS_TOKEN_START}@[{_PS_SQ}][ \t]*{_PS_EOL}"

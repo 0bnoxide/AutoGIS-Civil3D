@@ -1450,12 +1450,16 @@ class TestPreToolUseAdapter(TempRepoCase):
         "$p = @'\r'\r'@; Set-Content seed.txt boom; Write-Output 'z'",
         "$p=@'\n'\n'@; Set-Content seed.txt boom",
         "Write-Output a\rSet-Content seed.txt boom",
+        "Write-Output $p=@'\n'; Set-Content seed.txt boom; Write-Output y'q\n'@z",
+        "a && $p=@'\n'; Set-Content seed.txt boom; Write-Output y'q\n'@z",
     )
     PS_DATA_ONLY = (
         "$p = @'\nprint(targets('echo x > seed.txt'))\n'@\n$p | python -",
         "$p = @\"\nx > seed.txt\n\"@\n$p | python -",
         "$p=@'\r\nx > seed.txt\r\n'@\r\n$p | Out-Null",
         "Write-Output \u2018a\u2019\u2019; Remove-Item seed.txt; b\u2019",
+        "a; $q = $p=@'\nx > seed.txt\n'@",
+        "{ [string]$p.a[0] += @'\nx > seed.txt\n'@ }",
     )
 
     def ps_command_names(self, source):
