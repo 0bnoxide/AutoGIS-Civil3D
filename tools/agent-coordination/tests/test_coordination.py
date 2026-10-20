@@ -467,7 +467,11 @@ class TestMainRule(TempRepoCase):
                     (f"builtin cd {main} && git reset --hard", {}),
                     (f"pushd ~/{os.path.basename(main)} && git reset --hard",
                      {}),
-                    ("pushd $MAINREPO && git reset --hard", {})):
+                    ("pushd $MAINREPO && git reset --hard", {}),
+                    ("cd && cd " + os.path.basename(main)
+                     + " && git reset --hard", {}),
+                    ("Set-Location; Set-Location " + os.path.basename(main)
+                     + "; git reset --hard", {"ps": True})):
                 with self.subTest(command=command):
                     self.assertIsNotNone(coordination.deny_reason_for_shell(
                         command, safe, None, **kw))
@@ -477,6 +481,9 @@ class TestMainRule(TempRepoCase):
             with self.subTest(command=command):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     command, safe, None, ps=True))
+        # A wrapper that starts a process cannot move this shell.
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"env pushd {safe}; git reset --hard", main, None))
         for command, kw in (
                 (f"pushd {main} && popd && git reset --hard", {}),
                 (f"Push-Location {main}; Pop-Location; git reset --hard",

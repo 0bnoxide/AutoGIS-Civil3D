@@ -798,6 +798,8 @@ def _location_change(word, args, ps, cmd):
         paths = [a for a in args if a not in flags]
     if word in _POPD_WORDS and paths:
         return None, False
+    if not paths and not cmd and word not in _PUSHD_WORDS | _POPD_WORDS:
+        paths = ["~"]  # bare cd / Set-Location goes home
     return (paths[0] if paths else None), True
 
 
@@ -823,8 +825,12 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             job, effective_cwd = seg_job, parent_cwd
             stack = list(parent_stack)
         stages = _pipeline_stages(segment, seg_masked)
-        # `command pushd x` / `builtin cd x` still run in this shell.
-        first = _strip_cmd_prefixes(_argv_of(stages[0], ps=ps, cmd=cmd))
+        first = _argv_of(stages[0], ps=ps, cmd=cmd)
+        # `command pushd x` / `builtin cd x` still run in this shell; other
+        # wrappers (env, sudo, xargs) start a process that cannot move it.
+        while not (ps or cmd) and first[:1] in (["command"], ["builtin"]):
+            first = [a for i, a in enumerate(first[1:])
+                     if i or not a.startswith("-")]
         word = first[0].lower() if first and (ps or cmd) \
             else first[0] if first else ""
         if ps and len(stages) > 1 and any(
