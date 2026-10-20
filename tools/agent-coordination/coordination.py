@@ -522,6 +522,9 @@ _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _PS_QUOTE_RE = re.compile(r"'(?:''|[^'])*'|\"(?:`[\s\S]|\"\"|[^\"`])*\"")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
+# Bash: a backslash escapes the next character, including a space (#178).
+_BASH_REDIR_TARGET_RE = re.compile(
+    r">{1,2}\s*(\"[^\"]*\"|'[^']*'|(?:\\.|[^\s|;&<>\\])+)")
 
 
 def _mask_literals(command, cmd=False, ps=False):
@@ -695,13 +698,21 @@ def _pipeline_stages(segment, segment_masked):
     return stages
 
 
-def _redirect_targets(segment, segment_masked):
-    """Return raw redirect targets, preserving quoted filename text."""
+def _redirect_targets(segment, segment_masked, bash=False):
+    """Return raw redirect targets, preserving quoted filename text.
+
+    Bash targets are unescaped as Bash reads them (`s\\rc` is `src`);
+    Windows-shell backslashes stay literal path separators.
+    """
     targets = []
+    target_re = _BASH_REDIR_TARGET_RE if bash else _REDIR_TARGET_RE
     for match in REDIRECT_RE.finditer(segment_masked):
-        target = _REDIR_TARGET_RE.match(segment, match.start())
+        target = target_re.match(segment, match.start())
         if target:
-            targets.append(target.group(1))
+            raw = target.group(1)
+            if bash and not raw.startswith(("'", '"')):
+                raw = re.sub(r"\\(.)", r"\1", raw)
+            targets.append(raw)
     return targets
 
 
@@ -783,7 +794,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             if job is None:
                 parent_cwd = effective_cwd
             continue
-        raw_targets = _redirect_targets(segment, seg_masked)
+        raw_targets = _redirect_targets(segment, seg_masked,
+                                        bash=not ps and not cmd)
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
             if argv and argv[0].lower() in _CMD_PREFIXES:
