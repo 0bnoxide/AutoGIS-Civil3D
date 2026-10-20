@@ -468,6 +468,30 @@ class TestMainRule(TempRepoCase):
         self.assertIsNotNone(coordination.deny_reason_for_shell(
             f"cd {safe}; if ($true) {{ cd {main}; git reset --hard }}",
             self.repo_path, self.repo, ps=True))
+
+    def test_powershell_block_cd_may_move_later_statements(self):
+        # Review of #210: a block that runs moves the location for later
+        # statements, so they are checked in both possible locations.
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe, exist_ok=True)
+        main = self.repo_path.replace(os.sep, "/")
+        for cmd in (f"if ($true) {{ cd {main} }}; git reset --hard",
+                    f"if ($a) {{ if ($b) {{ cd {main} }} }}; git reset --hard",
+                    f"if ($true) {{ cd {self.base} }}; cd repo; "
+                    "git reset --hard"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, safe, self.repo, ps=True), cmd)
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            f"if ($true) {{ cd {main} }}; cd {safe}; git reset --hard",
+            safe, self.repo, ps=True))
+
+    def test_powershell_backtick_escaped_brace_is_not_a_block(self):
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            "Write-Output `{ Remove-Item seed.txt", self.repo_path, self.repo,
+            ps=True))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            "Write-Output ``{ Remove-Item seed.txt }", self.repo_path,
+            self.repo, ps=True))
     def test_bash_pipe_ampersand_stage_is_checked(self):
         # #208: the stage after `|&` must not start with `&`.
         for cmd in ("git status |& git reset --hard",

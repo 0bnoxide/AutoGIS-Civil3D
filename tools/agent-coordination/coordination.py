@@ -677,6 +677,8 @@ def _ps_block_spans(masked):
     in masked text. `${name}` is a variable, not a block; an unclosed block
     runs to the end of the text."""
     scan = re.sub(r"\$\{[^}]*\}", lambda m: " " * len(m.group()), masked)
+    # A backtick escapes the next character, so `` `{ `` is a literal brace.
+    scan = re.sub(r"`[\s\S]", lambda m: "  ", scan)
     spans, depth, start = [], 0, 0
     for i, ch in enumerate(scan):
         if ch == "{":
@@ -846,13 +848,21 @@ def _target_events(raw_targets, cwd, ps, cmd=False):
         yield ("target", resolved)
 
 
-def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
+def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
+                  _report_cwd=False):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
     One parser feeds both the stateless main rule and the claim layer, so a
-    write form covered by one is covered by the other.
+    write form covered by one is covered by the other. With `_report_cwd`,
+    the possible final cwds follow as ("cwd", path) events.
     """
     effective_cwd = parent_cwd = cwd
+    # PowerShell: other cwds a script block may have moved to. A block may
+    # or may not run, so later statements are checked in every one (#210).
+    alt = []
+
+    def cwds():
+        return [effective_cwd] + [c for c in alt if c != effective_cwd]
     job = None
     bash = not ps and not cmd
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
@@ -870,16 +880,23 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         spans = _ps_block_spans(seg_masked) if ps else []
         if spans:
             # Check each block body as PowerShell, whether it runs (`if`,
-            # `ForEach-Object`, `&`) or not; its own `cd` stays inside it.
-            # The braces are dropped from the outer argv, so a block used
-            # as an argument value (`-Path {x}`) reads as that value.
+            # `ForEach-Object`, `&`) or not. The braces are dropped from the
+            # outer argv, so a block used as an argument value (`-Path {x}`)
+            # reads as that value.
+            moved = []
             for start, end in spans:
                 if _depth >= _MAX_UNWRAP_DEPTH:
                     yield ("opaque", effective_cwd)
                     break
-                yield from _shell_events(segment[start + 1:end],
-                                         effective_cwd, ps=True,
-                                         _depth=_depth + 1)
+                for base in cwds():
+                    for event in _shell_events(
+                            segment[start + 1:end], base, ps=True,
+                            _depth=_depth + 1, _report_cwd=True):
+                        if event[0] == "cwd":
+                            moved.append(event[1])
+                        else:
+                            yield event
+            alt += [c for c in moved if c not in cwds()]
         stages = _pipeline_stages(segment, seg_masked, bash=bash)
         # `cd` is read before group peeling, as before #209, so peeling
         # never turns `(cd x` or a piped `{ cd x` into a parent-shell `cd`.
@@ -892,6 +909,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
                 and len(first) > 2 else first[1]
             if ps or cmd:
                 path = path.replace("\\", "/")
+            alt = [path if os.path.isabs(path) else os.path.join(c or ".", path)
+                   for c in alt]
             effective_cwd = path if os.path.isabs(path) \
                 else os.path.join(effective_cwd or ".", path)
             if job is None:
@@ -919,17 +938,23 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             nested = _nested_script(argv)
             if nested is not None:
                 if _depth < _MAX_UNWRAP_DEPTH:
-                    yield from _shell_events(
-                        nested[0], effective_cwd, ps=nested[1],
-                        _depth=_depth + 1, cmd=nested[2])
+                    for base in cwds():
+                        yield from _shell_events(
+                            nested[0], base, ps=nested[1],
+                            _depth=_depth + 1, cmd=nested[2])
                     continue
                 # The opaque remainder could mutate this repository; never
                 # silently discard it at the parser depth limit.
                 yield ("opaque", effective_cwd)
                 continue
-            yield ("git", argv, effective_cwd)
+            for base in cwds():
+                yield ("git", argv, base)
             raw_targets += _argv_write_targets(argv, ps, cmd=cmd)
-        yield from _target_events(raw_targets, effective_cwd, ps, cmd=cmd)
+        for base in cwds():
+            yield from _target_events(raw_targets, base, ps, cmd=cmd)
+    if _report_cwd:
+        for final in [parent_cwd] + alt:
+            yield ("cwd", final)
 
 
 def shell_write_targets(command, cwd, ps=False, cmd=False):
