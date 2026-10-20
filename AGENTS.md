@@ -8,7 +8,8 @@ Harness specifics:
 
 - Hooks are wired in the checked-in `.codex/hooks.json` (project trust
   required; verify with `/hooks`): SessionStart refreshes the
-  codebase-memory index, PreToolUse denies writes targeting `main` through
+  codebase-memory index and prints the project name to pass on every graph
+  query, PreToolUse denies writes targeting `main` through
   the shared rule engine in `tools/agent-coordination/`. On Windows the
   SessionStart command runs through `tools/agent-hooks/session-start.ps1`,
   which locates Git Bash relative to `git` itself.

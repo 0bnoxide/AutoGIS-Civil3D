@@ -14,7 +14,10 @@ Report 'gh' ($null -ne $gh) $(if ($gh) { (gh --version | Select-Object -First 1)
 $cbm = Get-Command codebase-memory-mcp -ErrorAction SilentlyContinue
 if ($cbm) {
     $log = Join-Path $env:USERPROFILE '.cache/codebase-memory-mcp/last-index.log'
-    $last = if (Test-Path $log) { Get-Content $log -Tail 1 } else { 'no index log yet' }
+    # The log is shared with every repository's hook (AutoGIS writes here too),
+    # so the last line may be another repository's. Take this repository's.
+    $mine = if (Test-Path $log) { Select-String -Path $log -SimpleMatch ' AutoGIS-Civil3D ' | Select-Object -Last 1 }
+    $last = if ($mine) { $mine.Line } else { 'no AutoGIS-Civil3D index entry in the log yet' }
     Report 'codebase-memory-mcp' $true $last
 } else {
     Report 'codebase-memory-mcp' $false 'fallback: Grep/Glob or a search subagent'

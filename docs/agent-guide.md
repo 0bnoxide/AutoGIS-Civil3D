@@ -47,8 +47,11 @@ to widen a claim elsewhere.
 6. **Use codebase-memory MCP before codebase search.** First query the
    codebase-memory MCP tools before invoking `rg`, `grep`, `Select-String`,
    or other file-by-file search. If the MCP is unavailable or cannot answer,
-   use a search subagent before manual search. The index is advisory — verify
-   anything load-bearing against the files. Session-start hooks refresh it
+   use a search subagent before manual search. Pass this repository's
+   project (`C-Users-ichbi-AutoGIS-Civil3D` on the primary machine; the
+   SessionStart hook prints it) on every project-scoped call, never another repository's or
+   a worktree's — see [agent-tools.md](agent-tools.md). The index is
+   advisory — verify anything load-bearing against the files. Session-start hooks refresh it
    and log the outcome to `~/.cache/codebase-memory-mcp/last-index.log`.
 7. **Ponytail is automatic for coding tasks.** Before writing, adding,
    refactoring, fixing, reviewing, or designing code, invoke the `ponytail`

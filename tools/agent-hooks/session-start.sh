@@ -57,10 +57,18 @@ if [[ -z "$cbm" ]]; then
   exit 0
 fi
 
+# Derived the way the server derives a project name from its path:
+# C:/Users/ichbi/AutoGIS-Civil3D -> C-Users-ichbi-AutoGIS-Civil3D
+project="$(printf '%s' "$repo_root" | sed 's/://g; s#[/\\]#-#g; s/^-//')"
+
+# Tell the agent which project to query. The server is one user-scope
+# instance shared with every repository on this machine: query tools require
+# an explicit `project`, and an agent left to choose from list_projects can
+# pick AutoGIS (whose name is a prefix of ours) or a stale per-worktree
+# project. SessionStart stdout is added to the agent's context.
+echo "codebase-memory: pass project=\"$project\" on every project-scoped codebase-memory call (search, trace, snippet, architecture, index_status) in this repository; list_projects and index_repository take no project. Results from any other project are not this repository's code."
+
 if "$cbm" cli index_repository "{\"repo_path\":\"$repo_root\",\"mode\":\"full\"}" >/dev/null 2>&1; then
-  # Derived the way the server derives a project name from its path:
-  # C:/Users/ichbi/AutoGIS-Civil3D -> C-Users-ichbi-AutoGIS-Civil3D
-  project="$(printf '%s' "$repo_root" | sed 's/://g; s#[/\\]#-#g')"
   status="$("$cbm" cli index_status "{\"project\":\"$project\"}" 2>/dev/null || true)"
   note "ok ${status:-status unavailable for $project}"
 else
