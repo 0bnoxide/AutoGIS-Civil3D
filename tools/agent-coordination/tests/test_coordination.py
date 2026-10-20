@@ -443,7 +443,10 @@ class TestMainRule(TempRepoCase):
                     "if ($a) { if ($b) { git reset --hard } }",
                     "Get-ChildItem | ForEach-Object { git reset --hard }",
                     # A block bound to a parameter is coerced to its text.
-                    "Remove-Item -Path {seed.txt}"):
+                    "Remove-Item -Path {seed.txt}",
+                    # A quote inside a comment opens no string (review).
+                    '<# " #>; Remove-Item seed.txt; Write-Output "x"',
+                    "# '\ngit reset --hard; Write-Output 'x'"):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo, ps=True), cmd)
         for cmd in ("if ($true) { git status }",
@@ -453,7 +456,9 @@ class TestMainRule(TempRepoCase):
                     # Comments are data, even when they hold a block.
                     "# if ($true) { git reset --hard }",
                     "<# { git reset --hard } #>",
-                    "Write-Output x # { git reset --hard }"):
+                    "Write-Output x # { git reset --hard }",
+                    # A `#` inside a string opens no comment.
+                    "Write-Output '#'; git status"):
             self.assertIsNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo, ps=True), cmd)
 
@@ -1570,6 +1575,44 @@ class TestPreToolUseAdapter(TempRepoCase):
             }, "cwd": self.repo_path,
         })
         self.assertIn("main is read-only", out)
+
+    def test_cmd_caret_escapes_are_literal(self):
+        # #185: `^&` and `^>` are text in cmd; unescaped operators still deny.
+        # The outer cmd consumes one caret layer before a child cmd reparses.
+        for command, denied in (("cmd /c echo ^& git reset --hard", True),
+                                ("cmd /c echo ^^^& git reset --hard", False),
+                                ("echo a ^& git reset --hard", False),
+                                ("echo a ^> seed.txt", False),
+                                ("echo a & git reset --hard", True),
+                                ("echo a ^^& git reset --hard", True),
+                                ('echo "a ^" & git reset --hard', True)):
+            # Both outer shells pass a single-quoted script through intact.
+            for text, shell in ((f"cmd /c '{command}'", "pwsh"),
+                                (f"cmd /c '{command}'", "/bin/bash"),
+                                (command, "cmd.exe")):
+                with self.subTest(command=command, shell=shell):
+                    rc, out = self.decide({
+                        "tool_name": "Bash", "tool_input": {
+                            "command": text, "shell": shell,
+                        }, "cwd": self.repo_path,
+                    })
+                    if denied:
+                        self.assertIn("main is read-only", out)
+                    else:
+                        self.assertEqual(out, "")
+
+    def test_cmd_caret_escaped_paths_reach_claims(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for command in (r"del s^rc\code.cs", r"echo x > s^rc\code.cs"):
+            with self.subTest(command=command):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {
+                        "command": command, "shell": "cmd.exe",
+                    }, "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
 
     def test_cmd_scripts_preserve_windows_git_paths(self):
         other = make_repo(self.base, "other-main")

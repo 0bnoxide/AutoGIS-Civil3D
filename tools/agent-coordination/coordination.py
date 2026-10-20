@@ -394,7 +394,15 @@ def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False, cmd=False):
     return None
 
 
+def _cmd_unescape(text):
+    """Drop cmd's `^` escape outside double quotes (`s^rc` is `src`)."""
+    return re.sub(r'"[^"]*"|\^(.)', lambda m: m.group(0)
+                  if m.group(1) is None else m.group(1), text, flags=re.S)
+
+
 def _argv_of(stage, ps=False, cmd=False):
+    if cmd:
+        stage = _cmd_unescape(stage)
     try:
         lexer = shlex.shlex(stage.strip(), posix=True)
         lexer.whitespace_split = True
@@ -521,6 +529,9 @@ def _ps_write_targets(argv):
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 _PS_QUOTE_RE = re.compile(r"'(?:''|[^'])*'|\"(?:`[\s\S]|\"\"|[^\"`])*\"")
 _PS_COMMENT_RE = re.compile(r"<#[\s\S]*?#>|(?<![^\s;|&{}()])#[^\n]*")
+# Comments and strings in lexical order: a quote inside a comment opens
+# no string, and a `#` inside a string opens no comment.
+_PS_LEXEME_RE = re.compile(_PS_COMMENT_RE.pattern + "|" + _PS_QUOTE_RE.pattern)
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
 
@@ -535,18 +546,23 @@ def _mask_literals(command, cmd=False, ps=False):
     def blank(m):
         s = m.group(0)
         return s[0] + " " * (len(s) - 2) + s[-1]
-    # PowerShell backslashes are literal; backticks and doubled quotes escape.
-    quote_re = _PS_QUOTE_RE if ps else _QUOTE_RE
-    if cmd:
-        quote_re = re.compile(r'"[^"]*"')
-    masked = quote_re.sub(blank, command)
-    if cmd:
-        return masked  # cmd has neither single-quoted strings nor heredocs
+    def blank_comment(m):
+        return re.sub(r"[^\n]", " ", m.group())
     if ps:
-        # PowerShell comments are data: `<# ... #>`, and `#` to end of line
+        # PowerShell backslashes are literal; backticks and doubled quotes
+        # escape. Comments are data: `<# ... #>`, and `#` to end of line
         # where a token starts.
-        masked = _PS_COMMENT_RE.sub(
-            lambda m: re.sub(r"[^\n]", " ", m.group()), masked)
+        masked = _PS_LEXEME_RE.sub(
+            lambda m: blank(m) if m.group()[0] in "'\"" else blank_comment(m),
+            command)
+    elif cmd:
+        masked = re.sub(r'"[^"]*"', blank, command)
+    else:
+        masked = _QUOTE_RE.sub(blank, command)
+    if cmd:
+        # `^x` is a literal x, so `^&` is not a separator (#185). Quoted
+        # carets are already blanked. cmd has no single quotes or heredocs.
+        return re.sub(r"\^.", lambda m: "  ", masked, flags=re.S)
     # Openers are found in the real text (quote-masking blanks a quoted
     # delimiter like <<'EOF'); masking preserves offsets, so requiring the
     # << itself to be unmasked skips heredoc lookalikes inside strings.
@@ -790,13 +806,14 @@ def _peel_bash_grouping(segment, masked):
     return segment, masked
 
 
-def _redirect_targets(segment, segment_masked):
+def _redirect_targets(segment, segment_masked, cmd=False):
     """Return raw redirect targets, preserving quoted filename text."""
     targets = []
     for match in REDIRECT_RE.finditer(segment_masked):
         target = _REDIR_TARGET_RE.match(segment, match.start())
         if target:
-            targets.append(target.group(1))
+            targets.append(_cmd_unescape(target.group(1)) if cmd
+                           else target.group(1))
     return targets
 
 
@@ -922,7 +939,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         elif spans:
             stages = _pipeline_stages(
                 _drop_block_braces(segment, spans), seg_masked)
-        raw_targets = _redirect_targets(segment, seg_masked)
+        raw_targets = _redirect_targets(segment, seg_masked, cmd=cmd)
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
             if argv and _exe_name(argv[0]) in _CMD_PREFIXES:
