@@ -444,6 +444,12 @@ class TestMainRule(TempRepoCase):
             (f"& {{ Set-Location {main} }}; git reset --hard", {"ps": True}),
             (f"if ($true) {{ cd {main} }}; git reset --hard", {"ps": True}),
             (f"if exist x cd {main} & git reset --hard", {"cmd": True}),
+            (f"command -p -- pushd {main} && git reset --hard", {}),
+            (f"command -p pushd {main} && git reset --hard", {}),
+            (f"& Set-Location {main}; git reset --hard", {"ps": True}),
+            (f". Set-Location {main}; git reset --hard", {"ps": True}),
+            (f"eval 'cd {main}'; git reset --hard", {}),
+            (f"iex 'cd {main}'; git reset --hard", {"ps": True}),
             (f"(cd {main}) & git reset --hard", {"cmd": True}),
             (f"pushd {safe}; cd /tmp; pushd >/dev/null; git reset --hard", {}),
             (f"cd {safe} > /dev/null 2>&1; pushd {main} 2>$null; "

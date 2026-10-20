@@ -828,6 +828,15 @@ _PS_CD_WORDS = {"chdir", "set-location", "sl"} | _PUSHD_WORDS | _POPD_WORDS
 # inside a PowerShell script block or expression, or anywhere past a cmd
 # segment's first word (`if exist x cd y`, `(cd y)`). It may move the shell
 # in ways the model cannot follow, so it fails closed.
+# `eval "cd x"` / `iex 'cd x'` run a location change from string text the
+# masked scan cannot see.
+_EVAL_WORDS = {
+    "bash": re.compile(r"\s*(?:(?:command|builtin)\s+)?eval(?![\w-])"),
+    "ps": re.compile(r"\s*[&.]?\s*(?:iex|invoke-expression)(?![\w-])", re.I),
+}
+_LOCATION_TEXT_RE = re.compile(
+    r"(?<![\w-])(?:cd|chdir|sl|set-location|push-location|pop-location|"
+    r"pushd|popd)(?![\w-])", re.I)
 _HIDDEN_LOCATION_RE = {
     "bash": re.compile(
         r"(?:\$\(|`|[({!)]|(?<![\w-])(?:if|then|else|elif|do|while|until|time)"
@@ -933,7 +942,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             # The segment's own leading location word is the modeled one.
             check = re.sub(r"^\s*@?(?:cd|chdir|pushd|popd)(?![\w-])",
                            lambda m: " " * len(m.group(0)), check, flags=re.I)
-        if hidden_re.search(check):
+        if hidden_re.search(check) or _EVAL_WORDS.get(
+                "ps" if ps else "cmd" if cmd else "bash", re.compile("$^")
+                ).match(check) and _LOCATION_TEXT_RE.search(segment):
             yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
             continue
         if seg_job != job:
@@ -949,10 +960,17 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         # wrappers (env, sudo, xargs) start a process that cannot move it.
         # `command -v pushd` only describes pushd, so `-v`/`-V` stop the
         # peel; the stage is then an ordinary command.
-        while not (ps or cmd) and first[:1] in (["command"], ["builtin"]) \
-                and first[1:2] not in (["-v"], ["-V"]):
-            first = [a for i, a in enumerate(first[1:])
-                     if i or not a.startswith("-")]
+        while not (ps or cmd) and first[:1] in (["command"], ["builtin"]):
+            n = 1
+            while n < len(first) and first[n].startswith("-") \
+                    and first[n] != "--":
+                n += 1
+            if any(set(o) & set("vV") for o in first[1:n]):
+                break
+            first = first[n + (first[n:n + 1] == ["--"]):]
+        # `& Set-Location x` / `. Set-Location x` run the cmdlet here.
+        while ps and first[:1] in (["&"], ["."]):
+            first = first[1:]
         word = first[0].lower() if first and (ps or cmd) \
             else first[0] if first else ""
         if ps and len(stages) > 1 and any(
