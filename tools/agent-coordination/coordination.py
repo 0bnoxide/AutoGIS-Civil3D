@@ -528,8 +528,11 @@ def _ps_write_targets(argv):
 
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\[\s\S]|[^\"\\])*\"")
 _PS_QUOTE_RE = re.compile(r"'(?:''|[^'])*'|\"(?:`[\s\S]|\"\"|[^\"`])*\"")
-# Comments open only at a token start: `Foo<#x` is one token, not a comment.
-_PS_COMMENT_RE = re.compile(r"(?<![^\s;|&{}()])(?:<#[\s\S]*?#>|#[^\n]*)")
+# Comments open only at a token start: `Foo<#x` is one token, not a comment,
+# and so is ``foo`;#x``, whose backtick-escaped `;` is no boundary. (A
+# boundary after an escaped backtick then reads as text: over-denies only.)
+_PS_COMMENT_RE = re.compile(
+    r"(?<![^\s;|&{}()])(?<!`[\s;|&{}()])(?:<#[\s\S]*?#>|#[^\n]*)")
 # Comments and strings in lexical order: a quote inside a comment opens
 # no string, and a `#` inside a string opens no comment.
 _PS_LEXEME_RE = re.compile(_PS_COMMENT_RE.pattern + "|" + _PS_QUOTE_RE.pattern)

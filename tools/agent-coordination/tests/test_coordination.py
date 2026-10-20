@@ -449,6 +449,8 @@ class TestMainRule(TempRepoCase):
                     "# '\ngit reset --hard; Write-Output 'x'",
                     # `<#` inside a token opens no comment (review).
                     "Write-Output Foo<#x; Remove-Item seed.txt; #>",
+                    "Write-Output foo`;#bar; Remove-Item seed.txt",
+                    "Write-Output foo` <#x; Remove-Item seed.txt #>",
                     # `--%` ends at a newline or pipe.
                     "findstr.exe --% x\nRemove-Item seed.txt",
                     "findstr.exe --% x | ForEach-Object { git reset --hard }"):
