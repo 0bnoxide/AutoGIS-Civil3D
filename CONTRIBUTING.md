@@ -23,6 +23,12 @@ at least one substantial adversarial review from a perspective other than
 the writer's, with depth proportioned to risk. Request review by marking
 the PR ready for review or commenting `@codex review`.
 
+A PR gets at most 10 fix-and-re-review rounds in total; each push that
+answers review findings is one round. If findings remain after round 10,
+stop pushing, leave the PR unmerged, and ask the owner how to proceed.
+A tighter limit elsewhere, such as the orchestrator's repair limit in
+[docs/orchestration.md](docs/orchestration.md), still applies.
+
 CI must be green. Blocking checks: the .NET build/test/format job, the
 coordination and asset-sync test suites, and the documentation checks
 (`tools/checks/docs_checks.py`) — link resolution, no point-in-time state in
