@@ -1366,9 +1366,10 @@ def cmd_init(repo):
 def codex_hook_trust_finding(repo):
     """Return doctor's Codex hook-trust finding.
 
-    Codex keys hook trust by path and content hash, so a record only holds
-    for the exact `.codex/hooks.json` it names. Linked worktrees run the
-    primary checkout's copy, so that is the one hashed.
+    Codex tracks trust per hook definition, but the record pins the hash of
+    the whole `.codex/hooks.json`, so any change to the file marks it stale
+    for review, even when unchanged definitions stay trusted. Linked
+    worktrees run the primary checkout's copy, so that is the one hashed.
     """
     unverified = ("Codex project-hook trust: unverified until the documented "
                   "/hooks inspection and activation probe are recorded")
@@ -1402,9 +1403,10 @@ def codex_hook_trust_finding(repo):
         return unverified
     if recorded != current:
         return ("Codex project-hook trust: stale — .codex/hooks.json changed "
-                f"since the {date} verification; re-trust it in /hooks from "
-                "the primary checkout, rerun the activation probe, and record "
-                "the new date and hash")
+                f"since the {date} verification; inspect /hooks from the "
+                "primary checkout, review the changed hook definitions, run "
+                "an owner-authorized activation probe, and record the new "
+                "evidence, date, and hash")
     return f"Codex project-hook trust: verified ({date})"
 
 
@@ -1874,6 +1876,8 @@ def main(argv=None):
         if args.command == "init":
             return cmd_init(repo)
         if args.command == "doctor":
+            # Findings carry em dashes; a Windows pipe defaults to cp1252 (#195).
+            sys.stdout.reconfigure(encoding="utf-8")
             return cmd_doctor(repo)
         if args.command == "status":
             return cmd_status(repo)

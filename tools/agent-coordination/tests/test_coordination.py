@@ -96,6 +96,22 @@ class TestCodexHookTrust(TempRepoCase):
         output = self.doctor_output()
         self.assertNotIn("Codex project-hook trust: verified", output)
         self.assertIn("Codex project-hook trust: stale", output)
+        # Trust is per hook definition (#212): no blanket re-trust advice.
+        self.assertIn("review the changed hook definitions", output)
+        self.assertNotIn("re-trust", output)
+
+    def test_doctor_writes_utf8_when_piped_under_a_legacy_encoding(self):
+        # #195: a Windows pipe defaults stdout to cp1252.
+        self.write_complete_evidence(hashlib.sha256(b"old").hexdigest())
+        self.write_hooks_config(self.repo_path, b"{}\n")
+        env = dict(os.environ, PYTHONIOENCODING="cp1252")
+        result = subprocess.run(
+            [sys.executable, os.path.join(MODULE_DIR, "coordination.py"),
+             "doctor"], cwd=self.repo_path, env=env, capture_output=True,
+            check=False)
+        self.assertEqual(result.returncode, coordination.ALLOW, result.stderr)
+        self.assertIn("Codex project-hook trust: stale \u2014",
+                      result.stdout.decode("utf-8"))
 
     def test_doctor_reports_record_without_config_hash_as_unverified(self):
         self.write_hooks_config(self.repo_path, b"{}\n")
