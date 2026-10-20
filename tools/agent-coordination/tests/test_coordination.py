@@ -1506,6 +1506,46 @@ class TestPreToolUseAdapter(TempRepoCase):
         shutil.rmtree(os.path.join(self.repo_path, "docs"))
         self.assertIn("contains file_glob 'docs/lib/*'", decide("mv src docs"))
 
+    def test_bash_line_continuations_join_before_parsing(self):
+        # Review of #178: Bash drops an unquoted backslash-newline.
+        for command in ("git \\\nreset --hard",
+                        "echo a\\\\\ngit reset --hard",
+                        "cat <<'EOF'\nx\\\nEOF\ngit reset --hard"):
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, self.repo_path, self.repo), command)
+        for command in ("echo 'a\\\n' && git status",
+                        'echo "foo\\\n; git reset --hard"'):
+            with self.subTest(command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, self.repo_path, self.repo), command)
+        # Escaped separators are literal; an escaped backslash is not.
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            r"echo a \; git reset --hard", self.repo_path, self.repo))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            r"echo a \\; git reset --hard", self.repo_path, self.repo))
+
+    def test_bash_redirect_backslash_escape_reaches_claimed_destination(self):
+        # #178: Bash reads `s\\rc` as `src`; PowerShell keeps `\\` a separator.
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for command in (r"printf x > s\rc/code.cs", r"printf x >s\rc/code.cs 2>&1",
+                        "printf x > s\\\nrc/code.cs",
+                        r"printf x > src/\;code.cs"):
+            with self.subTest(command=command):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {"command": command},
+                    "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
+        self.assertEqual(
+            coordination.shell_write_targets(r"printf x > a\ b.txt", "/r"),
+            [os.path.join("/r", "a b.txt")])
+        self.assertEqual(coordination.shell_write_targets(
+            r"Write-Output x > s\rc\code.cs", "/r", ps=True),
+            [os.path.join("/r", "s/rc/code.cs")])
+
     def test_ambiguous_data_is_conservative_but_explicit_shell_data_allowed(self):
         # Each string is harmless data in its actual shell; the other parser
         # sees a prohibited command, so ambiguous input deliberately denies.
@@ -1579,6 +1619,44 @@ class TestPreToolUseAdapter(TempRepoCase):
             }, "cwd": self.repo_path,
         })
         self.assertIn("main is read-only", out)
+
+    def test_cmd_caret_escapes_are_literal(self):
+        # #185: `^&` and `^>` are text in cmd; unescaped operators still deny.
+        # The outer cmd consumes one caret layer before a child cmd reparses.
+        for command, denied in (("cmd /c echo ^& git reset --hard", True),
+                                ("cmd /c echo ^^^& git reset --hard", False),
+                                ("echo a ^& git reset --hard", False),
+                                ("echo a ^> seed.txt", False),
+                                ("echo a & git reset --hard", True),
+                                ("echo a ^^& git reset --hard", True),
+                                ('echo "a ^" & git reset --hard', True)):
+            # Both outer shells pass a single-quoted script through intact.
+            for text, shell in ((f"cmd /c '{command}'", "pwsh"),
+                                (f"cmd /c '{command}'", "/bin/bash"),
+                                (command, "cmd.exe")):
+                with self.subTest(command=command, shell=shell):
+                    rc, out = self.decide({
+                        "tool_name": "Bash", "tool_input": {
+                            "command": text, "shell": shell,
+                        }, "cwd": self.repo_path,
+                    })
+                    if denied:
+                        self.assertIn("main is read-only", out)
+                    else:
+                        self.assertEqual(out, "")
+
+    def test_cmd_caret_escaped_paths_reach_claims(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for command in (r"del s^rc\code.cs", r"echo x > s^rc\code.cs"):
+            with self.subTest(command=command):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {
+                        "command": command, "shell": "cmd.exe",
+                    }, "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
 
     def test_cmd_scripts_preserve_windows_git_paths(self):
         other = make_repo(self.base, "other-main")
