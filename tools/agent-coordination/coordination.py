@@ -873,11 +873,16 @@ def _ps_unmodeled_here_string(command):
     grammar; an opener outside them would pair its quote with one in the
     body and hide real statements, so it fails closed instead.
     """
-    return any(
-        m.group(0)[0] in _PS_SQ + _PS_DQ and m.start()
-        and command[m.start() - 1] == "@"
-        and re.match(rf"[ \t]*{_PS_EOL}", command[m.start() + 1:])
-        for m in _PS_QUOTE_RE.finditer(command))
+    # A backtick escape ending right at the quote made its `@` literal.
+    prev_end, escaped = -1, False
+    for m in _PS_QUOTE_RE.finditer(command):
+        if (m.group(0)[0] in _PS_SQ + _PS_DQ and m.start()
+                and command[m.start() - 1] == "@"
+                and not (prev_end == m.start() and escaped)
+                and re.match(rf"[ \t]*{_PS_EOL}", command[m.start() + 1:])):
+            return True
+        prev_end, escaped = m.end(), m.group(0)[0] == "`"
+    return False
 
 
 def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):

@@ -1520,6 +1520,8 @@ class TestPreToolUseAdapter(TempRepoCase):
             with self.subTest(command=command):
                 self.assertEqual(coordination.shell_write_targets(
                     command, self.repo_path, ps=True), [])
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, self.base, None, ps=True))
                 rc, out = self.decide({
                     "tool_name": "PowerShell", "tool_input": {"command": command},
                     "cwd": self.repo_path,
@@ -1565,6 +1567,7 @@ class TestPreToolUseAdapter(TempRepoCase):
         "Write-Output a # ; Remove-Item seed.txt",
         "Write-Output a <# ; Remove-Item seed.txt #>",
         "Write-Output a#b; Write-Output 'Remove-Item seed.txt'",
+        "Write-Output `@'\n; Remove-Item seed.txt\n'",
         "Write-Output x`|Remove-Item seed.txt`\nboom",
     )
 
@@ -1619,6 +1622,8 @@ class TestPreToolUseAdapter(TempRepoCase):
                     self.assertNotIn("Remove-Item", names)
                 self.assertEqual(coordination.shell_write_targets(
                     command, self.repo_path, ps=True), [])
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, self.base, None, ps=True))
         # An actual redirect after the here-string is still enforced.
         rc, out = self.decide({
             "tool_name": "PowerShell", "tool_input": {
