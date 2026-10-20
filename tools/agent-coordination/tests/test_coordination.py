@@ -457,6 +457,20 @@ class TestMainRule(TempRepoCase):
             safe, None, ps=True))
         # Outside any repository an unmodeled form could still enter one, and
         # a PowerShell location cmdlet in a pipeline takes a piped path.
+        home = os.path.dirname(main)
+        with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home,
+                                          "MAINREPO": main}):
+            for command, kw in (
+                    (f"Push-Location {main}; Push-Location; git reset --hard",
+                     {"ps": True}),
+                    (f"command pushd {main} && git reset --hard", {}),
+                    (f"builtin cd {main} && git reset --hard", {}),
+                    (f"pushd ~/{os.path.basename(main)} && git reset --hard",
+                     {}),
+                    ("pushd $MAINREPO && git reset --hard", {})):
+                with self.subTest(command=command):
+                    self.assertIsNotNone(coordination.deny_reason_for_shell(
+                        command, safe, None, **kw))
         for command in (
                 f"Push-Location {main} -StackName A; git reset --hard",
                 f"'{main}' | Set-Location; git reset --hard"):

@@ -823,7 +823,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             job, effective_cwd = seg_job, parent_cwd
             stack = list(parent_stack)
         stages = _pipeline_stages(segment, seg_masked)
-        first = _argv_of(stages[0], ps=ps, cmd=cmd)
+        # `command pushd x` / `builtin cd x` still run in this shell.
+        first = _strip_cmd_prefixes(_argv_of(stages[0], ps=ps, cmd=cmd))
         word = first[0].lower() if first and (ps or cmd) \
             else first[0] if first else ""
         if ps and len(stages) > 1 and any(
@@ -848,10 +849,15 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             elif path:
                 if ps or cmd:
                     path = path.replace("\\", "/")
+                # The shell expands ~ and set variables before the change;
+                # an unset `$VAR` stays unresolved, as it always has (#56).
+                path = os.path.expandvars(os.path.expanduser(path))
                 if word in _PUSHD_WORDS:
                     stack.append(effective_cwd)
                 effective_cwd = path if os.path.isabs(path) \
                     else os.path.join(effective_cwd or ".", path)
+            elif word in _PUSHD_WORDS and ps:
+                stack.append(effective_cwd)  # bare Push-Location: no move
             elif word in _PUSHD_WORDS and stack:
                 # Bare Bash pushd swaps the top two directories.
                 effective_cwd, stack[-1] = stack[-1], effective_cwd
