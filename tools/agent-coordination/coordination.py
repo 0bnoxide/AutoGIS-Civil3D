@@ -383,9 +383,12 @@ def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False, cmd=False):
         if event[0] == "git":
             reason = deny_reason_for_git_argv(event[1], event[2])
         elif event[0] == "opaque":
-            if repo_hint is None:
+            # An opaque event with its own reason denies even outside a
+            # repository: the unparsed text could move into one.
+            if repo_hint is None and len(event) < 3:
                 continue
-            return ("nested interpreter depth exceeds the parser limit; "
+            return (event[2] if len(event) > 2 else
+                    "nested interpreter depth exceeds the parser limit; "
                     "command is denied while repository protection applies")
         else:
             reason = deny_reason_for_target(event[1], repo_hint)
@@ -566,7 +569,7 @@ def _mask_literals(command, cmd=False, ps=False):
     def blank(m):
         s = m.group(0)
         if s[0] == "`":
-            return s  # an escaped character outside a string
+            return "` "  # an escaped character is literal, never syntax
         return s[0] + " " * (len(s) - 2) + s[-1]
     # PowerShell backslashes are literal; backticks and doubled quotes escape.
     quote_re = _PS_QUOTE_RE if ps else _QUOTE_RE
@@ -843,12 +846,34 @@ def _target_events(raw_targets, cwd, ps, cmd=False):
         yield ("target", resolved)
 
 
+_UNMODELED_HERE_STRING = ("a PowerShell here-string opener the parser does "
+                          "not model; command is denied because its "
+                          "statements cannot be told from string data")
+
+
+def _ps_unmodeled_here_string(command):
+    """True when `@'`/`@"` at a line end was read as an ordinary quote.
+
+    ponytail: the here-string start rules are a subset of PowerShell's
+    grammar; an opener outside them would pair its quote with one in the
+    body and hide real statements, so it fails closed instead.
+    """
+    return any(
+        m.group(0)[0] in _PS_SQ + _PS_DQ and m.start()
+        and command[m.start() - 1] == "@"
+        and re.match(rf"[ \t]*{_PS_EOL}", command[m.start() + 1:])
+        for m in _PS_QUOTE_RE.finditer(command))
+
+
 def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
     One parser feeds both the stateless main rule and the claim layer, so a
     write form covered by one is covered by the other.
     """
+    if ps and _ps_unmodeled_here_string(command):
+        yield ("opaque", cwd, _UNMODELED_HERE_STRING)
+        return
     effective_cwd = parent_cwd = cwd
     job = None
     bash = not ps and not cmd

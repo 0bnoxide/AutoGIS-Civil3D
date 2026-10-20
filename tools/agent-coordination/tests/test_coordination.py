@@ -1508,6 +1508,8 @@ class TestPreToolUseAdapter(TempRepoCase):
         "${env:a b}=@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
         "$p??=@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
         "[int[]]$p.'a'=@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "$p=@()+@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "$p=1,@\"\n\"\n\"@; Set-Content seed.txt boom; Write-Output \"z\"",
     )
     PS_DATA_ONLY = (
         "$p = @'\nprint(targets('echo x > seed.txt'))\n'@\n$p | python -",
@@ -1516,6 +1518,8 @@ class TestPreToolUseAdapter(TempRepoCase):
         "Write-Output \u2018a\u2019\u2019; Remove-Item seed.txt; b\u2019",
         "a; $q = $p=@'\nx > seed.txt\n'@",
         "{ [string]$p.a[0] += @'\nx > seed.txt\n'@ }",
+        "Write-Output x`; Remove-Item seed.txt",
+        "Write-Output x`|Remove-Item seed.txt`\nboom",
     )
 
     def ps_command_names(self, source):
@@ -1543,7 +1547,9 @@ class TestPreToolUseAdapter(TempRepoCase):
                     "tool_name": "PowerShell", "tool_input": {"command": command},
                     "cwd": self.repo_path,
                 })
-                self.assertIn("main is read-only", out)
+                # An opener outside the modeled here-string starts fails
+                # closed instead (#226 review).
+                self.assertRegex(out, "main is read-only|here-string opener")
 
     def test_powershell_quoting_forms_keep_claim_writes_visible(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
@@ -1556,7 +1562,8 @@ class TestPreToolUseAdapter(TempRepoCase):
                     "tool_name": "PowerShell", "tool_input": {"command": command},
                     "cwd": self.repo_path, "session_id": "s1",
                 })
-                self.assertIn("claimed by session s2", out)
+                self.assertRegex(
+                    out, "claimed by session s2|here-string opener")
 
     def test_powershell_string_data_is_not_a_write(self):
         for command in self.PS_DATA_ONLY:
