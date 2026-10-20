@@ -433,6 +433,9 @@ class TestMainRule(TempRepoCase):
             (f"pushd {safe} && popd && git reset --hard", {}),
             (f"pushd {safe} && pushd {main} && pushd && pushd && "
              "git reset --hard", {}),
+            (f"pushd {safe}; pushd /tmp; dirs -c; cd {main}; popd; "
+             "git reset --hard", {}),
+            ("command -v pushd /tmp; git reset --hard", {}),
         )
         for command, kw in denied:
             with self.subTest(command=command):

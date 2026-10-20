@@ -828,7 +828,10 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         first = _argv_of(stages[0], ps=ps, cmd=cmd)
         # `command pushd x` / `builtin cd x` still run in this shell; other
         # wrappers (env, sudo, xargs) start a process that cannot move it.
-        while not (ps or cmd) and first[:1] in (["command"], ["builtin"]):
+        # `command -v pushd` only describes pushd, so stop at any option but
+        # `-p`; the stage is then an ordinary command.
+        while not (ps or cmd) and first[:1] in (["command"], ["builtin"]) \
+                and first[1:2] not in (["-v"], ["-V"]):
             first = [a for i, a in enumerate(first[1:])
                      if i or not a.startswith("-")]
         word = first[0].lower() if first and (ps or cmd) \
@@ -843,6 +846,12 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         # `cd` moves the parent shell only outside a pipeline; inside one it
         # runs in a subshell and must NOT move later segments. pushd/popd
         # move it too, through a directory stack (#183).
+        if len(stages) == 1 and not (ps or cmd) and word == "dirs" and any(
+                a.startswith("-") and "c" in a for a in first[1:]):
+            stack = []  # `dirs -c` clears the stack later popds would use
+            if job is None:
+                parent_stack = []
+            continue
         if len(stages) == 1 and (word in _CD_WORDS or ps and word in
                                  _PS_CD_WORDS or cmd and word == "chdir"):
             path, modeled = _location_change(word, first[1:], ps, cmd)
