@@ -684,15 +684,43 @@ def _shell_segments(command, masked_all, cmd=False):
             pending = []
 
 
-def _pipeline_stages(segment, segment_masked):
-    """Split a segment on unquoted pipeline separators."""
-    pipe_cuts = [m.start() for m in re.finditer(r"\|", segment_masked)] \
-        + [len(segment)]
+def _pipeline_stages(segment, segment_masked, bash=False):
+    """Split a segment on unquoted pipeline separators.
+
+    Bash `|&` is one separator (`2>&1 |`), so the next stage does not start
+    with `&` (#208).
+    """
+    pipe_cuts = [m.span() for m in re.finditer(
+        r"\|&?" if bash else r"\|", segment_masked)] \
+        + [(len(segment), len(segment))]
     stages, last = [], 0
-    for cut in pipe_cuts:
-        stages.append(segment[last:cut])
-        last = cut + 1
+    for cut_start, cut_end in pipe_cuts:
+        stages.append(segment[last:cut_start])
+        last = cut_end
     return stages
+
+
+_BASH_GROUP_OPEN_RE = re.compile(r"(?:[!({]\s*)+")
+
+
+def _strip_bash_grouping(segment, masked, open_subshells):
+    """Peel Bash `!`, `(` and `{` prefixes and the `)` closing an open
+    subshell, so the grouped command is read as the command (#209).
+
+    Returns (segment, masked, opened, closed) where opened/closed count the
+    subshell parentheses consumed. A lone `}` stays its own harmless segment.
+    """
+    lead = _BASH_GROUP_OPEN_RE.match(masked)
+    head = len(lead.group()) if lead else 0
+    opened = masked[:head].count("(")
+    segment, masked = segment[head:], masked[head:]
+    closed = 0
+    while open_subshells + opened - closed > 0 \
+            and masked.rstrip().endswith(")"):
+        end = len(masked.rstrip()) - 1
+        segment, masked = segment[:end], masked[:end]
+        closed += 1
+    return segment.strip(), masked.strip(), opened, closed
 
 
 def _redirect_targets(segment, segment_masked):
@@ -761,14 +789,26 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     """
     effective_cwd = parent_cwd = cwd
     job = None
+    bash = not ps and not cmd
+    subshells, closing = [], 0  # saved cwds of open `( ... )` groups
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
     for segment, seg_masked, seg_job in _shell_segments(
             command, masked_all, cmd=cmd):
+        for _ in range(closing):
+            # A `cd` inside `( ... )` ends with the subshell.
+            effective_cwd, parent_cwd = subshells.pop()
+        closing = 0
         if seg_job != job:
             # A background job's `cd` moves the rest of that job only; the
             # parent shell resumes where it was.
             job, effective_cwd = seg_job, parent_cwd
-        stages = _pipeline_stages(segment, seg_masked)
+        if bash:
+            segment, seg_masked, opened, closing = _strip_bash_grouping(
+                segment, seg_masked, len(subshells))
+            subshells += [(effective_cwd, parent_cwd)] * opened
+            if not segment:
+                continue
+        stages = _pipeline_stages(segment, seg_masked, bash=bash)
         first = _argv_of(stages[0], ps=ps, cmd=cmd)
         # `cd` moves the parent shell only outside a pipeline; inside one it
         # runs in a subshell and must NOT move later segments.

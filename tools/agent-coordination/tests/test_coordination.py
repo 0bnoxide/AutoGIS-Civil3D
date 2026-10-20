@@ -416,6 +416,43 @@ class TestMainRule(TempRepoCase):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo, ps=ps), cmd)
 
+    def test_bash_pipe_ampersand_stage_is_checked(self):
+        # #208: the stage after `|&` must not start with `&`.
+        for cmd in ("git status |& git reset --hard",
+                    "git status|&git reset --hard"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo), cmd)
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            "git status |& cat", self.repo_path, self.repo))
+
+    def test_bash_grouping_and_negation_are_checked(self):
+        # #209: `(`, `{` and `!` are not the command name.
+        for cmd in ("( git reset --hard )", "(git reset --hard)",
+                    "{ git reset --hard; }", "! git reset --hard",
+                    "! ( git reset --hard )", "( echo x > seed.txt )"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo), cmd)
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            "(git status)", self.repo_path, self.repo))
+
+    def test_subshell_cd_ends_with_the_subshell(self):
+        # Peeling `(` must not let a subshell's `cd` move later statements.
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe, exist_ok=True)
+        for cmd in (f"(cd {safe}); git reset --hard",
+                    f"( cd {safe} && true ); git reset --hard",
+                    f"( (cd {safe}) ); git reset --hard"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo), cmd)
+        main = self.repo_path.replace(os.sep, "/")
+        for cmd in (f"(cd {safe} && git reset --hard)",
+                    f"{{ cd {safe}; }}; git reset --hard"):
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo), cmd)
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"cd {safe} && (cd {main} && git reset --hard)",
+            self.repo_path, self.repo))
+
     def test_backgrounded_cd_does_not_move_later_segments(self):
         # `cd x &` runs in a background subshell/job: the parent stays put.
         safe = os.path.join(self.base, "safe").replace(os.sep, "/")
@@ -1354,6 +1391,20 @@ class TestPreToolUseAdapter(TempRepoCase):
             with self.subTest(command=command):
                 rc, out = self.decide({
                     "tool_name": tool, "tool_input": {"command": command},
+                    "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
+
+    def test_bash_grouped_and_pipe_ampersand_writes_reach_claim_layer(self):
+        # #208, #209: the claim layer shares the same parser.
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for command in ("echo x |& rm src/code.cs", "( rm src/code.cs )",
+                        "{ rm src/code.cs; }", "! rm src/code.cs"):
+            with self.subTest(command=command):
+                rc, out = self.decide({
+                    "tool_name": "Bash", "tool_input": {"command": command},
                     "cwd": self.repo_path, "session_id": "s1",
                 })
                 self.assertIn("claimed by session s2", out)
