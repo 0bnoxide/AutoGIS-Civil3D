@@ -1486,6 +1486,11 @@ class TestPreToolUseAdapter(TempRepoCase):
                         "mv --no-target-directory src docs"):
             with self.subTest(command=command):
                 self.assertIn("contains file_glob 'docs/lib/*'", decide(command))
+        # A wildcard operand is checked as what it expands to.
+        for command in ("rm -rf docs/*", "rm -rf d*/l?b", "mv docs/* /tmp"):
+            with self.subTest(command=command):
+                self.assertIn("docs/lib", decide(command))
+        self.assertEqual(decide("rm -rf docs/*.md"), "")
         # Unlinking a symlink leaves the directory it points to alone.
         if hasattr(os, "symlink"):
             try:

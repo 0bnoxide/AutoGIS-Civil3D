@@ -27,6 +27,7 @@ import argparse
 import csv
 import datetime as _dt
 import fnmatch
+import glob
 import hashlib
 import json
 import os
@@ -822,6 +823,21 @@ def _argv_subtree_targets(argv, ps, cmd=False):
     return [], []
 
 
+def _subtree_operands(operands, cwd):
+    """Expand wildcard operands to what they match, so `rm -rf src/*`
+    reaches a `src/lib/*` claim, and drop symlinks: deleting or moving one
+    touches only the link, while `link/` still resolves to its target."""
+    out = []
+    for op in operands:
+        raw = op.strip("\"'")
+        path = os.path.join(cwd, raw)
+        if re.search(r"[*?[]", raw):
+            out += [m for m in glob.glob(path) if not os.path.islink(m)] or [op]
+        elif raw.endswith(("/", "\\")) or not os.path.islink(path):
+            out.append(op)
+    return out
+
+
 def _move_destinations(moves, cwd, ps, cmd=False):
     """Raw paths a move replaces: an existing destination directory gets
     each source's basename under it, any other destination is replaced."""
@@ -917,10 +933,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             yield ("git", argv, effective_cwd)
             raw_targets += _argv_write_targets(argv, ps, cmd=cmd)
             operands, argv_moves = _argv_subtree_targets(argv, ps, cmd=cmd)
-            # Deleting or moving a symlink touches only the link, never the
-            # directory it points to; `link/` still resolves to the target.
-            raw_subtrees += [op for op in operands if not os.path.islink(
-                os.path.join(effective_cwd, op.strip("\"'")))]
+            raw_subtrees += _subtree_operands(operands, effective_cwd)
             moves += argv_moves
         yield from _target_events(raw_targets, effective_cwd, ps, cmd=cmd)
         raw_subtrees += _move_destinations(moves, effective_cwd, ps, cmd=cmd)
