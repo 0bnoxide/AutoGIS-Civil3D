@@ -1830,9 +1830,10 @@ class TestSyncMain(TempRepoCase):
         self.assertEqual(coordination.cmd_sync_main(self.repo),
                          coordination.DENY)
         run_git(["reset", "-q", "HEAD", "dirty.txt"], self.repo_path)
-        os.remove(os.path.join(self.repo_path, "dirty.txt"))
+        # Left untracked, it no longer blocks the fast-forward (#218).
         self.assertEqual(coordination.cmd_sync_main(self.repo),
                          coordination.ALLOW)
+        self.assertTrue(os.path.exists(os.path.join(self.repo_path, "adv.txt")))
 
 
 class TestDoctorLiveness(TempRepoCase):
