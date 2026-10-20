@@ -793,19 +793,41 @@ _PS_SUBTREE_CMDLETS = {"remove-item", "ri", "del", "erase", "rd", "rmdir",
 
 
 def _argv_subtree_targets(argv, ps, cmd=False):
-    """Return raw operands whose whole subtree a delete or move form
-    removes or replaces, so claims under them are checked too (#184)."""
+    """Return (raw operands, moves) for the paths a delete or move form
+    removes or replaces with their whole subtree, so claims under them are
+    checked too (#184). Each move is (destination, sources): an existing
+    destination directory receives the sources instead of being replaced."""
     name, low = argv[0].rstrip(". "), argv[0].lower()
     if name in ("rm", "rmdir"):
-        return [arg for arg in argv[1:] if not arg.startswith("-")]
+        return [arg for arg in argv[1:] if not arg.startswith("-")], []
     if name == "mv":
         dest, sources = _copy_move_operands(argv)
-        return sources + ([dest] if dest else [])
+        return sources, [(dest, sources)] if dest else []
     if ps and low in _PS_SUBTREE_CMDLETS:
-        return _ps_write_targets(argv)
-    if cmd and low in ("del", "erase", "rd", "rmdir", "move", "ren", "rename"):
-        return [arg for arg in argv[1:] if not arg.startswith("/")]
-    return []
+        return _ps_write_targets(argv), []
+    if cmd and low in ("move", "ren", "rename"):
+        operands = [arg for arg in argv[1:] if not arg.startswith("/")]
+        if low == "move" and len(operands) > 1:
+            return operands[:-1], [(operands[-1], operands[:-1])]
+        return operands, []
+    if cmd and low in ("del", "erase", "rd", "rmdir"):
+        return [arg for arg in argv[1:] if not arg.startswith("/")], []
+    return [], []
+
+
+def _move_destinations(moves, cwd, ps, cmd=False):
+    """Raw paths a move replaces: an existing destination directory gets
+    each source's basename under it, any other destination is replaced."""
+    raw = []
+    for dest, sources in moves:
+        resolved = next(_target_events([dest], cwd, ps, cmd=cmd), None)
+        if resolved and os.path.isdir(resolved[1]):
+            raw += [dest.rstrip("/\\") + "/" + re.split(
+                r"[/\\]", src.strip("\"'").rstrip("/\\"))[-1]
+                for src in sources]
+        else:
+            raw.append(dest)
+    return raw
 
 
 def _target_events(raw_targets, cwd, ps, cmd=False):
@@ -861,7 +883,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             segment, seg_masked = _peel_bash_grouping(segment, seg_masked)
             stages = _pipeline_stages(segment, seg_masked, bash=True)
         raw_targets = _redirect_targets(segment, seg_masked)
-        raw_subtrees = []
+        raw_subtrees, moves = [], []
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
             if argv and _exe_name(argv[0]) in _CMD_PREFIXES:
@@ -887,8 +909,11 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
                 continue
             yield ("git", argv, effective_cwd)
             raw_targets += _argv_write_targets(argv, ps, cmd=cmd)
-            raw_subtrees += _argv_subtree_targets(argv, ps, cmd=cmd)
+            operands, argv_moves = _argv_subtree_targets(argv, ps, cmd=cmd)
+            raw_subtrees += operands
+            moves += argv_moves
         yield from _target_events(raw_targets, effective_cwd, ps, cmd=cmd)
+        raw_subtrees += _move_destinations(moves, effective_cwd, ps, cmd=cmd)
         for event in _target_events(raw_subtrees, effective_cwd, ps, cmd=cmd):
             yield ("subtree", event[1])
 
@@ -1773,6 +1798,10 @@ def glob_conflict(claims, session, targets, subtrees=()):
                 if record["kind"] == "file_glob" else None
             if prefix is None or record["session"] == session:
                 continue
+            if fnmatch.fnmatch(rel, record["value"]):
+                return (f"'{rel}' is inside file_glob '{record['value']}' "
+                        f"claimed by session {record['session']} "
+                        f"(claim {record['id']}).")
             claimed = prefix.rstrip("/")
             if rel == "." or claimed == rel or claimed.startswith(rel + "/"):
                 return (f"'{rel}' contains file_glob '{record['value']}' "

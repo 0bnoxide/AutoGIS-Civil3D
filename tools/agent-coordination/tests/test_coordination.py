@@ -1459,6 +1459,31 @@ class TestPreToolUseAdapter(TempRepoCase):
             with self.subTest(command=command):
                 self.assertEqual(decide("Bash", command), "")
 
+    def test_move_into_existing_directory_checks_the_moved_path(self):
+        # Review of #184: `mv src docs` writes `docs/src` when docs exists.
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "docs/lib/*")
+        os.makedirs(os.path.join(self.repo_path, "docs", "lib"))
+
+        def decide(command, shell=""):
+            return self.decide({
+                "tool_name": "Bash",
+                "tool_input": {"command": command, "shell": shell},
+                "cwd": self.repo_path, "session_id": "s1",
+            })[1]
+
+        for command, shell in (("mv src docs", ""), ("mv src docs/", ""),
+                               ("mv a b docs", ""), ("move src docs", "cmd.exe")):
+            with self.subTest(command=command):
+                self.assertEqual(decide(command, shell), "")
+        for command, shell in (("mv lib docs", ""), ("mv src docs/lib", ""),
+                               ("move src docs\\lib", "cmd.exe")):
+            with self.subTest(command=command):
+                self.assertIn("claimed by session s2", decide(command, shell))
+        shutil.rmtree(os.path.join(self.repo_path, "docs"))
+        self.assertIn("contains file_glob 'docs/lib/*'", decide("mv src docs"))
+
     def test_ambiguous_data_is_conservative_but_explicit_shell_data_allowed(self):
         # Each string is harmless data in its actual shell; the other parser
         # sees a prohibited command, so ambiguous input deliberately denies.
