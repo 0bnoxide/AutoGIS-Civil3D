@@ -1520,11 +1520,123 @@ class TestPreToolUseAdapter(TempRepoCase):
             with self.subTest(command=command):
                 self.assertEqual(coordination.shell_write_targets(
                     command, self.repo_path, ps=True), [])
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, self.base, None, ps=True))
                 rc, out = self.decide({
                     "tool_name": "PowerShell", "tool_input": {"command": command},
                     "cwd": self.repo_path,
                 })
                 self.assertEqual(out, "")
+
+    # #179/#187: PowerShell data versus statement boundaries. Each write
+    # case hides `Set-Content seed.txt` behind a quoting form; each data
+    # case carries a redirect or write only inside a string.
+    PS_HIDDEN_WRITES = (
+        "$p = @'\n\"\n'@; Set-Content seed.txt boom; Write-Output \"z\"",
+        "$p = @'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "Write-Output \u2018x'; Set-Content seed.txt boom; Write-Output 'y'",
+        "Write-Output \u201cx\"; Set-Content seed.txt boom; Write-Output \"y\"",
+        "Write-Output `\"; Set-Content seed.txt boom; Write-Output \"y\"",
+        "Write-Output `'; Set-Content seed.txt boom; Write-Output 'y'",
+        "Set-Content \u2018seed.txt\u2019 boom",
+        "Write-Output x@'\n'; Set-Content seed.txt boom; Write-Output y'q\n'@z",
+        "Write-Output x=@'\n'; Set-Content seed.txt boom; Write-Output y'q\n'@z",
+        "$p = @'\r'\r'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "$p=@'\n'\n'@; Set-Content seed.txt boom",
+        "Write-Output a\rSet-Content seed.txt boom",
+        "Write-Output $p=@'\n'; Set-Content seed.txt boom; Write-Output y'q\n'@z",
+        "a && $p=@'\n'; Set-Content seed.txt boom; Write-Output y'q\n'@z",
+        "${p}=@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "${env:a b}=@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "$p??=@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "[int[]]$p.'a'=@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "$p=@()+@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "$p=1,@\"\n\"\n\"@; Set-Content seed.txt boom; Write-Output \"z\"",
+        "# @'\n# '\nSet-Content seed.txt boom\n'@' | Out-Null",
+        "<# @' #>\nSet-Content seed.txt boom\n'@' | Out-Null",
+        "Write-Output a # it's\nSet-Content seed.txt boom; Write-Output 'z'",
+        "$x=# @'\n# '\nSet-Content seed.txt boom\n'@' | Out-Null",
+        "Write-Output x`\n#tag; Set-Content seed.txt boom",
+        "Write-Output 'a'# '\nSet-Content seed.txt boom\nWrite-Output 'z'",
+        "$x.y# '\nSet-Content seed.txt boom\nWrite-Output 'z'",
+        "$x = Set-Content seed.txt boom",
+        "[string]$x=Set-Content seed.txt boom",
+        "$x=`\nSet-Content seed.txt boom",
+        "Write-Output a\n`\nSet-Content seed.txt boom",
+        "Write-Output x`\r\nSet-Content seed.txt boom",
+    )
+    PS_DATA_ONLY = (
+        "$p = @'\nprint(targets('echo x > seed.txt'))\n'@\n$p | python -",
+        "$p = @\"\nx > seed.txt\n\"@\n$p | python -",
+        "$p=@'\r\nx > seed.txt\r\n'@\r\n$p | Out-Null",
+        "Write-Output \u2018a\u2019\u2019; Remove-Item seed.txt; b\u2019",
+        "a; $q = $p=@'\nx > seed.txt\n'@",
+        "{ [string]$p.a[0] += @'\nx > seed.txt\n'@ }",
+        "Write-Output x`; Remove-Item seed.txt",
+        "Write-Output `@'\n; Remove-Item seed.txt\n'",
+        "Write-Output x`|Remove-Item seed.txt`\nboom",
+    )
+
+    def ps_command_names(self, source):
+        """Command names in PowerShell's own AST, or None without pwsh."""
+        pwsh = shutil.which("pwsh")
+        if not pwsh:
+            return None
+        script = ("$e = $null; [System.Management.Automation.Language.Parser]"
+                  "::ParseInput($env:PS_SRC, [ref]$null, [ref]$e).FindAll("
+                  "{ $args[0] -is [System.Management.Automation.Language."
+                  "CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() }")
+        out = subprocess.run(
+            [pwsh, "-NoProfile", "-NonInteractive", "-Command", script],
+            env={**os.environ, "PS_SRC": source}, capture_output=True,
+            text=True, encoding="utf-8", check=True).stdout
+        return out.split()
+
+    def test_powershell_quoting_forms_keep_writes_visible(self):
+        for command in self.PS_HIDDEN_WRITES:
+            with self.subTest(command=command):
+                names = self.ps_command_names(command)
+                if names is not None:
+                    self.assertIn("Set-Content", names)
+                rc, out = self.decide({
+                    "tool_name": "PowerShell", "tool_input": {"command": command},
+                    "cwd": self.repo_path,
+                })
+                # An opener outside the modeled here-string starts fails
+                # closed instead (#226 review).
+                self.assertRegex(out, "main is read-only|here-string opener")
+
+    def test_powershell_quoting_forms_keep_claim_writes_visible(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for command in self.PS_HIDDEN_WRITES:
+            command = command.replace("seed.txt", "src/code.cs")
+            with self.subTest(command=command):
+                rc, out = self.decide({
+                    "tool_name": "PowerShell", "tool_input": {"command": command},
+                    "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertRegex(
+                    out, "claimed by session s2|here-string opener")
+
+    def test_powershell_string_data_is_not_a_write(self):
+        for command in self.PS_DATA_ONLY:
+            with self.subTest(command=command):
+                names = self.ps_command_names(command)
+                if names is not None:
+                    self.assertNotIn("Remove-Item", names)
+                self.assertEqual(coordination.shell_write_targets(
+                    command, self.repo_path, ps=True), [])
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, self.base, None, ps=True))
+        # An actual redirect after the here-string is still enforced.
+        rc, out = self.decide({
+            "tool_name": "PowerShell", "tool_input": {
+                "command": "$p = @'\nx > other.txt\n'@\n$p > seed.txt",
+            }, "cwd": self.repo_path,
+        })
+        self.assertIn("main is read-only", out)
 
     def test_bash_and_cmd_quote_rules_are_preserved(self):
         rc, out = self.decide({

@@ -383,9 +383,12 @@ def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False, cmd=False):
         if event[0] == "git":
             reason = deny_reason_for_git_argv(event[1], event[2])
         elif event[0] == "opaque":
-            if repo_hint is None:
+            # An opaque event with its own reason denies even outside a
+            # repository: the unparsed text could move into one.
+            if repo_hint is None and len(event) < 3:
                 continue
-            return ("nested interpreter depth exceeds the parser limit; "
+            return (event[2] if len(event) > 2 else
+                    "nested interpreter depth exceeds the parser limit; "
                     "command is denied while repository protection applies")
         else:
             reason = deny_reason_for_target(event[1], repo_hint)
@@ -527,7 +530,37 @@ def _ps_write_targets(argv):
 
 
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\[\s\S]|[^\"\\])*\"")
-_PS_QUOTE_RE = re.compile(r"'(?:''|[^'])*'|\"(?:`[\s\S]|\"\"|[^\"`])*\"")
+# PowerShell comments (`# x`, `<# x #>`) are matched in the same scan so a
+# quote inside one opens nothing; `#` right after a continued line still
+# belongs to the token being continued. A backtick before CRLF escapes only
+# the CR, so the LF still ends the statement (checked against pwsh's AST). It also accepts typographic quotes as
+# delimiters, a here-string
+# runs to a line opening with its closing quote whatever it contains, and a
+# backtick outside a string escapes the next character (a quote included)
+# rather than opening a string (#179, #187). The backtick escape matches as
+# its own alternative so it is consumed before it can open a string.
+_PS_SQ, _PS_DQ = "'\u2018\u2019\u201a\u201b", '"\u201c\u201d\u201e'
+# A here-string opens only where `@` starts a token; inside a bare word
+# (`x@'`, `x=@'`) the quote is ordinary. An assignment (`$p=@'`) is matched
+# whole so its `=` counts as a boundary, but only at statement start: in
+# argument mode (`Write-Output $p=@'`) it is a bare word. PowerShell ends a
+# line at CR, LF or CRLF.
+_PS_ASSIGN = (r"(?:(?<=[;\r\n{(])|^)[ \t]*(?:(?:\[[\w.,\[\] ]+\])*"
+              r"\$(?:\{[^}\r\n]*\}|[\w:]+)"
+              r"(?:\.(?:\w+|'[^'\r\n]*'|\"[^\"\r\n]*\")|\[[^\]\r\n]*\])*"
+              r"\s*(?:[-+*/%]|\?\?)?=\s*)+")
+_PS_TOKEN_START = rf"(?:{_PS_ASSIGN}|(?<![^\s;|&(){{}}\[,]))"
+_PS_EOL = r"(?:\r\n?|\n)"
+_PS_QUOTE_RE = re.compile(
+    rf"{_PS_TOKEN_START}@[{_PS_SQ}][ \t]*{_PS_EOL}"
+    rf"(?:[^\r\n]*{_PS_EOL})*?[{_PS_SQ}]@"
+    rf"|{_PS_TOKEN_START}@[{_PS_DQ}][ \t]*{_PS_EOL}"
+    rf"(?:[^\r\n]*{_PS_EOL})*?[{_PS_DQ}]@"
+    rf"|<#[\s\S]*?#>|(?<![^\s;|&(){{}}\[\]=,{_PS_SQ}{_PS_DQ}])(?<!`\n)(?<!`\r)"
+    rf"#[^\r\n]*"
+    rf"|`[\s\S]"
+    rf"|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*[{_PS_SQ}]"
+    rf"|[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*[{_PS_DQ}]")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
 # Bash: a backslash escapes the next character, including a space (#178).
@@ -544,6 +577,12 @@ def _mask_literals(command, cmd=False, ps=False):
     """
     def blank(m):
         s = m.group(0)
+        if s[0] == "`":
+            return "`" + " " * (len(s) - 1)  # escaped text is never syntax
+        if s[0] == "#" or s.startswith("<#"):
+            # Matched only so its quotes open nothing; left visible so a
+            # misread comment can at worst over-deny, never hide a command.
+            return s
         return s[0] + " " * (len(s) - 2) + s[-1]
     # PowerShell backslashes are literal; backticks and doubled quotes escape.
     quote_re = _PS_QUOTE_RE if ps else _QUOTE_RE
@@ -658,12 +697,28 @@ def _nested_script(argv):
     return None
 
 
+_PS_ASSIGN_ARG_RE = re.compile(
+    r"(?:\[[^\]]*\])*\$[\w:{}.\[\]']+(?:[-+*/%]|\?\?)?=(.*)", re.S)
+
+
 def _strip_ps_call_block(argv):
     """PowerShell call/dot operator on a script block — `& { cmd }`, `&{cmd}`,
     `. {cmd}`. Strip a leading &/. operator (even when fused to `{`) and all
     brace characters so the inner command reaches the cmdlet checks (#46).
     Top-level `;`/`&&` already split a multi-command block upstream. A leading
     `.\\script.ps1` (dot with no brace) is left untouched."""
+    while argv:
+        # `$x = Set-Content f` runs the cmdlet as the assignment's value.
+        m = _PS_ASSIGN_ARG_RE.fullmatch(argv[0])
+        if m and m.group(1):
+            argv = [m.group(1)] + argv[1:]
+        elif m:
+            argv = argv[1:]
+        elif argv[0].startswith("$") and len(argv) > 1 \
+                and re.fullmatch(r"(?:[-+*/%]|\?\?)?=", argv[1]):
+            argv = argv[2:]
+        else:
+            break
     if not argv:
         return argv
     first = argv[0]
@@ -679,7 +734,7 @@ def _strip_ps_call_block(argv):
     return stripped
 
 
-def _shell_segments(command, masked_all, cmd=False):
+def _shell_segments(command, masked_all, cmd=False, ps=False):
     """Yield (segment, aligned masked text, background job) per statement.
 
     Outside cmd a lone `&` ends a statement and backgrounds it (Bash,
@@ -690,6 +745,8 @@ def _shell_segments(command, masked_all, cmd=False):
     """
     separators = r"&&|\|\||&|\n" if cmd \
         else r"&&|\|\||;|\n|(?<![<>|])&(?!>)"
+    if ps:
+        separators += r"|\r"  # PowerShell also ends a line at a bare CR
     cuts = [(m.start(), m.end(), m.group())
             for m in re.finditer(separators, masked_all)]
     cuts.append((len(command), len(command), ""))
@@ -812,7 +869,7 @@ def _argv_write_targets(argv, ps, cmd=False):
 def _target_events(raw_targets, cwd, ps, cmd=False):
     """Yield resolved target events for raw shell write operands."""
     for target in raw_targets:
-        target = target.strip("\"'")
+        target = target.strip("\"'" + (_PS_SQ + _PS_DQ if ps else ""))
         if ps or cmd:
             target = target.replace("\\", "/")
         if ps and re.match(r"[A-Za-z]{2,}:", target):
@@ -825,15 +882,63 @@ def _target_events(raw_targets, cwd, ps, cmd=False):
         yield ("target", resolved)
 
 
+_UNMODELED_HERE_STRING = ("a PowerShell here-string opener or comment the "
+                          "parser does not model; command is denied because "
+                          "its statements cannot be told from string data")
+
+
+def _ps_unmodeled_here_string(command):
+    """True when a quote the scan read as a string may be something else.
+
+    ponytail: the here-string and comment start rules are a subset of
+    PowerShell's grammar. An `@'`/`@"` opener outside them would pair its
+    quote with one in the body, and a `#` read as code that PowerShell reads
+    as a comment (`$x.y# '`) would let its quote open a string; either can
+    hide real statements, so it fails closed.
+    """
+    # A backtick escape ending right at the quote made its `@` literal.
+    prev_end, escaped = 0, False
+    for m in _PS_QUOTE_RE.finditer(command):
+        if m.group(0)[0] in _PS_SQ + _PS_DQ:
+            if (m.start() and command[m.start() - 1] == "@"
+                    and not (prev_end == m.start() and escaped)
+                    and re.match(rf"[ \t]*{_PS_EOL}", command[m.start() + 1:])):
+                return True
+        if _ps_ambiguous_hash(command, prev_end, m.start()):
+            return True
+        prev_end, escaped = m.end(), m.group(0)[0] == "`"
+    return _ps_ambiguous_hash(command, prev_end, len(command))
+
+
+def _ps_ambiguous_hash(command, start, end):
+    """A `#` the scan kept as code (`$x.y#`, `a#b`) is a comment in some
+    PowerShell modes; if a quote or backtick follows it on that line, the
+    two readings disagree about where strings and statements end."""
+    for h in re.finditer("#", command[start:end]):
+        rest = re.match(r"[^\r\n]*", command[start + h.end():]).group(0)
+        if re.search(f"[`{_PS_SQ}{_PS_DQ}]", rest):
+            return True
+    return False
+
+
 def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
     One parser feeds both the stateless main rule and the claim layer, so a
     write form covered by one is covered by the other.
     """
+    if ps and _ps_unmodeled_here_string(command):
+        yield ("opaque", cwd, _UNMODELED_HERE_STRING)
+        return
     effective_cwd = parent_cwd = cwd
     job = None
     bash = not ps and not cmd
+    if ps:
+        # A backtick before a line break continues the line (CRLF: only the
+        # CR is escaped, so the LF still ends it).
+        command = _PS_QUOTE_RE.sub(
+            lambda m: " " * len(m.group(0))
+            if re.fullmatch(r"`[\r\n]", m.group(0)) else m.group(0), command)
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
     if bash:
         # Bash drops an unquoted backslash-newline before splitting, so
@@ -847,7 +952,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         # An escaped character is literal, so `\;` or `\&` never splits.
         masked_all = re.sub(r"\\[\s\S]", "  ", masked_all)
     for segment, seg_masked, seg_job in _shell_segments(
-            command, masked_all, cmd=cmd):
+            command, masked_all, cmd=cmd, ps=ps):
         if seg_job != job:
             # A background job's `cd` moves the rest of that job only; the
             # parent shell resumes where it was.
