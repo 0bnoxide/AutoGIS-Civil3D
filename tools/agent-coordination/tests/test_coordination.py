@@ -1454,6 +1454,9 @@ class TestPreToolUseAdapter(TempRepoCase):
                 ("PowerShell", "", "rd src -Recurse"),
                 ("PowerShell", "", "Move-Item src elsewhere"),
                 ("Bash", "", "rm -rf -- src"),
+                ("Bash", "", "mv -- src elsewhere"),
+                ("Bash", "", "rm.exe -rf src"),
+                ("Bash", "", "/usr/bin/mv.exe src elsewhere"),
                 ("PowerShell", "", "Rename-Item -Path lib -NewName src"),
                 ("PowerShell", "", "Rename-Item lib -NewName:src")):
             with self.subTest(shell=shell or tool, command=command):
@@ -1510,6 +1513,7 @@ class TestPreToolUseAdapter(TempRepoCase):
         os.makedirs(os.path.join(self.repo_path, "target"))
         coordination.claim(self.repo, "s2", "file_glob", "target/lib/*")
         self.assertIn("target/lib", decide("mv stuff/* target"))
+        self.assertIn("target/lib", decide("mv stuff/lib t*"))
         self.assertEqual(decide("mv stuff target"), "")
         shutil.rmtree(os.path.join(self.repo_path, "stuff"))
         shutil.rmtree(os.path.join(self.repo_path, "target"))

@@ -426,10 +426,15 @@ def _copy_move_operands(argv):
     positionals, so the value token must be consumed rather than treated as
     a source; without that, the last source is mistaken for the destination.
     """
-    dest, operands, expect_value = None, [], False
+    dest, operands, expect_value, options = None, [], False, True
     for arg in argv[1:]:
         if expect_value:
             dest, expect_value = arg, False
+        elif not options or arg == "--":
+            # After `--` every argument is an operand, `-src` included.
+            if not options:
+                operands.append(arg)
+            options = False
         elif arg in ("-t", "--target-directory"):
             expect_value = True
         elif arg.startswith("--target-directory="):
@@ -793,8 +798,11 @@ def _command_name(token):
     """A bare command name with Windows' trailing `.`/space dropped, or the
     last component of a path-supplied command (`/bin/rm` is rm)."""
     if re.search(r"[/\\]", token):
-        return token.replace("\\", "/").rsplit("/", 1)[-1]
-    return token.rstrip(". ")
+        name = token.replace("\\", "/").rsplit("/", 1)[-1]
+    else:
+        name = token.rstrip(". ")
+    # Git Bash runs `rm.exe` as rm.
+    return name[:-4] if name.lower().endswith(".exe") else name
 
 
 def _argv_write_targets(argv, ps, cmd=False):
@@ -934,13 +942,15 @@ def _move_destinations(moves, cwd, ps, cmd=False):
     for dest, sources, into in moves:
         sources = [path for src in sources
                    for path in _expand_operand(src, cwd, bash)]
-        resolved = into and next(_target_events([dest], cwd, ps, cmd=cmd), None)
-        if resolved and os.path.isdir(resolved[1]):
-            raw += [dest.rstrip("/\\") + "/" + re.split(
-                r"[/\\]", src.strip("\"'").rstrip("/\\"))[-1]
-                for src in sources]
-        else:
-            raw.append(dest)
+        for dest in _expand_operand(dest, cwd, bash):
+            resolved = into and next(
+                _target_events([dest], cwd, ps, cmd=cmd), None)
+            if resolved and os.path.isdir(resolved[1]):
+                raw += [dest.rstrip("/\\") + "/" + re.split(
+                    r"[/\\]", src.strip("\"'").rstrip("/\\"))[-1]
+                    for src in sources]
+            else:
+                raw.append(dest)
     return raw
 
 
