@@ -862,7 +862,7 @@ def _brace_expand(word):
             elif word[end] == "," and depth == 1:
                 commas.append(end)
         else:
-            return [word]
+            continue  # unmatched `{` is literal; a later group still expands
         head, tail = word[:start], word[end + 1:]
         if not commas:
             if ".." not in word[start:end]:
@@ -882,6 +882,8 @@ def _expand_operand(op, cwd, bash):
     words = _brace_expand(raw) if bash else [raw]
     out = []
     for word in words:
+        if bash:
+            word = os.path.expanduser(word)  # tilde expands before globbing
         if re.search(r"[*?[]", word):
             out += glob.glob(os.path.join(cwd, word)) or [word]
         else:

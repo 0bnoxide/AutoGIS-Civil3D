@@ -1489,10 +1489,13 @@ class TestPreToolUseAdapter(TempRepoCase):
         # A wildcard operand is checked as what it expands to.
         for command in ("rm -rf docs/*", "rm -rf d*/l?b", "mv docs/* /tmp",
                         "rm -rf {docs,dummy}", "rm -rf docs/{x,l{a,i}b}",
-                        "rm -rf {d..e}ocs"):
+                        "rm -rf {d..e}ocs", "rm -rf x{y/../{foo,docs}"):
             with self.subTest(command=command):
                 self.assertIn("docs/lib", decide(command))
         self.assertEqual(decide("rm -rf docs/*.md"), "")
+        with mock.patch.dict(os.environ, {"HOME": self.repo_path,
+                                         "USERPROFILE": self.repo_path}):
+            self.assertIn("docs/lib", decide("rm -rf ~/docs/*"))
         # A wildcard source moved into a directory lands under its basename.
         os.makedirs(os.path.join(self.repo_path, "stuff", "lib"))
         os.makedirs(os.path.join(self.repo_path, "target"))
