@@ -423,6 +423,22 @@ class TestMainRule(TempRepoCase):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     command, safe if main in command else self.repo_path,
                     None, **kw))
+        # Forms the parser does not model fail closed (#183 review): pushd -n
+        # keeps the cwd, -StackName selects another stack, cd - returns to
+        # OLDPWD. A value-taking common parameter does not hide -Path.
+        for command, kw in (
+                (f"pushd -n {safe} && git reset --hard", {}),
+                (f"pushd {safe} && pushd +1 && git reset --hard", {}),
+                (f"cd {safe} && cd - && git reset --hard", {}),
+                (f"Push-Location {safe} -StackName A; Push-Location /x "
+                 "-StackName B; Pop-Location -StackName A; git reset --hard",
+                 {"ps": True})):
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, self.repo_path, self.repo, **kw))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"Set-Location -ErrorAction Stop -Path {main}; git reset --hard",
+            safe, None, ps=True))
         for command, kw in (
                 (f"pushd {main} && popd && git reset --hard", {}),
                 (f"Push-Location {main}; Pop-Location; git reset --hard",

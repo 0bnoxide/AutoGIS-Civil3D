@@ -385,7 +385,8 @@ def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False, cmd=False):
         elif event[0] == "opaque":
             if repo_hint is None:
                 continue
-            return ("nested interpreter depth exceeds the parser limit; "
+            return (event[2] if len(event) > 2 else
+                    "nested interpreter depth exceeds the parser limit; "
                     "command is denied while repository protection applies")
         else:
             reason = deny_reason_for_target(event[1], repo_hint)
@@ -759,6 +760,30 @@ _CD_WORDS = {"cd", "pushd", "popd"}
 _PS_CD_WORDS = {"chdir", "set-location", "sl"} | _PUSHD_WORDS | _POPD_WORDS
 
 
+def _location_change(word, args, ps, cmd):
+    """Return (path, modeled) for a cd/pushd/popd-family command. A form the
+    parser does not model (`pushd -n`, `cd -`, `+N` rotation, PowerShell
+    `-StackName` or an unknown parameter) reports modeled=False so the
+    caller fails closed rather than guessing the new directory (#183)."""
+    if ps:
+        allowed = {"-path", "-literalpath", "-passthru"} | _PS_VALUE_PARAMS
+        if any(a.startswith("-") and a.lower().partition(":")[0]
+               not in allowed for a in args):
+            return None, False
+        flagged, positional = _ps_operands([word] + args)
+        paths = [v for _, v in flagged] + positional
+    elif cmd:
+        paths = [a for a in args if a.lower() != "/d"]
+    else:
+        flags = ("-L", "-P", "--") if word == "cd" else ()
+        if any(a[:1] in ("-", "+") and a not in flags for a in args):
+            return None, False
+        paths = [a for a in args if a not in flags]
+    if word in _POPD_WORDS and paths:
+        return None, False
+    return (paths[0] if paths else None), True
+
+
 def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
@@ -785,13 +810,17 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         # move it too, through a directory stack (#183).
         if len(stages) == 1 and (word in _CD_WORDS or ps and word in
                                  _PS_CD_WORDS or cmd and word == "chdir"):
-            args = [a for a in first[1:] if not (
-                a.startswith("-") or cmd and a.lower() == "/d")]
+            path, modeled = _location_change(word, first[1:], ps, cmd)
+            if not modeled:
+                yield ("opaque", effective_cwd,
+                       f"'{first[0]}' with these options is not modeled by "
+                       "the parser; command is denied while repository "
+                       "protection applies")
+                continue
             if word in _POPD_WORDS:
                 if stack:
                     effective_cwd = stack.pop()
-            elif args:
-                path = args[0]
+            elif path:
                 if ps or cmd:
                     path = path.replace("\\", "/")
                 if word in _PUSHD_WORDS:
