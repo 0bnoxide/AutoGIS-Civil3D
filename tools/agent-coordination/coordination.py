@@ -526,7 +526,7 @@ def _ps_write_targets(argv):
     return [v for _, v in flagged] + positional
 
 
-_QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+_QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\[\s\S]|[^\"\\])*\"")
 _PS_QUOTE_RE = re.compile(r"'(?:''|[^'])*'|\"(?:`[\s\S]|\"\"|[^\"`])*\"")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")

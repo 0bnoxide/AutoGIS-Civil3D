@@ -1434,8 +1434,11 @@ class TestPreToolUseAdapter(TempRepoCase):
             with self.subTest(command=command):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     command, self.repo_path, self.repo), command)
-        self.assertIsNone(coordination.deny_reason_for_shell(
-            "echo 'a\\\n' && git status", self.repo_path, self.repo))
+        for command in ("echo 'a\\\n' && git status",
+                        'echo "foo\\\n; git reset --hard"'):
+            with self.subTest(command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, self.repo_path, self.repo), command)
         # Escaped separators are literal; an escaped backslash is not.
         self.assertIsNone(coordination.deny_reason_for_shell(
             r"echo a \; git reset --hard", self.repo_path, self.repo))
