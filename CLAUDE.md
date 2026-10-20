@@ -9,7 +9,8 @@ Harness specifics:
 - Hooks are wired in `.claude/settings.json`: SessionStart refreshes the
   codebase-memory index (outcome logged to
   `~/.cache/codebase-memory-mcp/last-index.log`) and prints the project
-  name to pass on every graph query; PreToolUse denies writes
+  name to pass on every graph query (`C-Users-ichbi-AutoGIS-Civil3D` on
+  the primary machine; never AutoGIS's or a worktree's); PreToolUse denies writes
   targeting `main` through the shared rule engine in
   `tools/agent-coordination/`.
 - Skills under `.claude/skills/` and agents under `.claude/agents/` are
