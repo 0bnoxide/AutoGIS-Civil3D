@@ -51,7 +51,9 @@ primary="$(dirname "$common_dir")"
 py="$(command -v python || command -v python3 || true)"
 pull="skipped"
 if [[ -n "$py" ]]; then
-  GIT_TERMINAL_PROMPT=0 "$py" "${BASH_SOURCE[0]%/*}/../agent-coordination/coordination.py" sync-main >/dev/null 2>&1
+  # Normalize first: on Windows the hook path can arrive with backslashes.
+  hook_dir="$(dirname "${BASH_SOURCE[0]//\\//}")"
+  GIT_TERMINAL_PROMPT=0 "$py" "$hook_dir/../agent-coordination/coordination.py" sync-main >/dev/null 2>&1
   case $? in
     0) pull="ok" ;;
     1) pull="refused" ;;   # dirty tracked files, or not a fast-forward
