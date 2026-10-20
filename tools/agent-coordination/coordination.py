@@ -651,7 +651,7 @@ def _strip_ps_call_block(argv):
     return stripped
 
 
-def _shell_segments(command, masked_all, cmd=False):
+def _shell_segments(command, masked_all, cmd=False, ps=False):
     """Yield (segment, aligned masked text, background job) per statement.
 
     Outside cmd a lone `&` ends a statement and backgrounds it (Bash,
@@ -659,11 +659,18 @@ def _shell_segments(command, masked_all, cmd=False):
     `&&`, the redirect forms (`2>&1`, `>&2`, `<&3`, `&>`) and `|&` are not
     statement ends. `&` binds looser than `&&`/`||`, so every segment of
     the list it ends shares one job id (None in the foreground).
+    PowerShell script-block braces also end a statement, so the body of
+    `if (...) { cmd }` is checked on its own (#210), and each brace is
+    yielded as a `{`/`}` marker segment; `${name}` variables are not blocks.
     """
     separators = r"&&|\|\||&|\n" if cmd \
         else r"&&|\|\||;|\n|(?<![<>|])&(?!>)"
+    scan = masked_all
+    if ps:
+        separators += r"|[{}]"
+        scan = re.sub(r"\$\{[^}]*\}", lambda m: " " * len(m.group()), scan)
     cuts = [(m.start(), m.end(), m.group())
-            for m in re.finditer(separators, masked_all)]
+            for m in re.finditer(separators, scan)]
     cuts.append((len(command), len(command), ""))
     seg_start, pending = 0, []
     for cut_start, cut_end, sep in cuts:
@@ -682,6 +689,8 @@ def _shell_segments(command, masked_all, cmd=False):
             for item in pending:
                 yield (*item, cut_start if background else None)
             pending = []
+        if sep in ("{", "}"):
+            yield sep, sep, None  # block marker; only PowerShell cuts here
 
 
 def _pipeline_stages(segment, segment_masked):
@@ -762,8 +771,17 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     effective_cwd = parent_cwd = cwd
     job = None
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
+    blocks = []  # cwds saved at each open PowerShell script block
     for segment, seg_masked, seg_job in _shell_segments(
-            command, masked_all, cmd=cmd):
+            command, masked_all, cmd=cmd, ps=ps):
+        if ps and segment in ("{", "}"):
+            # A block may never run, so a `cd` inside it moves only the
+            # rest of that block, as before blocks were inspected.
+            if segment == "{":
+                blocks.append((effective_cwd, parent_cwd))
+            elif blocks:
+                effective_cwd, parent_cwd = blocks.pop()
+            continue
         if seg_job != job:
             # A background job's `cd` moves the rest of that job only; the
             # parent shell resumes where it was.

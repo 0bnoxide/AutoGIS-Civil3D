@@ -416,6 +416,34 @@ class TestMainRule(TempRepoCase):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo, ps=ps), cmd)
 
+    def test_powershell_script_block_bodies_are_checked(self):
+        # #210: commands inside `{ ... }` reach the main rule.
+        for cmd in ("if ($true) { git reset --hard }",
+                    "if($true){git reset --hard}",
+                    "try { git status } catch { git reset --hard }",
+                    "foreach ($f in 1) { Remove-Item seed.txt }",
+                    "if ($true) { Set-Content seed.txt x }"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=True), cmd)
+        for cmd in ("if ($true) { git status }",
+                    "Write-Output '{ git reset --hard }'",
+                    "Get-ChildItem | ForEach-Object { $_.Name }",
+                    "Write-Output ${env:TEMP}"):
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=True), cmd)
+
+    def test_powershell_block_cd_stays_inside_the_block(self):
+        # A block may not run: its `cd` must not move later statements.
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe, exist_ok=True)
+        main = self.repo_path.replace(os.sep, "/")
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"if ($false) {{ cd {safe} }}; git reset --hard",
+            self.repo_path, self.repo, ps=True))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"cd {safe}; if ($true) {{ cd {main}; git reset --hard }}",
+            self.repo_path, self.repo, ps=True))
+
     def test_backgrounded_cd_does_not_move_later_segments(self):
         # `cd x &` runs in a background subshell/job: the parent stays put.
         safe = os.path.join(self.base, "safe").replace(os.sep, "/")
@@ -1357,6 +1385,18 @@ class TestPreToolUseAdapter(TempRepoCase):
                     "cwd": self.repo_path, "session_id": "s1",
                 })
                 self.assertIn("claimed by session s2", out)
+
+    def test_powershell_script_block_writes_reach_claim_layer(self):
+        # #210: the claim layer shares the same parser.
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        rc, out = self.decide({
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "if ($true) { Remove-Item src/code.cs }"},
+            "cwd": self.repo_path, "session_id": "s1",
+        })
+        self.assertIn("claimed by session s2", out)
 
     def test_ambiguous_data_is_conservative_but_explicit_shell_data_allowed(self):
         # Each string is harmless data in its actual shell; the other parser
