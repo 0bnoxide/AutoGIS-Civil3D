@@ -455,6 +455,7 @@ class TestMainRule(TempRepoCase):
                     "Write-Output foo` <#x; Remove-Item seed.txt #>",
                     # `--%` ends at a newline or pipe.
                     "findstr.exe --% x\nRemove-Item seed.txt",
+                    "cmd.exe foo`;--% bar; Remove-Item seed.txt",
                     "findstr.exe --% x | ForEach-Object { git reset --hard }"):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo, ps=True), cmd)

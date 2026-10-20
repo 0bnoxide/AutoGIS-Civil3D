@@ -565,7 +565,7 @@ def _mask_literals(command, cmd=False, ps=False):
             command)
         # After the stop-parsing token `--%`, the rest of the line up to a
         # pipe is literal native-command text, `;` and braces included.
-        masked = re.sub(r"(?<![^\s;|&{}()])--%[^\n|]*",
+        masked = re.sub(r"(?<![^\s;|&{}()])(?<!`[\s;|&{}()])--%[^\n|]*",
                         lambda m: "--%" + " " * (len(m.group()) - 3), masked)
     elif cmd:
         masked = re.sub(r'"[^"]*"', blank, command)
