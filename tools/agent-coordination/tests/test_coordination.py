@@ -1469,6 +1469,47 @@ class TestPreToolUseAdapter(TempRepoCase):
                     })
                     self.assertIn("main is read-only", out)
 
+    def test_nested_interpreter_forms_reach_main_rule(self):
+        # #182: unquoted cmd /c tails, path- or .exe-supplied interpreters,
+        # Git Bash's //c, and multi-argument pwsh -Command.
+        for command in (
+                "cmd /c git reset --hard",
+                'cmd //c "git reset --hard"',
+                "C:/Windows/System32/cmd.exe /c git reset --hard",
+                'powershell.exe -Command "git reset --hard"',
+                "pwsh.exe -c git reset --hard",
+                '/usr/bin/bash -c "git reset --hard"',
+                'bash.exe -c "git reset --hard"',
+                '/usr/bin/env bash -c "git reset --hard"'):
+            for tool, shell in (("Bash", "/bin/bash"), ("PowerShell", "pwsh")):
+                with self.subTest(tool=tool, command=command):
+                    rc, out = self.decide({
+                        "tool_name": tool, "tool_input": {
+                            "command": command, "shell": shell,
+                        }, "cwd": self.repo_path,
+                    })
+                    self.assertIn("main is read-only", out)
+
+    def test_nested_interpreter_forms_reach_claims(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for command in (
+                r"C:\Windows\System32\cmd.exe /c del /q src\code.cs",
+                r"cmd //c del /q src\code.cs",
+                "pwsh.exe -Command Remove-Item src/code.cs",
+                '/bin/sh -c "rm src/code.cs"'):
+            with self.subTest(command=command):
+                rc, out = self.decide({
+                    "tool_name": "PowerShell", "tool_input": {
+                        "command": command,
+                    }, "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
+        # A quoted cmd argument stays one argument when the tail is re-joined.
+        self.assertEqual(coordination.shell_write_targets(
+            'cmd /c echo "a & del src/code.cs"', self.repo_path), [])
+
     def test_cmd_write_aliases_reach_claims_without_powershell_aliases(self):
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
         coordination.claim(self.repo, "s1", "branch", "feature")

@@ -577,7 +577,7 @@ def _strip_cmd_prefixes(argv, _depth=0):
     wrapped command unchecked (fail toward today's behaviour) and, in the rare
     case the value matches a mutator name (`sudo -u rm …`), over-denies in the
     safe direction. Neither outcome is a silent new bypass."""
-    if _depth >= _MAX_UNWRAP_DEPTH or not argv or argv[0].lower() \
+    if _depth >= _MAX_UNWRAP_DEPTH or not argv or _exe_name(argv[0]) \
             not in _CMD_PREFIXES:
         return argv
     i = 1
@@ -594,6 +594,14 @@ def _strip_cmd_prefixes(argv, _depth=0):
     return _strip_cmd_prefixes(argv[i:], _depth + 1)
 
 
+def _exe_name(token):
+    """Command name with any directory and `.exe` dropped, so a path-supplied
+    interpreter (`/usr/bin/bash`, `powershell.exe`) unwraps like its bare
+    name (#182)."""
+    name = _git_executable_name(token)
+    return name[:-4] if name.endswith(".exe") else name
+
+
 def _nested_script(argv):
     """If argv is an interpreter invoked on an inline script string, return
     (inner_command, ps, cmd) to re-parse; else None. Covers bash/sh/zsh/dash/ksh
@@ -606,12 +614,16 @@ def _nested_script(argv):
     git-hook backstop and per-write claim layer."""
     if not argv:
         return None
-    head, rest = argv[0].lower(), argv[1:]
+    head, rest = _exe_name(argv[0]), argv[1:]
 
-    def after(match, ps, cmd=False):
+    def after(match, ps, cmd=False, join=None):
         for j, tok in enumerate(rest):
             if match(tok.lower()) and j + 1 < len(rest):
-                return rest[j + 1], ps, cmd
+                tail = rest[j + 1:]
+                # cmd /c and pwsh -Command run every remaining argument, not
+                # just the next one (`cmd /c git reset --hard`, #182).
+                script = join(tail) if join and len(tail) > 1 else tail[0]
+                return script, ps, cmd
         return None
 
     if head in _SH_DASH_C:
@@ -620,9 +632,12 @@ def _nested_script(argv):
         # these the common form (cold review).
         return after(lambda t: bool(re.fullmatch(r"-[a-z]*c", t)), False)
     if head in _PS_DASH_C:
-        return after(lambda t: t in ("-command", "-c"), True)
-    if head in ("cmd", "cmd.exe"):
-        return after(lambda t: t in ("/c", "/k"), False, cmd=True)
+        return after(lambda t: t in ("-command", "-c"), True, join=" ".join)
+    if head == "cmd":
+        # `//c` is Git Bash's spelling of /c (MSYS rewrites it). Re-quote the
+        # remaining arguments the way they reach cmd's command line.
+        return after(lambda t: t in ("/c", "/k", "//c", "//k"), False,
+                     cmd=True, join=subprocess.list2cmdline)
     if head == "eval" and rest:
         return " ".join(rest), False, False
     if head in ("iex", "invoke-expression") and rest:
@@ -786,7 +801,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         raw_targets = _redirect_targets(segment, seg_masked)
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
-            if argv and argv[0].lower() in _CMD_PREFIXES:
+            if argv and _exe_name(argv[0]) in _CMD_PREFIXES:
                 # `_strip_cmd_prefixes` leaves a wrapper at its depth cap.
                 # That opaque remainder could hide a mutator, so surface the
                 # same fail-closed event used for nested interpreters.
