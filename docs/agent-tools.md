@@ -18,8 +18,10 @@ and no repository check may hard-depend on them.
   prefix of ours), a `...-.claude-worktrees-...` / `...-.worktrees-...`
   project, or cross-project tools: their results are not this repository's
   code.
-- **Refresh:** the SessionStart hook re-indexes the repository and appends
-  the outcome (or failure) to `~/.cache/codebase-memory-mcp/last-index.log`.
+- **Refresh:** the SessionStart hook fast-forwards a clean primary `main`,
+  re-indexes the repository, and appends the outcome to
+  `~/.cache/codebase-memory-mcp/last-index.log`: `ok`, `FAILED`, or `STALE`
+  when tracked files are missing from the graph (the line names the fix).
   A stale index misleads silently; the log line is the diagnosis. The log is
   shared with other repositories' hooks; this repository's lines carry
   `AutoGIS-Civil3D` after the timestamp.
