@@ -891,7 +891,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
     effective_cwd = parent_cwd = cwd
     # PowerShell: other cwds a script block may have moved to. A block may
     # or may not run, so later statements are checked in every one (#210).
-    alt = []
+    alt = parent_alt = []
 
     def cwds():
         return [effective_cwd] + [c for c in alt if c != effective_cwd]
@@ -919,7 +919,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         if seg_job != job:
             # A background job's `cd` moves the rest of that job only; the
             # parent shell resumes where it was.
-            job, effective_cwd = seg_job, parent_cwd
+            job, effective_cwd, alt = seg_job, parent_cwd, list(parent_alt)
         spans = _ps_block_spans(seg_masked) if ps else []
         if spans:
             # Check each block body as PowerShell, whether it runs (`if`,
@@ -928,12 +928,20 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             # reads as that value.
             # A block may move the location for later sibling blocks
             # (`try { cd x } finally { ... }`) as well as later statements.
+            # Only one branch of an if/elseif/else chain runs, so an
+            # `else` body starts where the chain started.
+            chain_base, prev_end = cwds(), None
             for start, end in spans:
                 if _depth >= _MAX_UNWRAP_DEPTH:
                     yield ("opaque", effective_cwd)
                     break
+                if prev_end is None or not re.fullmatch(
+                        r"(?i)\s*(?:else|elseif\s*\(.*\))\s*",
+                        seg_masked[prev_end + 1:start], re.S):
+                    chain_base = cwds()
+                prev_end = end
                 moved = []
-                for base in cwds():
+                for base in chain_base:
                     for event in _shell_events(
                             segment[start + 1:end], base, ps=True,
                             _depth=_depth + 1, _report_cwd=True):
@@ -942,6 +950,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                         else:
                             yield event
                 alt += [c for c in moved if c not in cwds()]
+            if job is None:
+                parent_alt = list(alt)
         stages = _pipeline_stages(segment, seg_masked, bash=bash)
         # `cd` is read before group peeling, as before #209, so peeling
         # never turns `(cd x` or a piped `{ cd x` into a parent-shell `cd`.
@@ -959,7 +969,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             effective_cwd = path if os.path.isabs(path) \
                 else os.path.join(effective_cwd or ".", path)
             if job is None:
-                parent_cwd = effective_cwd
+                parent_cwd, parent_alt = effective_cwd, list(alt)
             continue
         if bash:
             segment, seg_masked = _peel_bash_grouping(segment, seg_masked)
@@ -999,7 +1009,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         for base in cwds():
             yield from _target_events(raw_targets, base, ps, cmd=cmd)
     if _report_cwd:
-        for final in [parent_cwd] + alt:
+        for final in [parent_cwd] + parent_alt:
             yield ("cwd", final)
 
 

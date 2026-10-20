@@ -490,14 +490,20 @@ class TestMainRule(TempRepoCase):
         main = self.repo_path.replace(os.sep, "/")
         for cmd in (f"if ($true) {{ cd {main} }}; git reset --hard",
                     f"try {{ cd {main} }} finally {{ git reset --hard }}",
+                    f"if ($a) {{ cd {main} }} else {{ }}; git reset --hard",
                     f"if ($a) {{ if ($b) {{ cd {main} }} }}; git reset --hard",
                     f"if ($true) {{ cd {self.base} }}; cd repo; "
                     "git reset --hard"):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, safe, self.repo, ps=True), cmd)
-        self.assertIsNone(coordination.deny_reason_for_shell(
-            f"if ($true) {{ cd {main} }}; cd {safe}; git reset --hard",
-            safe, self.repo, ps=True))
+        for cmd in (f"if ($true) {{ cd {main} }}; cd {safe}; git reset --hard",
+                    # Only one branch of an if/else chain runs.
+                    f"if ($true) {{ cd {main} }} else {{ git reset --hard }}",
+                    f"if ($a) {{ cd {main} }} elseif ($b) {{ git reset --hard }}",
+                    # A background job's location never reaches the parent.
+                    f"& {{ cd {main} }} & git reset --hard"):
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                cmd, safe, self.repo, ps=True), cmd)
 
     def test_powershell_backtick_escaped_brace_is_not_a_block(self):
         self.assertIsNone(coordination.deny_reason_for_shell(
