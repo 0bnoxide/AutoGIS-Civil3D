@@ -842,7 +842,8 @@ _PS_CD_WORDS = {"chdir", "set-location", "sl"} | _PUSHD_WORDS | _POPD_WORDS
 # masked scan cannot see.
 _EVAL_WORDS = {
     "bash": re.compile(r"\s*(?:(?:command|builtin)\s+)?eval(?![\w-])"),
-    "ps": re.compile(r"\s*[&.]?\s*(?:iex|invoke-expression)(?![\w-])", re.I),
+    "ps": re.compile(r"\s*[&.]?\s*(?:iex|invoke-expression|sal|nal|"
+                     r"set-alias|new-alias)(?![\w-])", re.I),
 }
 _LOCATION_TEXT_RE = re.compile(
     r"(?<![\w-])(?:cd|chdir|sl|set-location|push-location|pop-location|"
@@ -855,8 +856,10 @@ _HIDDEN_LOCATION_RE = {
     "ps": re.compile(
         r"(?:[{(&=,]|\b(?:if|else|elseif|foreach|while|do|try|finally)\b)"
         r"\s*(?:cd|chdir|sl|set-location|push-location|pop-location|pushd|"
-        r"popd)(?![\w-])", re.I),
-    "cmd": re.compile(r"(?<![\w-])(?:cd|chdir|pushd|popd)(?![\w-])", re.I),
+        r"popd)(?![\w-])|\.(?:SetLocation|PushCurrentLocation|PopLocation)"
+        r"\s*\(", re.I),
+    "cmd": re.compile(r"(?<![\w-])(?:cd|chdir|pushd|popd)(?![\w-])|"
+                      r"^\s*@?(?:cd|chdir)[.\\/]", re.I),
 }
 
 
@@ -879,7 +882,8 @@ def _location_change(word, args, ps, cmd):
         if any(a[:1] in ("-", "+") and a not in flags for a in args):
             return None, False
         paths = [a for a in args if a not in flags]
-    if word in _POPD_WORDS and paths or len(paths) > 1:
+    if word in _POPD_WORDS and paths or len(paths) > 1 or any(
+            p[:2] in ("~+", "~-") for p in paths):  # ~+ is PWD, ~- OLDPWD
         return None, False  # popd +N / extra operands: an error or unknown
     if not paths and not cmd and word not in _PUSHD_WORDS | _POPD_WORDS:
         paths = ["~"]  # bare cd / Set-Location goes home
@@ -961,7 +965,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
                 seg_masked = seg_masked[:i] + " " + seg_masked[i + 1:]
         if cmd:
             # The segment's own leading location word is the modeled one.
-            check = re.sub(r"^\s*@?(?:cd|chdir|pushd|popd)(?![\w-])",
+            check = re.sub(r"^\s*@?(?:cd|chdir|pushd|popd)(?![\w.\\/-])",
                            lambda m: " " * len(m.group(0)), check, flags=re.I)
         if hidden_re.search(check) or _EVAL_WORDS.get(
                 "ps" if ps else "cmd" if cmd else "bash", re.compile("$^")
@@ -992,6 +996,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         # `& Set-Location x` / `. Set-Location x` run the cmdlet here.
         while ps and first[:1] in (["&"], ["."]):
             first = first[1:]
+        if cmd and first and first[0].startswith("@"):
+            first = [first[0][1:]] + first[1:]  # `@cd x` only hides the echo
         word = first[0].lower() if first and (ps or cmd) \
             else first[0] if first else ""
         if ps and len(stages) > 1 and any(

@@ -450,6 +450,12 @@ class TestMainRule(TempRepoCase):
             (f". Set-Location {main}; git reset --hard", {"ps": True}),
             (f"eval 'cd {main}'; git reset --hard", {}),
             (f"iex 'cd {main}'; git reset --hard", {"ps": True}),
+            (f"Set-Alias c Set-Location; c {main}; git reset --hard",
+             {"ps": True}),
+            (f"$ExecutionContext.SessionState.Path.SetLocation('{main}'); "
+             "git reset --hard", {"ps": True}),
+            (f"cd {main}; cd {safe}; cd ~-; git reset --hard", {}),
+            (f"@cd {main} & git reset --hard", {"cmd": True}),
             (f"(cd {main}) & git reset --hard", {"cmd": True}),
             (f"pushd {safe}; cd /tmp; pushd >/dev/null; git reset --hard", {}),
             (f"cd {safe} > /dev/null 2>&1; pushd {main} 2>$null; "
