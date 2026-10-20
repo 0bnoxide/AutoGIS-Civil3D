@@ -394,7 +394,15 @@ def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False, cmd=False):
     return None
 
 
+def _cmd_unescape(text):
+    """Drop cmd's `^` escape outside double quotes (`s^rc` is `src`)."""
+    return re.sub(r'"[^"]*"|\^(.)', lambda m: m.group(0)
+                  if m.group(1) is None else m.group(1), text, flags=re.S)
+
+
 def _argv_of(stage, ps=False, cmd=False):
+    if cmd:
+        stage = _cmd_unescape(stage)
     try:
         lexer = shlex.shlex(stage.strip(), posix=True)
         lexer.whitespace_split = True
@@ -540,7 +548,9 @@ def _mask_literals(command, cmd=False, ps=False):
         quote_re = re.compile(r'"[^"]*"')
     masked = quote_re.sub(blank, command)
     if cmd:
-        return masked  # cmd has neither single-quoted strings nor heredocs
+        # `^x` is a literal x, so `^&` is not a separator (#185). Quoted
+        # carets are already blanked. cmd has no single quotes or heredocs.
+        return re.sub(r"\^.", lambda m: "  ", masked, flags=re.S)
     # Openers are found in the real text (quote-masking blanks a quoted
     # delimiter like <<'EOF'); masking preserves offsets, so requiring the
     # << itself to be unmasked skips heredoc lookalikes inside strings.
@@ -746,13 +756,14 @@ def _peel_bash_grouping(segment, masked):
     return segment, masked
 
 
-def _redirect_targets(segment, segment_masked):
+def _redirect_targets(segment, segment_masked, cmd=False):
     """Return raw redirect targets, preserving quoted filename text."""
     targets = []
     for match in REDIRECT_RE.finditer(segment_masked):
         target = _REDIR_TARGET_RE.match(segment, match.start())
         if target:
-            targets.append(target.group(1))
+            targets.append(_cmd_unescape(target.group(1)) if cmd
+                           else target.group(1))
     return targets
 
 
@@ -840,7 +851,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         if bash:
             segment, seg_masked = _peel_bash_grouping(segment, seg_masked)
             stages = _pipeline_stages(segment, seg_masked, bash=True)
-        raw_targets = _redirect_targets(segment, seg_masked)
+        raw_targets = _redirect_targets(segment, seg_masked, cmd=cmd)
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
             if argv and _exe_name(argv[0]) in _CMD_PREFIXES:
