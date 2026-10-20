@@ -143,6 +143,13 @@ class TestSessionStart(unittest.TestCase):
         line = self.run_hook(["src/a.py", "src/b.py", "src/c.py"])
         self.assertIn(" STALE 2 of 5 ", line)
 
+    def test_wholly_missing_language_is_stale(self):
+        self.write(self.primary, "src/x.cs")
+        self.write(self.primary, "src/y.cs")
+        self.commit(self.primary, "cs")
+        line = self.run_hook(["src/a.py", "src/b.py", "src/c.py"])
+        self.assertIn(" STALE 2 of 5 ", line)
+
     def test_unreadable_graph_is_unchecked_not_stale(self):
         line = self.run_hook([])
         self.assertIn(" ok files=unchecked ", line)

@@ -89,10 +89,11 @@ echo "codebase-memory: pass project=\"$project\" on every project-scoped codebas
 
 # `ok` alone proved nothing: a poisoned hash cache left 149 File nodes against
 # 209+ tracked files and every session still logged ok (#218). So compare the
-# graph's File nodes with `git ls-files`, counting tracked files whose
-# extension the graph indexes somewhere, outside dot-directories (the indexer
-# skips some, like .claude/). Keying on extension alone, not directory, keeps a
-# wholly dropped subtree visible. Above 5% missing is logged STALE with the fix.
+# graph's File nodes with `git ls-files`, counting tracked files outside
+# dot-directories (the indexer skips some, like .claude/) whose extension is
+# one of this repo's languages or one the graph indexes somewhere. The fixed
+# list keeps a wholly dropped language visible; keying on extension, not
+# directory, does the same for a subtree. Above 5% missing is logged STALE.
 missing_files() {
   local indexed
   indexed="$("$cbm" cli query_graph "{\"project\":\"$project\",\"query\":\"MATCH (f:File) RETURN f.file_path\",\"max_rows\":100000}" 2>/dev/null \
@@ -100,6 +101,7 @@ missing_files() {
   [[ -n "$indexed" ]] || return 1
   git -C "$primary" ls-files 2>/dev/null | awk '
     function ext(p) { return match(p, /\.[^.\/]+$/) ? substr(p, RSTART) : "" }
+    BEGIN { split(".cs .py .ps1 .sh", lang, " "); for (i in lang) seen[lang[i]] }
     NR == FNR { have[$0]; seen[ext($0)]; next }
     $0 !~ /(^|\/)\./ && (ext($0) in seen) { total++; if (!($0 in have)) { miss++; if (miss <= 3) eg = eg " " $0 } }
     END { printf "%d %d%s\n", miss, total, eg }' <(printf '%s\n' "$indexed") -
