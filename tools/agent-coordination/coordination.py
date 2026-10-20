@@ -778,9 +778,17 @@ def _redirect_targets(segment, segment_masked, bash=False, cmd=False):
     return targets
 
 
+def _command_name(token):
+    """A bare command name with Windows' trailing `.`/space dropped, or the
+    last component of a path-supplied command (`/bin/rm` is rm)."""
+    if re.search(r"[/\\]", token):
+        return token.replace("\\", "/").rsplit("/", 1)[-1]
+    return token.rstrip(". ")
+
+
 def _argv_write_targets(argv, ps, cmd=False):
     """Return raw target operands for the write form represented by argv."""
-    name = argv[0].rstrip(". ")
+    name, low = _command_name(argv[0]), argv[0].lower()
     targets = []
     if name == "tee":
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
@@ -790,9 +798,8 @@ def _argv_write_targets(argv, ps, cmd=False):
         targets += [arg[3:] for arg in argv if arg.startswith("of=")]
     if name == "truncate":
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
-    if name in ("rm", "unlink", "shred"):
+    if name in ("rm", "unlink", "shred") or name == "rmdir" and not cmd:
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
-    low = argv[0].lower()
     if ps and (low in _PS_WRITE_CMDLETS or low in _PS_COPY_CMDLETS):
         targets += _ps_write_targets(argv)
     if cmd:
@@ -820,7 +827,7 @@ def _argv_subtree_targets(argv, ps, cmd=False):
     checked too (#184). Each move is (destination, sources, into): with
     `into`, an existing destination directory receives the sources instead
     of being replaced."""
-    name, low = argv[0].rstrip(". "), argv[0].lower()
+    name, low = _command_name(argv[0]), argv[0].lower()
     if name in ("rm", "rmdir"):
         return [arg for arg in argv[1:] if not arg.startswith("-")], []
     if name == "mv":

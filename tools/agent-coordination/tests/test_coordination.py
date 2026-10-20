@@ -1443,6 +1443,8 @@ class TestPreToolUseAdapter(TempRepoCase):
                 ("Bash", "", "rm -rf src"),
                 ("Bash", "", "rm -r ."),
                 ("Bash", "", "rmdir src/lib"),
+                ("Bash", "", "/bin/rm -rf src"),
+                ("Bash", "", "/usr/bin/mv src elsewhere"),
                 ("Bash", "", "mv src elsewhere"),
                 ("Bash", "", 'cmd /c "rd /s /q src"'),
                 ("Bash", "cmd.exe", "rmdir /s /q src"),
@@ -1458,6 +1460,10 @@ class TestPreToolUseAdapter(TempRepoCase):
                         "cp notes.txt ."):
             with self.subTest(command=command):
                 self.assertEqual(decide("Bash", command), "")
+        # rmdir is an ordinary write too, so the caller's own scope applies.
+        coordination.claim(self.repo, "s1", "file_glob", "docs/*")
+        self.assertIn("outside your claimed file scope",
+                      decide("Bash", "rmdir srclib"))
 
     def test_move_into_existing_directory_checks_the_moved_path(self):
         # Review of #184: `mv src docs` writes `docs/src` when docs exists.
