@@ -68,7 +68,8 @@ class TestSessionStart(unittest.TestCase):
         self.primary = os.path.join(self.tmp, "primary")
         self.git("init", "-q", "--bare", "-b", "main", self.origin, cwd=self.tmp)
         self.git("clone", "-q", self.origin, self.primary, cwd=self.tmp)
-        files = ["src/a.py", "src/b.py", "src/c.py", "README.md", "img/logo.png"]
+        files = ["src/a.py", "src/b.py", "src/c.py", "README.md", "img/logo.png",
+                 ".claude/hook.py"]
         for rel in files:
             self.write(self.primary, rel)
         self.commit(self.primary, "seed")
@@ -117,7 +118,7 @@ class TestSessionStart(unittest.TestCase):
         line = self.run_hook(["src/a.py", "src/b.py", "src/c.py", "src/d.py"])
         self.assertEqual(self.git("rev-parse", "HEAD"), upstream)
         self.assertIn("pull=ok", line)
-        # README.md and img/ are kinds the graph never indexed: not counted.
+        # README.md, img/ and dot-dirs are never indexed here: not counted.
         self.assertIn(" ok files=4/4 ", line)
 
     def test_dirty_tracked_tree_is_not_synced(self):
@@ -134,6 +135,13 @@ class TestSessionStart(unittest.TestCase):
         self.assertIn(" STALE 2 of 3 ", line)
         self.assertIn("delete_project", line)
         self.assertNotIn(" ok ", line)
+
+    def test_wholly_missing_directory_is_stale(self):
+        self.write(self.primary, "tests/t1.py")
+        self.write(self.primary, "tests/t2.py")
+        self.commit(self.primary, "tests")
+        line = self.run_hook(["src/a.py", "src/b.py", "src/c.py"])
+        self.assertIn(" STALE 2 of 5 ", line)
 
     def test_unreadable_graph_is_unchecked_not_stale(self):
         line = self.run_hook([])
