@@ -436,6 +436,12 @@ class TestMainRule(TempRepoCase):
             (f"pushd {safe}; pushd /tmp; dirs -c; cd {main}; popd; "
              "git reset --hard", {}),
             ("command -v pushd /tmp; git reset --hard", {}),
+            (f"pushd {safe}; cd /tmp; pushd >/dev/null; git reset --hard", {}),
+            (f"cd {safe} > /dev/null 2>&1; pushd {main} 2>$null; "
+             "git reset --hard", {"ps": True}),
+            (f"cd {safe} >nul & cd {main} 2>nul & git reset --hard",
+             {"cmd": True}),
+            ("cd /tmp > seed.txt", {}),
         )
         for command, kw in denied:
             with self.subTest(command=command):

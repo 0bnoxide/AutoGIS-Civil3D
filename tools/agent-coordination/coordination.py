@@ -839,6 +839,22 @@ def _location_change(word, args, ps, cmd):
     return (paths[0] if paths else None), True
 
 
+_REDIR_OP_RE = re.compile(r"(?:\d*&?|\*)>>?|\d*<")
+
+
+def _drop_redirects(args):
+    """Drop redirect tokens (`>x`, `2>&1`, `> x`) from an argv tail."""
+    out, skip = [], False
+    for a in args:
+        if skip:
+            skip = False
+        elif _REDIR_OP_RE.fullmatch(a):
+            skip = True  # bare operator: its target is the next token
+        elif not _REDIR_OP_RE.match(a):
+            out.append(a)
+    return out
+
+
 _UNMODELED_LOCATION = ("a location change the parser does not model; command "
                        "is denied because the working directory is unknown")
 
@@ -893,7 +909,12 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             continue
         if len(stages) == 1 and (word in _CD_WORDS or ps and word in
                                  _PS_CD_WORDS or cmd and word == "chdir"):
-            path, modeled = _location_change(word, first[1:], ps, cmd)
+            # Redirects open before the change, in the old directory, and
+            # are not location operands.
+            yield from _target_events(_redirect_targets(segment, seg_masked),
+                                      effective_cwd, ps, cmd=cmd)
+            path, modeled = _location_change(
+                word, _drop_redirects(first[1:]), ps, cmd)
             if not modeled:
                 yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
                 continue
