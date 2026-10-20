@@ -529,10 +529,13 @@ def _ps_write_targets(argv):
     return [v for _, v in flagged] + positional
 
 
-_QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+_QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\[\s\S]|[^\"\\])*\"")
 _PS_QUOTE_RE = re.compile(r"'(?:''|[^'])*'|\"(?:`[\s\S]|\"\"|[^\"`])*\"")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
+# Bash: a backslash escapes the next character, including a space (#178).
+_BASH_REDIR_TARGET_RE = re.compile(
+    r">{1,2}\s*(\"[^\"]*\"|'[^']*'|(?:\\.|[^\s|;&<>\\])+)")
 
 
 def _mask_literals(command, cmd=False, ps=False):
@@ -759,14 +762,21 @@ def _peel_bash_grouping(segment, masked):
     return segment, masked
 
 
-def _redirect_targets(segment, segment_masked, cmd=False):
-    """Return raw redirect targets, preserving quoted filename text."""
+def _redirect_targets(segment, segment_masked, bash=False, cmd=False):
+    """Return raw redirect targets, preserving quoted filename text.
+
+    Bash targets are unescaped as Bash reads them (`s\\rc` is `src`), and
+    cmd drops its `^` escapes; PowerShell backslashes stay path separators.
+    """
     targets = []
+    target_re = _BASH_REDIR_TARGET_RE if bash else _REDIR_TARGET_RE
     for match in REDIRECT_RE.finditer(segment_masked):
-        target = _REDIR_TARGET_RE.match(segment, match.start())
+        target = target_re.match(segment, match.start())
         if target:
-            targets.append(_cmd_unescape(target.group(1)) if cmd
-                           else target.group(1))
+            raw = target.group(1)
+            if bash and not raw.startswith(("'", '"')):
+                raw = re.sub(r"\\(.)", r"\1", raw)
+            targets.append(_cmd_unescape(raw) if cmd else raw)
     return targets
 
 
@@ -909,6 +919,17 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     hidden_re = _HIDDEN_LOCATION_RE["ps" if ps else "cmd" if cmd else "bash"]
     scopes, closing = [], 0
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
+    if bash:
+        # Bash drops an unquoted backslash-newline before splitting, so
+        # `> s\<newline>rc/x` writes `src/x` (#178). Quoted and heredoc text
+        # is blanked in the mask, so it keeps its continuations.
+        for m in reversed(list(re.finditer(r"\\+\n", masked_all))):
+            if (m.end() - m.start() - 1) % 2:
+                cut = m.end() - 2
+                command = command[:cut] + command[cut + 2:]
+                masked_all = masked_all[:cut] + masked_all[cut + 2:]
+        # An escaped character is literal, so `\;` or `\&` never splits.
+        masked_all = re.sub(r"\\[\s\S]", "  ", masked_all)
     for segment, seg_masked, seg_job in _shell_segments(
             command, masked_all, cmd=cmd):
         for _ in range(min(closing, len(scopes))):
@@ -1026,7 +1047,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         if bash:
             segment, seg_masked = _peel_bash_grouping(segment, seg_masked)
             stages = _pipeline_stages(segment, seg_masked, bash=True)
-        raw_targets = _redirect_targets(segment, seg_masked, cmd=cmd)
+        raw_targets = _redirect_targets(segment, seg_masked, bash=bash,
+                                        cmd=cmd)
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
             if argv and _exe_name(argv[0]) in _CMD_PREFIXES:
