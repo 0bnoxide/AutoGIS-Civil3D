@@ -702,15 +702,51 @@ def _shell_segments(command, masked_all, cmd=False):
             pending = []
 
 
-def _pipeline_stages(segment, segment_masked):
-    """Split a segment on unquoted pipeline separators."""
-    pipe_cuts = [m.start() for m in re.finditer(r"\|", segment_masked)] \
-        + [len(segment)]
+def _pipeline_stages(segment, segment_masked, bash=False):
+    """Split a segment on unquoted pipeline separators.
+
+    Bash `|&` is one separator (`2>&1 |`), so the next stage does not start
+    with `&` (#208).
+    """
+    pipe_cuts = [m.span() for m in re.finditer(
+        r"\|&?" if bash else r"\|", segment_masked)] \
+        + [(len(segment), len(segment))]
     stages, last = [], 0
-    for cut in pipe_cuts:
-        stages.append(segment[last:cut])
-        last = cut + 1
+    for cut_start, cut_end in pipe_cuts:
+        stages.append(segment[last:cut_start])
+        last = cut_end
     return stages
+
+
+_BASH_GROUP_OPEN_RE = re.compile(r"\s*(?:[!({]\s*)*")
+
+
+def _peel_bash_grouping(segment, masked):
+    """Blank Bash `!`, `(` and `{` at the start of each pipeline stage, and
+    each `)` that closes a subshell, so the grouped command is read as the
+    command and its last word is not `--hard)` (#209). Parentheses balanced
+    inside the segment, such as `$( ... )`, are kept."""
+    blanks, stage_start = set(), 0
+    for m in re.finditer(r"\|&?|$", masked):
+        lead = _BASH_GROUP_OPEN_RE.match(masked, stage_start)
+        blanks.update(i for i in range(lead.start(), lead.end())
+                      if not masked[i].isspace())
+        stage_start = m.end()
+    depth = 0
+    for i, ch in enumerate(masked):
+        if i in blanks:
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth:
+                depth -= 1
+            else:
+                blanks.add(i)
+    for i in blanks:
+        segment = segment[:i] + " " + segment[i + 1:]
+        masked = masked[:i] + " " + masked[i + 1:]
+    return segment, masked
 
 
 def _redirect_targets(segment, segment_masked):
@@ -816,6 +852,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     effective_cwd = parent_cwd = cwd
     stack, parent_stack = [], []
     job = None
+    bash = not ps and not cmd
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
     for segment, seg_masked, seg_job in _shell_segments(
             command, masked_all, cmd=cmd):
@@ -824,12 +861,14 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             # parent shell resumes where it was.
             job, effective_cwd = seg_job, parent_cwd
             stack = list(parent_stack)
-        stages = _pipeline_stages(segment, seg_masked)
+        stages = _pipeline_stages(segment, seg_masked, bash=bash)
+        # `cd` is read before group peeling, as before #209, so peeling
+        # never turns `(cd x` or a piped `{ cd x` into a parent-shell `cd`.
         first = _argv_of(stages[0], ps=ps, cmd=cmd)
         # `command pushd x` / `builtin cd x` still run in this shell; other
         # wrappers (env, sudo, xargs) start a process that cannot move it.
-        # `command -v pushd` only describes pushd, so stop at any option but
-        # `-p`; the stage is then an ordinary command.
+        # `command -v pushd` only describes pushd, so `-v`/`-V` stop the
+        # peel; the stage is then an ordinary command.
         while not (ps or cmd) and first[:1] in (["command"], ["builtin"]) \
                 and first[1:2] not in (["-v"], ["-V"]):
             first = [a for i, a in enumerate(first[1:])
@@ -881,6 +920,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             if job is None:
                 parent_cwd, parent_stack = effective_cwd, list(stack)
             continue
+        if bash:
+            segment, seg_masked = _peel_bash_grouping(segment, seg_masked)
+            stages = _pipeline_stages(segment, seg_masked, bash=True)
         raw_targets = _redirect_targets(segment, seg_masked)
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
@@ -1792,7 +1834,10 @@ def cmd_sync_main(repo):
         print(f"sync-main: primary tree is not on '{MAIN_BRANCH}'",
               file=sys.stderr)
         return MISUSE
-    rc, out, _ = _git(["status", "--porcelain"], cwd=primary)
+    # Untracked files do not count: stray untracked dirs froze AutoGIS's main
+    # for weeks (#218). merge --ff-only still refuses to overwrite one.
+    rc, out, _ = _git(["status", "--porcelain", "--untracked-files=no"],
+                      cwd=primary)
     if out:
         print("sync-main: primary tree is not clean; refusing", file=sys.stderr)
         return DENY

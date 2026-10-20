@@ -43,6 +43,25 @@ if [[ -z "$common_dir" ]]; then
   exit 0
 fi
 
+# Fast-forward the primary checkout before indexing, so the index follows
+# merged work instead of whatever local main last pulled (AutoGIS #588 did the
+# same). Through sync-main, the one sanctioned local-main mutation: clean main
+# only, ff-only. The outcome rides on the index log line.
+primary="$(dirname "$common_dir")"
+py="$(command -v python || command -v python3 || true)"
+pull="skipped"
+if [[ -n "$py" ]]; then
+  # Normalize first: on Windows the hook path can arrive with backslashes.
+  hook_dir="$(dirname "${BASH_SOURCE[0]//\\//}")"
+  GIT_TERMINAL_PROMPT=0 "$py" "$hook_dir/../agent-coordination/coordination.py" sync-main >/dev/null 2>&1
+  case $? in
+    0) pull="ok" ;;
+    1) pull="refused" ;;   # dirty tracked files, or not a fast-forward
+    2) pull="skipped" ;;   # primary checkout is not on main
+    *) pull="failed" ;;
+  esac
+fi
+
 # pwd -W yields the Windows form (C:/Users/...). The MCP argument requires that
 # form, not the MSYS /c/Users/... form. Fall back where -W is unsupported.
 repo_root="$(cd "$(dirname "$common_dir")" 2>/dev/null && { pwd -W 2>/dev/null || pwd; })"
@@ -68,12 +87,41 @@ project="$(printf '%s' "$repo_root" | sed 's/://g; s#[/\\]#-#g; s/^-//')"
 # project. SessionStart stdout is added to the agent's context.
 echo "codebase-memory: pass project=\"$project\" on every project-scoped codebase-memory call (search, trace, snippet, architecture, index_status) in this repository; list_projects and index_repository take no project. Results from any other project are not this repository's code."
 
+# `ok` alone proved nothing: a poisoned hash cache left 149 File nodes against
+# 209+ tracked files and every session still logged ok (#218). So compare the
+# graph's File nodes with `git ls-files`, counting tracked files outside
+# dot-directories (the indexer skips some, like .claude/) whose extension is
+# one of this repo's languages or one the graph indexes somewhere. The fixed
+# list keeps a wholly dropped language visible; keying on extension, not
+# directory, does the same for a subtree. Above 5% missing is logged STALE.
+missing_files() {
+  local indexed
+  indexed="$("$cbm" cli query_graph "{\"project\":\"$project\",\"query\":\"MATCH (f:File) RETURN f.file_path\",\"max_rows\":100000}" 2>/dev/null \
+    | sed 's/.*"rows":[[:space:]]*\[//' | grep -o '\["[^"]*"\]' | sed 's/^\["//; s/"\]$//')"
+  [[ -n "$indexed" ]] || return 1
+  git -C "$primary" ls-files 2>/dev/null | awk '
+    function ext(p) { return match(p, /\.[^.\/]+$/) ? substr(p, RSTART) : "" }
+    BEGIN { split(".cs .py .ps1 .sh", lang, " "); for (i in lang) seen[lang[i]] }
+    NR == FNR { have[$0]; seen[ext($0)]; next }
+    $0 !~ /(^|\/)\./ && (ext($0) in seen) { total++; if (!($0 in have)) { miss++; if (miss <= 3) eg = eg " " $0 } }
+    END { printf "%d %d%s\n", miss, total, eg }' <(printf '%s\n' "$indexed") -
+}
+
 if "$cbm" cli index_repository "{\"repo_path\":\"$repo_root\",\"mode\":\"full\"}" >/dev/null 2>&1; then
   status="$("$cbm" cli index_status "{\"project\":\"$project\"}" 2>/dev/null || true)"
-  note "ok ${status:-status unavailable for $project}"
+  status="${status:-status unavailable for $project} pull=$pull"
+  if read -r miss total examples < <(missing_files); then
+    if (( miss * 20 > total )); then
+      note "STALE $miss of $total indexable tracked files missing from the graph (e.g. $examples); fix: delete_project {\"project\":\"$project\"} then index_repository. $status"
+    else
+      note "ok files=$((total - miss))/$total $status"
+    fi
+  else
+    note "ok files=unchecked $status"
+  fi
 else
   rc=$?
-  note "FAILED index_repository rc=$rc root=$repo_root"
+  note "FAILED index_repository rc=$rc root=$repo_root pull=$pull"
 fi
 
 exit 0
