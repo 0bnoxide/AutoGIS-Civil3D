@@ -383,7 +383,9 @@ def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False, cmd=False):
         if event[0] == "git":
             reason = deny_reason_for_git_argv(event[1], event[2])
         elif event[0] == "opaque":
-            if repo_hint is None:
+            # An unmodeled location change carries its own reason and denies
+            # even outside a repository: it could move into one (#183).
+            if repo_hint is None and len(event) < 3:
                 continue
             return (event[2] if len(event) > 2 else
                     "nested interpreter depth exceeds the parser limit; "
@@ -799,6 +801,10 @@ def _location_change(word, args, ps, cmd):
     return (paths[0] if paths else None), True
 
 
+_UNMODELED_LOCATION = ("a location change the parser does not model; command "
+                       "is denied because the working directory is unknown")
+
+
 def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
@@ -820,6 +826,13 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         first = _argv_of(stages[0], ps=ps, cmd=cmd)
         word = first[0].lower() if first and (ps or cmd) \
             else first[0] if first else ""
+        if ps and len(stages) > 1 and any(
+                (_argv_of(st, ps=True)[:1] or [""])[0].lower()
+                in _PS_CD_WORDS for st in stages):
+            # PowerShell location cmdlets take piped paths and, unlike a
+            # Bash subshell, move the session: the new directory is unknown.
+            yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
+            continue
         # `cd` moves the parent shell only outside a pipeline; inside one it
         # runs in a subshell and must NOT move later segments. pushd/popd
         # move it too, through a directory stack (#183).
@@ -827,10 +840,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
                                  _PS_CD_WORDS or cmd and word == "chdir"):
             path, modeled = _location_change(word, first[1:], ps, cmd)
             if not modeled:
-                yield ("opaque", effective_cwd,
-                       f"'{first[0]}' with these options is not modeled by "
-                       "the parser; command is denied while repository "
-                       "protection applies")
+                yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
                 continue
             if word in _POPD_WORDS:
                 if stack:

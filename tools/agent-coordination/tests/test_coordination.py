@@ -455,6 +455,14 @@ class TestMainRule(TempRepoCase):
         self.assertIsNotNone(coordination.deny_reason_for_shell(
             f"Set-Location -ErrorAction Stop -Path {main}; git reset --hard",
             safe, None, ps=True))
+        # Outside any repository an unmodeled form could still enter one, and
+        # a PowerShell location cmdlet in a pipeline takes a piped path.
+        for command in (
+                f"Push-Location {main} -StackName A; git reset --hard",
+                f"'{main}' | Set-Location; git reset --hard"):
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, safe, None, ps=True))
         for command, kw in (
                 (f"pushd {main} && popd && git reset --hard", {}),
                 (f"Push-Location {main}; Pop-Location; git reset --hard",
