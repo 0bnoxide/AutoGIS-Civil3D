@@ -1426,6 +1426,39 @@ class TestPreToolUseAdapter(TempRepoCase):
                 })
                 self.assertIn("claimed by session s2", out)
 
+    def test_directory_delete_or_move_reaches_descendant_claims(self):
+        # #184: removing `src` removes everything claimed under `src/*`.
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/lib/*")
+
+        def decide(tool, command, shell=""):
+            return self.decide({
+                "tool_name": tool,
+                "tool_input": {"command": command, "shell": shell},
+                "cwd": self.repo_path, "session_id": "s1",
+            })[1]
+
+        for tool, shell, command in (
+                ("Bash", "", "rm -rf src"),
+                ("Bash", "", "rm -r ."),
+                ("Bash", "", "rmdir src/lib"),
+                ("Bash", "", "mv src elsewhere"),
+                ("Bash", "", 'cmd /c "rd /s /q src"'),
+                ("Bash", "cmd.exe", "rmdir /s /q src"),
+                ("Bash", "cmd.exe", r"del /s /q src"),
+                ("Bash", "cmd.exe", "move src elsewhere"),
+                ("PowerShell", "", "Remove-Item -Recurse src"),
+                ("PowerShell", "", "rd src -Recurse"),
+                ("PowerShell", "", "Move-Item src elsewhere")):
+            with self.subTest(shell=shell or tool, command=command):
+                self.assertIn("contains file_glob 'src/lib/*' claimed by "
+                              "session s2", decide(tool, command, shell))
+        for command in ("rm -rf docs", "rm -rf src/other", "rm -rf srclib",
+                        "cp notes.txt ."):
+            with self.subTest(command=command):
+                self.assertEqual(decide("Bash", command), "")
+
     def test_ambiguous_data_is_conservative_but_explicit_shell_data_allowed(self):
         # Each string is harmless data in its actual shell; the other parser
         # sees a prohibited command, so ambiguous input deliberately denies.

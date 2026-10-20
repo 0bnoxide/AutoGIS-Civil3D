@@ -788,6 +788,26 @@ def _argv_write_targets(argv, ps, cmd=False):
     return targets
 
 
+_PS_SUBTREE_CMDLETS = {"remove-item", "ri", "del", "erase", "rd", "rmdir",
+                       "move-item", "mi", "move", "rename-item", "rni", "ren"}
+
+
+def _argv_subtree_targets(argv, ps, cmd=False):
+    """Return raw operands whose whole subtree a delete or move form
+    removes or replaces, so claims under them are checked too (#184)."""
+    name, low = argv[0].rstrip(". "), argv[0].lower()
+    if name in ("rm", "rmdir"):
+        return [arg for arg in argv[1:] if not arg.startswith("-")]
+    if name == "mv":
+        dest, sources = _copy_move_operands(argv)
+        return sources + ([dest] if dest else [])
+    if ps and low in _PS_SUBTREE_CMDLETS:
+        return _ps_write_targets(argv)
+    if cmd and low in ("del", "erase", "rd", "rmdir", "move", "ren", "rename"):
+        return [arg for arg in argv[1:] if not arg.startswith("/")]
+    return []
+
+
 def _target_events(raw_targets, cwd, ps, cmd=False):
     """Yield resolved target events for raw shell write operands."""
     for target in raw_targets:
@@ -841,6 +861,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             segment, seg_masked = _peel_bash_grouping(segment, seg_masked)
             stages = _pipeline_stages(segment, seg_masked, bash=True)
         raw_targets = _redirect_targets(segment, seg_masked)
+        raw_subtrees = []
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
             if argv and _exe_name(argv[0]) in _CMD_PREFIXES:
@@ -866,12 +887,21 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
                 continue
             yield ("git", argv, effective_cwd)
             raw_targets += _argv_write_targets(argv, ps, cmd=cmd)
+            raw_subtrees += _argv_subtree_targets(argv, ps, cmd=cmd)
         yield from _target_events(raw_targets, effective_cwd, ps, cmd=cmd)
+        for event in _target_events(raw_subtrees, effective_cwd, ps, cmd=cmd):
+            yield ("subtree", event[1])
 
 
 def shell_write_targets(command, cwd, ps=False, cmd=False):
     return [e[1] for e in _shell_events(command, cwd, ps=ps, cmd=cmd)
             if e[0] == "target"]
+
+
+def shell_subtree_targets(command, cwd, ps=False, cmd=False):
+    """Delete and move operands, a subset of `shell_write_targets`."""
+    return [e[1] for e in _shell_events(command, cwd, ps=ps, cmd=cmd)
+            if e[0] == "subtree"]
 
 
 # --------------------------------------------------------------------------
@@ -1681,12 +1711,13 @@ def cmd_check(repo, session, targets):
     return ALLOW
 
 
-def claim_denial(claims, session, targets):
+def claim_denial(claims, session, targets, subtrees=()):
     """Positive claim validation, shared by `check` and the adapter so the
     automatic path is never weaker than the explicit command: others' globs,
     the caller's own file scope, and the branch claim of each target's tree.
+    `subtrees` are targets removed with everything under them.
     """
-    reason = glob_conflict(claims, session, targets)
+    reason = glob_conflict(claims, session, targets, subtrees)
     if reason or not session:
         return reason
     my_globs = [c["value"] for c in claims
@@ -1724,13 +1755,29 @@ def _branch_claim_denial(claims, session, branch):
     return None
 
 
-def glob_conflict(claims, session, targets):
+def glob_conflict(claims, session, targets, subtrees=()):
     """Reason string when a target sits in another session's file_glob.
 
     Paths are made repository-relative against the worktree that governs
     each target, so a claim of `src/*` matches `src/a.cs` identically from
-    the primary tree and from any linked worktree.
+    the primary tree and from any linked worktree. A `subtrees` target also
+    conflicts with a claim at or below it: deleting `src` removes `src/*`.
     """
+    for target in subtrees:
+        tree = tree_containing(target)
+        if tree is None:
+            continue
+        rel = os.path.relpath(_norm(target), tree).replace(os.sep, "/")
+        for record in claims:
+            prefix = _glob_prefix(record["value"]) \
+                if record["kind"] == "file_glob" else None
+            if prefix is None or record["session"] == session:
+                continue
+            claimed = prefix.rstrip("/")
+            if rel == "." or claimed == rel or claimed.startswith(rel + "/"):
+                return (f"'{rel}' contains file_glob '{record['value']}' "
+                        f"claimed by session {record['session']} "
+                        f"(claim {record['id']}).")
     for target in targets:
         tree = tree_containing(target)
         if tree is None:
@@ -1869,6 +1916,8 @@ def hook_pre_tool_use(payload_text):
                             reason = claim_denial(
                                 list_claims(repo), session,
                                 shell_write_targets(
+                                    command, cwd, ps=parser_ps, cmd=cmd),
+                                subtrees=shell_subtree_targets(
                                     command, cwd, ps=parser_ps, cmd=cmd))
                         except RegistryError as exc:
                             reason = str(exc)
