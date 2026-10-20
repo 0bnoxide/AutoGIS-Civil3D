@@ -700,27 +700,35 @@ def _pipeline_stages(segment, segment_masked, bash=False):
     return stages
 
 
-_BASH_GROUP_OPEN_RE = re.compile(r"(?:[!({]\s*)+")
+_BASH_GROUP_OPEN_RE = re.compile(r"\s*(?:[!({]\s*)*")
 
 
-def _strip_bash_grouping(segment, masked, open_subshells):
-    """Peel Bash `!`, `(` and `{` prefixes and the `)` closing an open
-    subshell, so the grouped command is read as the command (#209).
-
-    Returns (segment, masked, opened, closed) where opened/closed count the
-    subshell parentheses consumed. A lone `}` stays its own harmless segment.
-    """
-    lead = _BASH_GROUP_OPEN_RE.match(masked)
-    head = len(lead.group()) if lead else 0
-    opened = masked[:head].count("(")
-    segment, masked = segment[head:], masked[head:]
-    closed = 0
-    while open_subshells + opened - closed > 0 \
-            and masked.rstrip().endswith(")"):
-        end = len(masked.rstrip()) - 1
-        segment, masked = segment[:end], masked[:end]
-        closed += 1
-    return segment.strip(), masked.strip(), opened, closed
+def _peel_bash_grouping(segment, masked):
+    """Blank Bash `!`, `(` and `{` at the start of each pipeline stage, and
+    each `)` that closes a subshell, so the grouped command is read as the
+    command and its last word is not `--hard)` (#209). Parentheses balanced
+    inside the segment, such as `$( ... )`, are kept."""
+    blanks, stage_start = set(), 0
+    for m in re.finditer(r"\|&?|$", masked):
+        lead = _BASH_GROUP_OPEN_RE.match(masked, stage_start)
+        blanks.update(i for i in range(lead.start(), lead.end())
+                      if not masked[i].isspace())
+        stage_start = m.end()
+    depth = 0
+    for i, ch in enumerate(masked):
+        if i in blanks:
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth:
+                depth -= 1
+            else:
+                blanks.add(i)
+    for i in blanks:
+        segment = segment[:i] + " " + segment[i + 1:]
+        masked = masked[:i] + " " + masked[i + 1:]
+    return segment, masked
 
 
 def _redirect_targets(segment, segment_masked):
@@ -790,25 +798,16 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     effective_cwd = parent_cwd = cwd
     job = None
     bash = not ps and not cmd
-    subshells, closing = [], 0  # saved cwds of open `( ... )` groups
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
     for segment, seg_masked, seg_job in _shell_segments(
             command, masked_all, cmd=cmd):
-        for _ in range(closing):
-            # A `cd` inside `( ... )` ends with the subshell.
-            effective_cwd, parent_cwd = subshells.pop()
-        closing = 0
         if seg_job != job:
             # A background job's `cd` moves the rest of that job only; the
             # parent shell resumes where it was.
             job, effective_cwd = seg_job, parent_cwd
-        if bash:
-            segment, seg_masked, opened, closing = _strip_bash_grouping(
-                segment, seg_masked, len(subshells))
-            subshells += [(effective_cwd, parent_cwd)] * opened
-            if not segment:
-                continue
         stages = _pipeline_stages(segment, seg_masked, bash=bash)
+        # `cd` is read before group peeling, as before #209, so peeling
+        # never turns `(cd x` or a piped `{ cd x` into a parent-shell `cd`.
         first = _argv_of(stages[0], ps=ps, cmd=cmd)
         # `cd` moves the parent shell only outside a pipeline; inside one it
         # runs in a subshell and must NOT move later segments.
@@ -823,6 +822,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             if job is None:
                 parent_cwd = effective_cwd
             continue
+        if bash:
+            segment, seg_masked = _peel_bash_grouping(segment, seg_masked)
+            stages = _pipeline_stages(segment, seg_masked, bash=True)
         raw_targets = _redirect_targets(segment, seg_masked)
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
