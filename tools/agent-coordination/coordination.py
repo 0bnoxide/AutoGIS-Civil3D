@@ -774,6 +774,16 @@ def _strip_ps_call_block(argv):
     return stripped
 
 
+def _ps_command_word(stage):
+    assignment = re.match(_PS_ASSIGN, stage)
+    stage = stage[assignment.end():].lstrip() if assignment else stage.lstrip()
+    # A quoted expression is pipeline data; &/. explicitly invokes its value.
+    if not stage or stage[0] in _PS_SQ + _PS_DQ:
+        return ""
+    argv = _strip_ps_call_block(_argv_of(stage, ps=True))
+    return argv[0].lower() if argv else ""
+
+
 def _ps_block_spans(masked):
     """Return (open, close) offsets of top-level PowerShell `{ ... }` blocks
     in masked text. `${name}` is a variable, not a block; an unclosed block
@@ -833,8 +843,10 @@ def _shell_segments(command, masked_all, cmd=False, ps=False):
         background = not cmd and sep == "&"
         seg_real, seg_masked = (command[seg_start:cut_start],
                                 masked_all[seg_start:cut_start])
-        if background and seg_masked.rstrip()[-1:] in ("", "|"):
-            continue  # PowerShell call operator: `& cmd`, `x | & cmd`
+        if background and (seg_masked.rstrip()[-1:] in ("", "|")
+                           or ps and re.fullmatch(
+                               _PS_ASSIGN, seg_masked.rsplit("|", 1)[-1])):
+            continue  # Call operator: `& cmd`, `x | & cmd`, `$x = & cmd`
         seg_start = cut_end
         pad = len(seg_real) - len(seg_real.lstrip())
         segment = seg_real.strip()
@@ -1436,14 +1448,15 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             first = [first[0][1:]] + first[1:]  # `@cd x` only hides the echo
         word = first[0].lower() if first and (ps or cmd) \
             else first[0] if first else ""
-        if ps and word.rpartition("\\")[2] in _PS_CD_WORDS and "\\" in word:
+        ps_words = [_ps_command_word(st) for st in stages] if ps else []
+        if ps and ps_words[0].rpartition("\\")[2] in _PS_CD_WORDS \
+                and "\\" in ps_words[0]:
             # `Microsoft.PowerShell.Management\Set-Location x` is the cmdlet.
             yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
             continue
         if ps and len(stages) > 1 and any(
-                (_strip_ps_call_block(_argv_of(st, ps=True))[:1] or [""])[0]
-                .lower().rpartition("\\")[2] in _PS_CD_WORDS | _CD_WORDS
-                for st in stages):
+                name.rpartition("\\")[2] in _PS_CD_WORDS | _CD_WORDS
+                for name in ps_words):
             # PowerShell location cmdlets take piped paths and, unlike a
             # Bash subshell, move the session: the new directory is unknown.
             yield ("opaque", effective_cwd, _UNMODELED_LOCATION)

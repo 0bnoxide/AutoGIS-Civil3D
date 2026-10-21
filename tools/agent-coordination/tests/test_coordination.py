@@ -582,8 +582,9 @@ class TestMainRule(TempRepoCase):
         for name in ("Microsoft.PowerShell.Management\\Set-Location",
                      "Microsoft.PowerShell.Management\\Push-Location",
                      "Microsoft.PowerShell.Management\\POP-LOCATION", "cd"):
-            for prefix in ("", "& ", ". "):
-                invocation = prefix + name
+            for invocation in (name, "& " + name, ". " + name,
+                               "& '" + name + "'", '. "' + name + '"',
+                               "$label = & '" + name + "'"):
                 for pipeline in (
                         f"{invocation} | Write-Output",
                         f"'{main}' | {invocation}",
@@ -600,6 +601,24 @@ class TestMainRule(TempRepoCase):
         self.assertIsNone(coordination.deny_reason_for_shell(
             "Write-Output 'Microsoft.PowerShell.Management\\Set-Location' "
             "| Write-Output; git reset --hard", safe, None, ps=True))
+
+    def test_quoted_location_names_are_pipeline_data(self):
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe)
+        for name in ("cd", "Set-Location",
+                     "Microsoft.PowerShell.Management\\Set-Location"):
+            for quote in ("'", '"'):
+                for prefix in ("", "$label = ", "$label="):
+                    pipeline = f"{prefix}{quote}{name}{quote} | Write-Output"
+                    with self.subTest(pipeline=pipeline):
+                        self.assertIsNone(coordination.deny_reason_for_shell(
+                            pipeline, self.repo_path, self.repo, ps=True))
+                        self.assertIsNone(coordination.deny_reason_for_shell(
+                            pipeline + "; git reset --hard", safe, None,
+                            ps=True))
+                        self.assertIsNotNone(coordination.deny_reason_for_shell(
+                            pipeline + "; git reset --hard", self.repo_path,
+                            self.repo, ps=True))
 
     def test_cd_inside_pipeline_does_not_move_later_segments(self):
         safe = os.path.join(self.base, "safe").replace(os.sep, "/")
