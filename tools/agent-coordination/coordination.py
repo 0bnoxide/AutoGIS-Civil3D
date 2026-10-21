@@ -953,6 +953,11 @@ def _target_events(raw_targets, cwd, ps, cmd=False):
         yield ("target", resolved)
 
 
+# Re-checks of a block body from the locations it moves to; a body still
+# moving after this many passes is denied.
+_MAX_BLOCK_PASSES = 3
+
+
 _UNMODELED_HERE_STRING = ("a PowerShell here-string opener or comment the "
                           "parser does not model; command is denied because "
                           "its statements cannot be told from string data")
@@ -1064,15 +1069,27 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                         seg_masked[prev_end + 1:start], re.S):
                     chain_base = cwds()
                 prev_end = end
-                moved = []
-                for base in chain_base:
-                    for event in _shell_events(
-                            segment[start + 1:end], base, ps=True,
-                            _depth=_depth + 1, _report_cwd=True):
-                        if event[0] == "cwd":
-                            moved.append(event[1])
-                        else:
-                            yield event
+                # A loop body runs again from wherever it moved to, so it
+                # is re-checked from each new location; a body that keeps
+                # moving (`foreach (...) { cd sub; ... }`) fails closed.
+                moved, frontier = [], list(chain_base)
+                for _ in range(_MAX_BLOCK_PASSES):
+                    reached = []
+                    for base in frontier:
+                        for event in _shell_events(
+                                segment[start + 1:end], base, ps=True,
+                                _depth=_depth + 1, _report_cwd=True):
+                            if event[0] == "cwd":
+                                reached.append(event[1])
+                            else:
+                                yield event
+                    frontier = [c for c in dict.fromkeys(reached)
+                                if c not in moved and c not in chain_base]
+                    moved += frontier
+                    if not frontier:
+                        break
+                else:
+                    yield ("opaque", effective_cwd)
                 alt += [c for c in moved if c not in cwds()]
             if job is None:
                 parent_alt = list(alt)

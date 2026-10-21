@@ -523,6 +523,18 @@ class TestMainRule(TempRepoCase):
             self.assertIsNone(coordination.deny_reason_for_shell(
                 cmd, safe, self.repo, ps=True), cmd)
 
+    def test_powershell_repeated_block_is_checked_from_where_it_moved(self):
+        # Review of #210: a loop body runs again from where it moved to.
+        main = self.repo_path.replace(os.sep, "/")
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            "foreach ($x in 1,2) { cd sub; git reset --hard }", safe,
+            self.repo, ps=True))
+        events = list(coordination._shell_events(
+            f"foreach ($x in 1,2) {{ cd {main}; git status }}", safe, ps=True))
+        self.assertNotIn("opaque", [e[0] for e in events])
+        self.assertIn(main, [e[2] for e in events if e[0] == "git"])
+
     def test_powershell_backtick_escaped_brace_is_not_a_block(self):
         self.assertIsNone(coordination.deny_reason_for_shell(
             "Write-Output `{ Remove-Item seed.txt", self.repo_path, self.repo,
