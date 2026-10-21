@@ -1426,6 +1426,132 @@ class TestPreToolUseAdapter(TempRepoCase):
                 })
                 self.assertIn("claimed by session s2", out)
 
+    def test_directory_delete_or_move_reaches_descendant_claims(self):
+        # #184: removing `src` removes everything claimed under `src/*`.
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/lib/*")
+
+        def decide(tool, command, shell=""):
+            return self.decide({
+                "tool_name": tool,
+                "tool_input": {"command": command, "shell": shell},
+                "cwd": self.repo_path, "session_id": "s1",
+            })[1]
+
+        for tool, shell, command in (
+                ("Bash", "", "rm -rf src"),
+                ("Bash", "", "rm -r ."),
+                ("Bash", "", "rmdir src/lib"),
+                ("Bash", "", "/bin/rm -rf src"),
+                ("Bash", "", "/usr/bin/mv src elsewhere"),
+                ("Bash", "", "mv src elsewhere"),
+                ("Bash", "", 'cmd /c "rd /s /q src"'),
+                ("Bash", "cmd.exe", "rmdir /s /q src"),
+                ("Bash", "cmd.exe", r"del /s /q src"),
+                ("Bash", "cmd.exe", "move src elsewhere"),
+                ("PowerShell", "", "Remove-Item -Recurse src"),
+                ("PowerShell", "", "rd src -Recurse"),
+                ("PowerShell", "", "Move-Item src elsewhere"),
+                ("Bash", "", "rm -rf -- src"),
+                ("Bash", "", "mv -- src elsewhere"),
+                ("Bash", "", "rm.exe -rf src"),
+                ("Bash", "", "/usr/bin/mv.exe src elsewhere"),
+                ("PowerShell", "", "Rename-Item -Path lib -NewName src"),
+                ("PowerShell", "", "Rename-Item lib -NewName:src"),
+                ("Bash", "", "RM.EXE -rf src"),
+                ("Bash", "", "/usr/bin/MV.EXE src elsewhere")):
+            with self.subTest(shell=shell or tool, command=command):
+                self.assertIn("contains file_glob 'src/lib/*' claimed by "
+                              "session s2", decide(tool, command, shell))
+        for command in ("rm -rf docs", "rm -rf src/other", "rm -rf srclib",
+                        "cp notes.txt ."):
+            with self.subTest(command=command):
+                self.assertEqual(decide("Bash", command), "")
+        # rmdir is an ordinary write too, so the caller's own scope applies.
+        coordination.claim(self.repo, "s1", "file_glob", "docs/*")
+        self.assertIn("outside your claimed file scope",
+                      decide("Bash", "rmdir srclib"))
+
+    def test_move_into_existing_directory_checks_the_moved_path(self):
+        # Review of #184: `mv src docs` writes `docs/src` when docs exists.
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "docs/lib/*")
+        os.makedirs(os.path.join(self.repo_path, "docs", "lib"))
+
+        def decide(command, shell=""):
+            return self.decide({
+                "tool_name": "Bash",
+                "tool_input": {"command": command, "shell": shell},
+                "cwd": self.repo_path, "session_id": "s1",
+            })[1]
+
+        for command, shell in (("mv src docs", ""), ("mv src docs/", ""),
+                               ("mv a b docs", ""), ("move src docs", "cmd.exe")):
+            with self.subTest(command=command):
+                self.assertEqual(decide(command, shell), "")
+        for command, shell in (("mv lib docs", ""), ("mv src docs/lib", ""),
+                               ("move src docs\\lib", "cmd.exe")):
+            with self.subTest(command=command):
+                self.assertIn("claimed by session s2", decide(command, shell))
+        # -T replaces an existing directory instead of moving into it.
+        for command in ("mv -T src docs", "mv -fT src docs",
+                        "mv --no-target-directory src docs"):
+            with self.subTest(command=command):
+                self.assertIn("contains file_glob 'docs/lib/*'", decide(command))
+        # A wildcard operand is checked as what it expands to.
+        for command in ("rm -rf docs/*", "rm -rf d*/l?b", "mv docs/* /tmp",
+                        "rm -rf {docs,dummy}", "rm -rf docs/{x,l{a,i}b}",
+                        "rm -rf {d..e}ocs", "rm -rf x{y/../{foo,docs}"):
+            with self.subTest(command=command):
+                self.assertIn("docs/lib", decide(command))
+        self.assertEqual(decide("rm -rf docs/*.md"), "")
+        # rmdir -p also removes the ancestors; cmd ren names a sibling.
+        self.assertEqual(decide("rmdir docs/empty"), "")
+        for command, shell in (("rmdir -p docs/empty", ""),
+                               ("rmdir -vp docs/empty", ""),
+                               ("rmdir --parents docs/empty", ""),
+                               ("ren docs\\old lib", "cmd.exe"),
+                               ("rename docs\\old lib", "cmd.exe")):
+            with self.subTest(command=command):
+                self.assertIn("docs/lib", decide(command, shell))
+        # A multi-match destination glob moves all but the last match.
+        os.makedirs(os.path.join(self.repo_path, "dummy"))
+        self.assertIn("docs/lib", decide("mv src d*"))
+        shutil.rmtree(os.path.join(self.repo_path, "dummy"))
+        with mock.patch.dict(os.environ, {"HOME": self.repo_path,
+                                         "USERPROFILE": self.repo_path}):
+            self.assertIn("docs/lib", decide("rm -rf ~/docs/*"))
+        # A wildcard source moved into a directory lands under its basename.
+        os.makedirs(os.path.join(self.repo_path, "stuff", "lib"))
+        os.makedirs(os.path.join(self.repo_path, "target"))
+        coordination.claim(self.repo, "s2", "file_glob", "target/lib/*")
+        self.assertIn("target/lib", decide("mv stuff/* target"))
+        self.assertIn("target/lib", decide("mv stuff/lib t*"))
+        self.assertEqual(decide("mv stuff target"), "")
+        # A positional Rename-Item name lands beside the source.
+        self.assertIn("docs/lib", self.decide({
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "Rename-Item docs/x lib"},
+            "cwd": self.repo_path, "session_id": "s1"})[1])
+        shutil.rmtree(os.path.join(self.repo_path, "stuff"))
+        shutil.rmtree(os.path.join(self.repo_path, "target"))
+        # Unlinking a symlink leaves the directory it points to alone.
+        if hasattr(os, "symlink"):
+            try:
+                os.symlink("docs", os.path.join(self.repo_path, "link"))
+            except OSError:
+                pass
+            else:
+                self.assertEqual(decide("rm link"), "")
+                self.assertEqual(decide("mv link other"), "")
+                self.assertIn("contains file_glob 'docs/lib/*'",
+                              decide("rm -r link/"))
+                os.remove(os.path.join(self.repo_path, "link"))
+        shutil.rmtree(os.path.join(self.repo_path, "docs"))
+        self.assertIn("contains file_glob 'docs/lib/*'", decide("mv src docs"))
+
     def test_bash_line_continuations_join_before_parsing(self):
         # Review of #178: Bash drops an unquoted backslash-newline.
         for command in ("git \\\nreset --hard",

@@ -27,6 +27,7 @@ import argparse
 import csv
 import datetime as _dt
 import fnmatch
+import glob
 import hashlib
 import json
 import os
@@ -428,10 +429,15 @@ def _copy_move_operands(argv):
     positionals, so the value token must be consumed rather than treated as
     a source; without that, the last source is mistaken for the destination.
     """
-    dest, operands, expect_value = None, [], False
+    dest, operands, expect_value, options = None, [], False, True
     for arg in argv[1:]:
         if expect_value:
             dest, expect_value = arg, False
+        elif not options or arg == "--":
+            # After `--` every argument is an operand, `-src` included.
+            if not options:
+                operands.append(arg)
+            options = False
         elif arg in ("-t", "--target-directory"):
             expect_value = True
         elif arg.startswith("--target-directory="):
@@ -834,9 +840,38 @@ def _redirect_targets(segment, segment_masked, bash=False, cmd=False):
     return targets
 
 
+def _posix_operands(argv):
+    """Non-option arguments; everything after `--` is an operand."""
+    operands, options = [], True
+    for arg in argv[1:]:
+        if options and arg == "--":
+            options = False
+        elif not (options and arg.startswith("-")):
+            operands.append(arg)
+    return operands
+
+
+def _path_ancestors(path):
+    """`a/b/c` -> `a/b`, `a`: the directories `rmdir -p` also removes."""
+    parts = path.strip("\"'").rstrip("/\\").replace("\\", "/").split("/")
+    return ["/".join(parts[:i]) for i in range(len(parts) - 1, 0, -1)
+            if parts[:i] != [""]]
+
+
+def _command_name(token):
+    """A bare command name with Windows' trailing `.`/space dropped, or the
+    last component of a path-supplied command (`/bin/rm` is rm)."""
+    if re.search(r"[/\\]", token):
+        name = token.replace("\\", "/").rsplit("/", 1)[-1]
+    else:
+        name = token.rstrip(". ")
+    # Git Bash runs `rm.exe` (or `RM.EXE`, case-insensitively) as rm.
+    return name[:-4].lower() if name.lower().endswith(".exe") else name
+
+
 def _argv_write_targets(argv, ps, cmd=False):
     """Return raw target operands for the write form represented by argv."""
-    name = argv[0].rstrip(". ")
+    name, low = _command_name(argv[0]), argv[0].lower()
     targets = []
     if name == "tee":
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
@@ -846,9 +881,8 @@ def _argv_write_targets(argv, ps, cmd=False):
         targets += [arg[3:] for arg in argv if arg.startswith("of=")]
     if name == "truncate":
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
-    if name in ("rm", "unlink", "shred"):
-        targets += [arg for arg in argv[1:] if not arg.startswith("-")]
-    low = argv[0].lower()
+    if name in ("rm", "unlink", "shred") or name == "rmdir" and not cmd:
+        targets += _posix_operands(argv)
     if ps and (low in _PS_WRITE_CMDLETS or low in _PS_COPY_CMDLETS):
         targets += _ps_write_targets(argv)
     if cmd:
@@ -864,6 +898,146 @@ def _argv_write_targets(argv, ps, cmd=False):
         if name == "mv":
             targets += sources
     return targets
+
+
+_PS_SUBTREE_CMDLETS = {"remove-item", "ri", "del", "erase", "rd", "rmdir",
+                       "move-item", "mi", "move", "rename-item", "rni", "ren"}
+
+
+def _argv_subtree_targets(argv, ps, cmd=False):
+    """Return (raw operands, moves) for the paths a delete or move form
+    removes or replaces with their whole subtree, so claims under them are
+    checked too (#184). Each move is (destination, sources, into): with
+    `into`, an existing destination directory receives the sources instead
+    of being replaced."""
+    name, low = _command_name(argv[0]), argv[0].lower()
+    if name in ("rm", "rmdir"):
+        operands = _posix_operands(argv)
+        options = argv[1:argv.index("--")] if "--" in argv else argv[1:]
+        if name == "rmdir" and any(
+                arg == "--parents" or (arg[:1] == "-" and arg[1:2] != "-"
+                                       and "p" in arg)
+                for arg in options):
+            # -p also removes each ancestor named in the operand.
+            operands += [part for op in operands
+                         for part in _path_ancestors(op)]
+        return operands, []
+    if name == "mv":
+        dest, sources = _copy_move_operands(argv)
+        # -T / --no-target-directory: an existing directory is replaced
+        # rather than receiving the sources.
+        into = not any(
+            arg == "--no-target-directory"
+            or (arg[:1] == "-" and arg[1:2] != "-" and "T" in arg.partition("t")[0])
+            for arg in argv[1:])
+        return sources, [(dest, sources, into)] if dest else []
+    if ps and low in _PS_SUBTREE_CMDLETS:
+        operands = _ps_write_targets(argv)
+        if low in ("rename-item", "rni", "ren") and operands:
+            # `-NewName` names the destination beside the source.
+            new_names = [argv[i + 1] for i in range(1, len(argv) - 1)
+                         if argv[i].lower() == "-newname"]
+            new_names += [arg.partition(":")[2] for arg in argv[1:]
+                          if arg.lower().startswith("-newname:")]
+            # Positional form: `Rename-Item src new`.
+            new_names = new_names or operands[1:]
+            parent = re.split(r"[/\\]", operands[0].rstrip("/\\"))[:-1]
+            operands += ["/".join(parent + [n]) for n in new_names]
+        return operands, []
+    if cmd and low in ("move", "ren", "rename"):
+        operands = [arg for arg in argv[1:] if not arg.startswith("/")]
+        if low == "move" and len(operands) > 1:
+            return operands[:-1], [(operands[-1], operands[:-1], True)]
+        if low != "move" and len(operands) > 1:
+            # `ren docs\old lib` names `docs\lib`: the new name has no path.
+            parent = re.split(r"[/\\]", operands[0].rstrip("/\\"))[:-1]
+            operands += ["/".join(parent + [operands[1]])]
+        return operands, []
+    if cmd and low in ("del", "erase", "rd", "rmdir"):
+        return [arg for arg in argv[1:] if not arg.startswith("/")], []
+    return [], []
+
+
+def _brace_expand(word):
+    """Bash brace expansion of an unquoted word: `{a,b}` yields each
+    alternative; a group without a top-level comma (`{1..3}`) becomes a
+    `*` glob, which over-approximates what it can expand to."""
+    for start, ch in enumerate(word):
+        if ch != "{":
+            continue
+        depth, commas = 0, []
+        for end in range(start, len(word)):
+            if word[end] == "{":
+                depth += 1
+            elif word[end] == "}":
+                depth -= 1
+                if not depth:
+                    break
+            elif word[end] == "," and depth == 1:
+                commas.append(end)
+        else:
+            continue  # unmatched `{` is literal; a later group still expands
+        head, tail = word[:start], word[end + 1:]
+        if not commas:
+            if ".." not in word[start:end]:
+                continue
+            return _brace_expand(head + "*" + tail)
+        cuts = [start] + commas + [end]
+        return [w for i in range(len(cuts) - 1)
+                for w in _brace_expand(head + word[cuts[i] + 1:cuts[i + 1]] + tail)]
+    return [word]
+
+
+def _expand_operand(op, cwd, bash):
+    """The paths a delete or move operand can name once the shell expands
+    braces (Bash only) and wildcards; a pattern matching nothing stays as
+    written."""
+    raw = op.strip("\"'")
+    words = _brace_expand(raw) if bash else [raw]
+    out = []
+    for word in words:
+        if bash:
+            word = os.path.expanduser(word)  # tilde expands before globbing
+        if re.search(r"[*?[]", word):
+            out += sorted(glob.glob(os.path.join(cwd, word))) or [word]
+        else:
+            out.append(word)
+    return out
+
+
+def _subtree_operands(operands, cwd, bash):
+    """Expand operands to what they name, so `rm -rf src/*` reaches a
+    `src/lib/*` claim, and drop symlinks: deleting or moving one touches
+    only the link, while `link/` still resolves to its target."""
+    return [path for op in operands for path in _expand_operand(op, cwd, bash)
+            if path.endswith(("/", "\\"))
+            or not os.path.islink(os.path.join(cwd, path))]
+
+
+def _move_destinations(moves, cwd, ps, cmd=False):
+    """Raw paths a move replaces: an existing destination directory gets
+    each source's basename under it, any other destination is replaced."""
+    raw, bash = [], not ps and not cmd
+    for dest, sources, into in moves:
+        sources = [path for src in sources
+                   for path in _expand_operand(src, cwd, bash)]
+        dests = _expand_operand(dest, cwd, bash)
+        if into and len(dests) > 1:
+            # A multi-match destination glob: only the last match is the
+            # target; earlier matches are moved into it as more sources.
+            sources += dests[:-1]
+            raw += dests[:-1]
+            dests = dests[-1:]
+        for dest in dests:
+            resolved = into and next(
+                _target_events([dest], cwd, ps, cmd=cmd), None)
+            if resolved and os.path.isdir(resolved[1]):
+                raw += [dest.rstrip("/\\") + "/" + re.split(
+                    r"[/\\]", src.strip("\"'").rstrip("/\\"))[-1]
+                    for src in sources]
+            else:
+                raw.append(dest)
+    return raw
 
 
 def _target_events(raw_targets, cwd, ps, cmd=False):
@@ -979,6 +1153,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             stages = _pipeline_stages(segment, seg_masked, bash=True)
         raw_targets = _redirect_targets(segment, seg_masked, bash=bash,
                                         cmd=cmd)
+        raw_subtrees, moves = [], []
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
             if argv and _exe_name(argv[0]) in _CMD_PREFIXES:
@@ -1004,12 +1179,24 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
                 continue
             yield ("git", argv, effective_cwd)
             raw_targets += _argv_write_targets(argv, ps, cmd=cmd)
+            operands, argv_moves = _argv_subtree_targets(argv, ps, cmd=cmd)
+            raw_subtrees += _subtree_operands(operands, effective_cwd, bash)
+            moves += argv_moves
         yield from _target_events(raw_targets, effective_cwd, ps, cmd=cmd)
+        raw_subtrees += _move_destinations(moves, effective_cwd, ps, cmd=cmd)
+        for event in _target_events(raw_subtrees, effective_cwd, ps, cmd=cmd):
+            yield ("subtree", event[1])
 
 
 def shell_write_targets(command, cwd, ps=False, cmd=False):
     return [e[1] for e in _shell_events(command, cwd, ps=ps, cmd=cmd)
             if e[0] == "target"]
+
+
+def shell_subtree_targets(command, cwd, ps=False, cmd=False):
+    """Delete and move operands, a subset of `shell_write_targets`."""
+    return [e[1] for e in _shell_events(command, cwd, ps=ps, cmd=cmd)
+            if e[0] == "subtree"]
 
 
 # --------------------------------------------------------------------------
@@ -1819,12 +2006,13 @@ def cmd_check(repo, session, targets):
     return ALLOW
 
 
-def claim_denial(claims, session, targets):
+def claim_denial(claims, session, targets, subtrees=()):
     """Positive claim validation, shared by `check` and the adapter so the
     automatic path is never weaker than the explicit command: others' globs,
     the caller's own file scope, and the branch claim of each target's tree.
+    `subtrees` are targets removed with everything under them.
     """
-    reason = glob_conflict(claims, session, targets)
+    reason = glob_conflict(claims, session, targets, subtrees)
     if reason or not session:
         return reason
     my_globs = [c["value"] for c in claims
@@ -1862,13 +2050,33 @@ def _branch_claim_denial(claims, session, branch):
     return None
 
 
-def glob_conflict(claims, session, targets):
+def glob_conflict(claims, session, targets, subtrees=()):
     """Reason string when a target sits in another session's file_glob.
 
     Paths are made repository-relative against the worktree that governs
     each target, so a claim of `src/*` matches `src/a.cs` identically from
-    the primary tree and from any linked worktree.
+    the primary tree and from any linked worktree. A `subtrees` target also
+    conflicts with a claim at or below it: deleting `src` removes `src/*`.
     """
+    for target in subtrees:
+        tree = tree_containing(target)
+        if tree is None:
+            continue
+        rel = os.path.relpath(_norm(target), tree).replace(os.sep, "/")
+        for record in claims:
+            prefix = _glob_prefix(record["value"]) \
+                if record["kind"] == "file_glob" else None
+            if prefix is None or record["session"] == session:
+                continue
+            if fnmatch.fnmatch(rel, record["value"]):
+                return (f"'{rel}' is inside file_glob '{record['value']}' "
+                        f"claimed by session {record['session']} "
+                        f"(claim {record['id']}).")
+            claimed = prefix.rstrip("/")
+            if rel == "." or claimed == rel or claimed.startswith(rel + "/"):
+                return (f"'{rel}' contains file_glob '{record['value']}' "
+                        f"claimed by session {record['session']} "
+                        f"(claim {record['id']}).")
     for target in targets:
         tree = tree_containing(target)
         if tree is None:
@@ -2010,6 +2218,8 @@ def hook_pre_tool_use(payload_text):
                             reason = claim_denial(
                                 list_claims(repo), session,
                                 shell_write_targets(
+                                    command, cwd, ps=parser_ps, cmd=cmd),
+                                subtrees=shell_subtree_targets(
                                     command, cwd, ps=parser_ps, cmd=cmd))
                         except RegistryError as exc:
                             reason = str(exc)
