@@ -1175,6 +1175,10 @@ def _location_change(word, args, ps, cmd):
             return None, False
         flagged, positional = _ps_operands([word] + args)
         paths = [v for _, v in flagged] + positional
+        if any(re.search(r"::|[$*?\[\]`(]", p) for p in paths):
+            # Provider paths, variables and wildcards resolve in PowerShell,
+            # not here; only a plain path is modeled.
+            return None, False
     elif cmd:
         if word.lower() not in ("cd", "chdir") and any(
                 a.lower() == "/d" for a in args):
@@ -1421,6 +1425,10 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             first = [first[0][1:]] + first[1:]  # `@cd x` only hides the echo
         word = first[0].lower() if first and (ps or cmd) \
             else first[0] if first else ""
+        if ps and word.rpartition("\\")[2] in _PS_CD_WORDS and "\\" in word:
+            # `Microsoft.PowerShell.Management\Set-Location x` is the cmdlet.
+            yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
+            continue
         if ps and len(stages) > 1 and any(
                 (_argv_of(st, ps=True)[:1] or [""])[0].lower()
                 in _PS_CD_WORDS for st in stages):

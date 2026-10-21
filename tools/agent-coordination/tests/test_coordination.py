@@ -466,6 +466,11 @@ class TestMainRule(TempRepoCase):
             (f"cd {safe} >nul & cd {main} 2>nul & git reset --hard",
              {"cmd": True}),
             ("cd /tmp > seed.txt", {}),
+            (f"Microsoft.PowerShell.Management\\Set-Location {main}; "
+             "git reset --hard", {"ps": True}),
+            (f"Set-Location FileSystem::{main}; git reset --hard",
+             {"ps": True}),
+            (f"Set-Location {main[:-1]}*; git reset --hard", {"ps": True}),
         )
         for command, kw in denied:
             with self.subTest(command=command):
