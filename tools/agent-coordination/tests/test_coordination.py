@@ -479,6 +479,7 @@ class TestMainRule(TempRepoCase):
                 (f"pushd -n {safe} && git reset --hard", {}),
                 (f"pushd {safe} && pushd +1 && git reset --hard", {}),
                 (f"cd {safe} && cd - && git reset --hard", {}),
+                (f"pushd /d {safe} & git reset --hard", {"cmd": True}),
                 (f"Push-Location {safe} -StackName A; Push-Location /x "
                  "-StackName B; Pop-Location -StackName A; git reset --hard",
                  {"ps": True})):

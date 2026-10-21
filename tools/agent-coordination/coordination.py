@@ -1105,6 +1105,9 @@ def _location_change(word, args, ps, cmd):
         flagged, positional = _ps_operands([word] + args)
         paths = [v for _, v in flagged] + positional
     elif cmd:
+        if word.lower() not in ("cd", "chdir") and any(
+                a.lower() == "/d" for a in args):
+            return None, False  # /d is cd's switch; pushd /d fails in place
         paths = [a for a in args if a.lower() != "/d"]
     else:
         flags = ("-L", "-P", "--") if word == "cd" else ()
