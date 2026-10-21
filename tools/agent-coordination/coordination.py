@@ -780,6 +780,8 @@ def _ps_location_argv(stage):
     # A quoted expression is pipeline data; &/. explicitly invokes its value.
     if not stage or stage[0] in _PS_SQ + _PS_DQ:
         return []
+    if stage.startswith(("&", ".'", '."')):
+        stage = stage[1:].lstrip()  # PowerShell accepts &'cmd' and .'cmd'.
     argv = _argv_of(stage, ps=True)
     while argv[:1] in (["&"], ["."]):
         argv = argv[1:]
