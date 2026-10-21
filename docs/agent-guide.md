@@ -104,6 +104,9 @@ defined in [ADR-0004](adr/0004-one-adversarial-review-proportioned-to-risk.md).
 Mechanics that reach a reviewer: mark the PR ready for review, or comment
 `@codex review`. Prose asking for review reaches nobody.
 
+The cap on fix-and-re-review rounds is in
+[CONTRIBUTING.md](../CONTRIBUTING.md#review-and-merge).
+
 ## When blocked
 
 Open or update a GitHub issue describing the blocker, release claims you
