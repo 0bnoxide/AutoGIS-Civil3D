@@ -575,24 +575,28 @@ class TestMainRule(TempRepoCase):
                     self.assertIsNone(coordination.deny_reason_for_shell(
                         command, self.repo_path, self.repo, ps=True))
 
-    def test_module_qualified_location_in_any_pipeline_stage_is_denied(self):
+    def test_location_pipeline_stage_invocations_are_denied(self):
         main = self.repo_path.replace(os.sep, "/")
         safe = os.path.join(self.base, "safe").replace(os.sep, "/")
         os.makedirs(safe)
-        for name in ("Set-Location", "Push-Location", "POP-LOCATION"):
-            qualified = "Microsoft.PowerShell.Management\\" + name
-            for pipeline in (
-                    f"{qualified} | Write-Output",
-                    f"'{main}' | {qualified}",
-                    f"'{main}' | {qualified} | Write-Output"):
-                command = pipeline + "; git reset --hard"
-                with self.subTest(command=command):
-                    # No repo hint: an opaque location can enter any repo.
-                    self.assertIsNotNone(coordination.deny_reason_for_shell(
-                        command, safe, None, ps=True))
-                    self.assertIn(
-                        ("opaque", safe, coordination._UNMODELED_LOCATION),
-                        list(coordination._shell_events(command, safe, ps=True)))
+        for name in ("Microsoft.PowerShell.Management\\Set-Location",
+                     "Microsoft.PowerShell.Management\\Push-Location",
+                     "Microsoft.PowerShell.Management\\POP-LOCATION", "cd"):
+            for prefix in ("", "& ", ". "):
+                invocation = prefix + name
+                for pipeline in (
+                        f"{invocation} | Write-Output",
+                        f"'{main}' | {invocation}",
+                        f"'{main}' | {invocation} | Write-Output"):
+                    command = pipeline + "; git reset --hard"
+                    with self.subTest(command=command):
+                        # No repo hint: an opaque location can enter any repo.
+                        self.assertIsNotNone(coordination.deny_reason_for_shell(
+                            command, safe, None, ps=True))
+                        self.assertIn(
+                            ("opaque", safe, coordination._UNMODELED_LOCATION),
+                            list(coordination._shell_events(
+                                command, safe, ps=True)))
         self.assertIsNone(coordination.deny_reason_for_shell(
             "Write-Output 'Microsoft.PowerShell.Management\\Set-Location' "
             "| Write-Output; git reset --hard", safe, None, ps=True))

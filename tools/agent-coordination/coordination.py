@@ -1441,8 +1441,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
             continue
         if ps and len(stages) > 1 and any(
-                (_argv_of(st, ps=True)[:1] or [""])[0].lower()
-                .rpartition("\\")[2] in _PS_CD_WORDS for st in stages):
+                (_strip_ps_call_block(_argv_of(st, ps=True))[:1] or [""])[0]
+                .lower().rpartition("\\")[2] in _PS_CD_WORDS | _CD_WORDS
+                for st in stages):
             # PowerShell location cmdlets take piped paths and, unlike a
             # Bash subshell, move the session: the new directory is unknown.
             yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
