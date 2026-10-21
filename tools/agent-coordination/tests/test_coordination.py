@@ -1540,6 +1540,132 @@ class TestPreToolUseAdapter(TempRepoCase):
                 })
                 self.assertIn("claimed by session s2", out)
 
+    def test_directory_delete_or_move_reaches_descendant_claims(self):
+        # #184: removing `src` removes everything claimed under `src/*`.
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/lib/*")
+
+        def decide(tool, command, shell=""):
+            return self.decide({
+                "tool_name": tool,
+                "tool_input": {"command": command, "shell": shell},
+                "cwd": self.repo_path, "session_id": "s1",
+            })[1]
+
+        for tool, shell, command in (
+                ("Bash", "", "rm -rf src"),
+                ("Bash", "", "rm -r ."),
+                ("Bash", "", "rmdir src/lib"),
+                ("Bash", "", "/bin/rm -rf src"),
+                ("Bash", "", "/usr/bin/mv src elsewhere"),
+                ("Bash", "", "mv src elsewhere"),
+                ("Bash", "", 'cmd /c "rd /s /q src"'),
+                ("Bash", "cmd.exe", "rmdir /s /q src"),
+                ("Bash", "cmd.exe", r"del /s /q src"),
+                ("Bash", "cmd.exe", "move src elsewhere"),
+                ("PowerShell", "", "Remove-Item -Recurse src"),
+                ("PowerShell", "", "rd src -Recurse"),
+                ("PowerShell", "", "Move-Item src elsewhere"),
+                ("Bash", "", "rm -rf -- src"),
+                ("Bash", "", "mv -- src elsewhere"),
+                ("Bash", "", "rm.exe -rf src"),
+                ("Bash", "", "/usr/bin/mv.exe src elsewhere"),
+                ("PowerShell", "", "Rename-Item -Path lib -NewName src"),
+                ("PowerShell", "", "Rename-Item lib -NewName:src"),
+                ("Bash", "", "RM.EXE -rf src"),
+                ("Bash", "", "/usr/bin/MV.EXE src elsewhere")):
+            with self.subTest(shell=shell or tool, command=command):
+                self.assertIn("contains file_glob 'src/lib/*' claimed by "
+                              "session s2", decide(tool, command, shell))
+        for command in ("rm -rf docs", "rm -rf src/other", "rm -rf srclib",
+                        "cp notes.txt ."):
+            with self.subTest(command=command):
+                self.assertEqual(decide("Bash", command), "")
+        # rmdir is an ordinary write too, so the caller's own scope applies.
+        coordination.claim(self.repo, "s1", "file_glob", "docs/*")
+        self.assertIn("outside your claimed file scope",
+                      decide("Bash", "rmdir srclib"))
+
+    def test_move_into_existing_directory_checks_the_moved_path(self):
+        # Review of #184: `mv src docs` writes `docs/src` when docs exists.
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "docs/lib/*")
+        os.makedirs(os.path.join(self.repo_path, "docs", "lib"))
+
+        def decide(command, shell=""):
+            return self.decide({
+                "tool_name": "Bash",
+                "tool_input": {"command": command, "shell": shell},
+                "cwd": self.repo_path, "session_id": "s1",
+            })[1]
+
+        for command, shell in (("mv src docs", ""), ("mv src docs/", ""),
+                               ("mv a b docs", ""), ("move src docs", "cmd.exe")):
+            with self.subTest(command=command):
+                self.assertEqual(decide(command, shell), "")
+        for command, shell in (("mv lib docs", ""), ("mv src docs/lib", ""),
+                               ("move src docs\\lib", "cmd.exe")):
+            with self.subTest(command=command):
+                self.assertIn("claimed by session s2", decide(command, shell))
+        # -T replaces an existing directory instead of moving into it.
+        for command in ("mv -T src docs", "mv -fT src docs",
+                        "mv --no-target-directory src docs"):
+            with self.subTest(command=command):
+                self.assertIn("contains file_glob 'docs/lib/*'", decide(command))
+        # A wildcard operand is checked as what it expands to.
+        for command in ("rm -rf docs/*", "rm -rf d*/l?b", "mv docs/* /tmp",
+                        "rm -rf {docs,dummy}", "rm -rf docs/{x,l{a,i}b}",
+                        "rm -rf {d..e}ocs", "rm -rf x{y/../{foo,docs}"):
+            with self.subTest(command=command):
+                self.assertIn("docs/lib", decide(command))
+        self.assertEqual(decide("rm -rf docs/*.md"), "")
+        # rmdir -p also removes the ancestors; cmd ren names a sibling.
+        self.assertEqual(decide("rmdir docs/empty"), "")
+        for command, shell in (("rmdir -p docs/empty", ""),
+                               ("rmdir -vp docs/empty", ""),
+                               ("rmdir --parents docs/empty", ""),
+                               ("ren docs\\old lib", "cmd.exe"),
+                               ("rename docs\\old lib", "cmd.exe")):
+            with self.subTest(command=command):
+                self.assertIn("docs/lib", decide(command, shell))
+        # A multi-match destination glob moves all but the last match.
+        os.makedirs(os.path.join(self.repo_path, "dummy"))
+        self.assertIn("docs/lib", decide("mv src d*"))
+        shutil.rmtree(os.path.join(self.repo_path, "dummy"))
+        with mock.patch.dict(os.environ, {"HOME": self.repo_path,
+                                         "USERPROFILE": self.repo_path}):
+            self.assertIn("docs/lib", decide("rm -rf ~/docs/*"))
+        # A wildcard source moved into a directory lands under its basename.
+        os.makedirs(os.path.join(self.repo_path, "stuff", "lib"))
+        os.makedirs(os.path.join(self.repo_path, "target"))
+        coordination.claim(self.repo, "s2", "file_glob", "target/lib/*")
+        self.assertIn("target/lib", decide("mv stuff/* target"))
+        self.assertIn("target/lib", decide("mv stuff/lib t*"))
+        self.assertEqual(decide("mv stuff target"), "")
+        # A positional Rename-Item name lands beside the source.
+        self.assertIn("docs/lib", self.decide({
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "Rename-Item docs/x lib"},
+            "cwd": self.repo_path, "session_id": "s1"})[1])
+        shutil.rmtree(os.path.join(self.repo_path, "stuff"))
+        shutil.rmtree(os.path.join(self.repo_path, "target"))
+        # Unlinking a symlink leaves the directory it points to alone.
+        if hasattr(os, "symlink"):
+            try:
+                os.symlink("docs", os.path.join(self.repo_path, "link"))
+            except OSError:
+                pass
+            else:
+                self.assertEqual(decide("rm link"), "")
+                self.assertEqual(decide("mv link other"), "")
+                self.assertIn("contains file_glob 'docs/lib/*'",
+                              decide("rm -r link/"))
+                os.remove(os.path.join(self.repo_path, "link"))
+        shutil.rmtree(os.path.join(self.repo_path, "docs"))
+        self.assertIn("contains file_glob 'docs/lib/*'", decide("mv src docs"))
+
     def test_bash_line_continuations_join_before_parsing(self):
         # Review of #178: Bash drops an unquoted backslash-newline.
         for command in ("git \\\nreset --hard",
@@ -1634,11 +1760,123 @@ class TestPreToolUseAdapter(TempRepoCase):
             with self.subTest(command=command):
                 self.assertEqual(coordination.shell_write_targets(
                     command, self.repo_path, ps=True), [])
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, self.base, None, ps=True))
                 rc, out = self.decide({
                     "tool_name": "PowerShell", "tool_input": {"command": command},
                     "cwd": self.repo_path,
                 })
                 self.assertEqual(out, "")
+
+    # #179/#187: PowerShell data versus statement boundaries. Each write
+    # case hides `Set-Content seed.txt` behind a quoting form; each data
+    # case carries a redirect or write only inside a string.
+    PS_HIDDEN_WRITES = (
+        "$p = @'\n\"\n'@; Set-Content seed.txt boom; Write-Output \"z\"",
+        "$p = @'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "Write-Output \u2018x'; Set-Content seed.txt boom; Write-Output 'y'",
+        "Write-Output \u201cx\"; Set-Content seed.txt boom; Write-Output \"y\"",
+        "Write-Output `\"; Set-Content seed.txt boom; Write-Output \"y\"",
+        "Write-Output `'; Set-Content seed.txt boom; Write-Output 'y'",
+        "Set-Content \u2018seed.txt\u2019 boom",
+        "Write-Output x@'\n'; Set-Content seed.txt boom; Write-Output y'q\n'@z",
+        "Write-Output x=@'\n'; Set-Content seed.txt boom; Write-Output y'q\n'@z",
+        "$p = @'\r'\r'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "$p=@'\n'\n'@; Set-Content seed.txt boom",
+        "Write-Output a\rSet-Content seed.txt boom",
+        "Write-Output $p=@'\n'; Set-Content seed.txt boom; Write-Output y'q\n'@z",
+        "a && $p=@'\n'; Set-Content seed.txt boom; Write-Output y'q\n'@z",
+        "${p}=@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "${env:a b}=@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "$p??=@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "[int[]]$p.'a'=@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "$p=@()+@'\n'\n'@; Set-Content seed.txt boom; Write-Output 'z'",
+        "$p=1,@\"\n\"\n\"@; Set-Content seed.txt boom; Write-Output \"z\"",
+        "# @'\n# '\nSet-Content seed.txt boom\n'@' | Out-Null",
+        "<# @' #>\nSet-Content seed.txt boom\n'@' | Out-Null",
+        "Write-Output a # it's\nSet-Content seed.txt boom; Write-Output 'z'",
+        "$x=# @'\n# '\nSet-Content seed.txt boom\n'@' | Out-Null",
+        "Write-Output x`\n#tag; Set-Content seed.txt boom",
+        "Write-Output 'a'# '\nSet-Content seed.txt boom\nWrite-Output 'z'",
+        "$x.y# '\nSet-Content seed.txt boom\nWrite-Output 'z'",
+        "$x = Set-Content seed.txt boom",
+        "[string]$x=Set-Content seed.txt boom",
+        "$x=`\nSet-Content seed.txt boom",
+        "Write-Output a\n`\nSet-Content seed.txt boom",
+        "Write-Output x`\r\nSet-Content seed.txt boom",
+    )
+    PS_DATA_ONLY = (
+        "$p = @'\nprint(targets('echo x > seed.txt'))\n'@\n$p | python -",
+        "$p = @\"\nx > seed.txt\n\"@\n$p | python -",
+        "$p=@'\r\nx > seed.txt\r\n'@\r\n$p | Out-Null",
+        "Write-Output \u2018a\u2019\u2019; Remove-Item seed.txt; b\u2019",
+        "a; $q = $p=@'\nx > seed.txt\n'@",
+        "{ [string]$p.a[0] += @'\nx > seed.txt\n'@ }",
+        "Write-Output x`; Remove-Item seed.txt",
+        "Write-Output `@'\n; Remove-Item seed.txt\n'",
+        "Write-Output x`|Remove-Item seed.txt`\nboom",
+    )
+
+    def ps_command_names(self, source):
+        """Command names in PowerShell's own AST, or None without pwsh."""
+        pwsh = shutil.which("pwsh")
+        if not pwsh:
+            return None
+        script = ("$e = $null; [System.Management.Automation.Language.Parser]"
+                  "::ParseInput($env:PS_SRC, [ref]$null, [ref]$e).FindAll("
+                  "{ $args[0] -is [System.Management.Automation.Language."
+                  "CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() }")
+        out = subprocess.run(
+            [pwsh, "-NoProfile", "-NonInteractive", "-Command", script],
+            env={**os.environ, "PS_SRC": source}, capture_output=True,
+            text=True, encoding="utf-8", check=True).stdout
+        return out.split()
+
+    def test_powershell_quoting_forms_keep_writes_visible(self):
+        for command in self.PS_HIDDEN_WRITES:
+            with self.subTest(command=command):
+                names = self.ps_command_names(command)
+                if names is not None:
+                    self.assertIn("Set-Content", names)
+                rc, out = self.decide({
+                    "tool_name": "PowerShell", "tool_input": {"command": command},
+                    "cwd": self.repo_path,
+                })
+                # An opener outside the modeled here-string starts fails
+                # closed instead (#226 review).
+                self.assertRegex(out, "main is read-only|here-string opener")
+
+    def test_powershell_quoting_forms_keep_claim_writes_visible(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for command in self.PS_HIDDEN_WRITES:
+            command = command.replace("seed.txt", "src/code.cs")
+            with self.subTest(command=command):
+                rc, out = self.decide({
+                    "tool_name": "PowerShell", "tool_input": {"command": command},
+                    "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertRegex(
+                    out, "claimed by session s2|here-string opener")
+
+    def test_powershell_string_data_is_not_a_write(self):
+        for command in self.PS_DATA_ONLY:
+            with self.subTest(command=command):
+                names = self.ps_command_names(command)
+                if names is not None:
+                    self.assertNotIn("Remove-Item", names)
+                self.assertEqual(coordination.shell_write_targets(
+                    command, self.repo_path, ps=True), [])
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, self.base, None, ps=True))
+        # An actual redirect after the here-string is still enforced.
+        rc, out = self.decide({
+            "tool_name": "PowerShell", "tool_input": {
+                "command": "$p = @'\nx > other.txt\n'@\n$p > seed.txt",
+            }, "cwd": self.repo_path,
+        })
+        self.assertIn("main is read-only", out)
 
     def test_bash_and_cmd_quote_rules_are_preserved(self):
         rc, out = self.decide({

@@ -27,6 +27,7 @@ import argparse
 import csv
 import datetime as _dt
 import fnmatch
+import glob
 import hashlib
 import json
 import os
@@ -383,8 +384,9 @@ def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False, cmd=False):
         if event[0] == "git":
             reason = deny_reason_for_git_argv(event[1], event[2])
         elif event[0] == "opaque":
-            # An unmodeled location change carries its own reason and denies
-            # even outside a repository: it could move into one (#183).
+            # An opaque event with its own reason (an unmodeled location
+            # change or here-string) denies even outside a repository: the
+            # unparsed text could move into one (#183).
             if repo_hint is None and len(event) < 3:
                 continue
             return (event[2] if len(event) > 2 else
@@ -428,10 +430,15 @@ def _copy_move_operands(argv):
     positionals, so the value token must be consumed rather than treated as
     a source; without that, the last source is mistaken for the destination.
     """
-    dest, operands, expect_value = None, [], False
+    dest, operands, expect_value, options = None, [], False, True
     for arg in argv[1:]:
         if expect_value:
             dest, expect_value = arg, False
+        elif not options or arg == "--":
+            # After `--` every argument is an operand, `-src` included.
+            if not options:
+                operands.append(arg)
+            options = False
         elif arg in ("-t", "--target-directory"):
             expect_value = True
         elif arg.startswith("--target-directory="):
@@ -530,7 +537,37 @@ def _ps_write_targets(argv):
 
 
 _QUOTE_RE = re.compile(r"'[^']*'|\"(?:\\[\s\S]|[^\"\\])*\"")
-_PS_QUOTE_RE = re.compile(r"'(?:''|[^'])*'|\"(?:`[\s\S]|\"\"|[^\"`])*\"")
+# PowerShell comments (`# x`, `<# x #>`) are matched in the same scan so a
+# quote inside one opens nothing; `#` right after a continued line still
+# belongs to the token being continued. A backtick before CRLF escapes only
+# the CR, so the LF still ends the statement (checked against pwsh's AST). It also accepts typographic quotes as
+# delimiters, a here-string
+# runs to a line opening with its closing quote whatever it contains, and a
+# backtick outside a string escapes the next character (a quote included)
+# rather than opening a string (#179, #187). The backtick escape matches as
+# its own alternative so it is consumed before it can open a string.
+_PS_SQ, _PS_DQ = "'\u2018\u2019\u201a\u201b", '"\u201c\u201d\u201e'
+# A here-string opens only where `@` starts a token; inside a bare word
+# (`x@'`, `x=@'`) the quote is ordinary. An assignment (`$p=@'`) is matched
+# whole so its `=` counts as a boundary, but only at statement start: in
+# argument mode (`Write-Output $p=@'`) it is a bare word. PowerShell ends a
+# line at CR, LF or CRLF.
+_PS_ASSIGN = (r"(?:(?<=[;\r\n{(])|^)[ \t]*(?:(?:\[[\w.,\[\] ]+\])*"
+              r"\$(?:\{[^}\r\n]*\}|[\w:]+)"
+              r"(?:\.(?:\w+|'[^'\r\n]*'|\"[^\"\r\n]*\")|\[[^\]\r\n]*\])*"
+              r"\s*(?:[-+*/%]|\?\?)?=\s*)+")
+_PS_TOKEN_START = rf"(?:{_PS_ASSIGN}|(?<![^\s;|&(){{}}\[,]))"
+_PS_EOL = r"(?:\r\n?|\n)"
+_PS_QUOTE_RE = re.compile(
+    rf"{_PS_TOKEN_START}@[{_PS_SQ}][ \t]*{_PS_EOL}"
+    rf"(?:[^\r\n]*{_PS_EOL})*?[{_PS_SQ}]@"
+    rf"|{_PS_TOKEN_START}@[{_PS_DQ}][ \t]*{_PS_EOL}"
+    rf"(?:[^\r\n]*{_PS_EOL})*?[{_PS_DQ}]@"
+    rf"|<#[\s\S]*?#>|(?<![^\s;|&(){{}}\[\]=,{_PS_SQ}{_PS_DQ}])(?<!`\n)(?<!`\r)"
+    rf"#[^\r\n]*"
+    rf"|`[\s\S]"
+    rf"|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*[{_PS_SQ}]"
+    rf"|[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*[{_PS_DQ}]")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
 _REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
 # Bash: a backslash escapes the next character, including a space (#178).
@@ -547,6 +584,12 @@ def _mask_literals(command, cmd=False, ps=False):
     """
     def blank(m):
         s = m.group(0)
+        if s[0] == "`":
+            return "`" + " " * (len(s) - 1)  # escaped text is never syntax
+        if s[0] == "#" or s.startswith("<#"):
+            # Matched only so its quotes open nothing; left visible so a
+            # misread comment can at worst over-deny, never hide a command.
+            return s
         return s[0] + " " * (len(s) - 2) + s[-1]
     # PowerShell backslashes are literal; backticks and doubled quotes escape.
     quote_re = _PS_QUOTE_RE if ps else _QUOTE_RE
@@ -661,12 +704,28 @@ def _nested_script(argv):
     return None
 
 
+_PS_ASSIGN_ARG_RE = re.compile(
+    r"(?:\[[^\]]*\])*\$[\w:{}.\[\]']+(?:[-+*/%]|\?\?)?=(.*)", re.S)
+
+
 def _strip_ps_call_block(argv):
     """PowerShell call/dot operator on a script block — `& { cmd }`, `&{cmd}`,
     `. {cmd}`. Strip a leading &/. operator (even when fused to `{`) and all
     brace characters so the inner command reaches the cmdlet checks (#46).
     Top-level `;`/`&&` already split a multi-command block upstream. A leading
     `.\\script.ps1` (dot with no brace) is left untouched."""
+    while argv:
+        # `$x = Set-Content f` runs the cmdlet as the assignment's value.
+        m = _PS_ASSIGN_ARG_RE.fullmatch(argv[0])
+        if m and m.group(1):
+            argv = [m.group(1)] + argv[1:]
+        elif m:
+            argv = argv[1:]
+        elif argv[0].startswith("$") and len(argv) > 1 \
+                and re.fullmatch(r"(?:[-+*/%]|\?\?)?=", argv[1]):
+            argv = argv[2:]
+        else:
+            break
     if not argv:
         return argv
     first = argv[0]
@@ -682,7 +741,7 @@ def _strip_ps_call_block(argv):
     return stripped
 
 
-def _shell_segments(command, masked_all, cmd=False):
+def _shell_segments(command, masked_all, cmd=False, ps=False):
     """Yield (segment, aligned masked text, background job) per statement.
 
     Outside cmd a lone `&` ends a statement and backgrounds it (Bash,
@@ -693,6 +752,8 @@ def _shell_segments(command, masked_all, cmd=False):
     """
     separators = r"&&|\|\||&|\n" if cmd \
         else r"&&|\|\||;|\n|(?<![<>|])&(?!>)"
+    if ps:
+        separators += r"|\r"  # PowerShell also ends a line at a bare CR
     cuts = [(m.start(), m.end(), m.group())
             for m in re.finditer(separators, masked_all)]
     cuts.append((len(command), len(command), ""))
@@ -780,9 +841,38 @@ def _redirect_targets(segment, segment_masked, bash=False, cmd=False):
     return targets
 
 
+def _posix_operands(argv):
+    """Non-option arguments; everything after `--` is an operand."""
+    operands, options = [], True
+    for arg in argv[1:]:
+        if options and arg == "--":
+            options = False
+        elif not (options and arg.startswith("-")):
+            operands.append(arg)
+    return operands
+
+
+def _path_ancestors(path):
+    """`a/b/c` -> `a/b`, `a`: the directories `rmdir -p` also removes."""
+    parts = path.strip("\"'").rstrip("/\\").replace("\\", "/").split("/")
+    return ["/".join(parts[:i]) for i in range(len(parts) - 1, 0, -1)
+            if parts[:i] != [""]]
+
+
+def _command_name(token):
+    """A bare command name with Windows' trailing `.`/space dropped, or the
+    last component of a path-supplied command (`/bin/rm` is rm)."""
+    if re.search(r"[/\\]", token):
+        name = token.replace("\\", "/").rsplit("/", 1)[-1]
+    else:
+        name = token.rstrip(". ")
+    # Git Bash runs `rm.exe` (or `RM.EXE`, case-insensitively) as rm.
+    return name[:-4].lower() if name.lower().endswith(".exe") else name
+
+
 def _argv_write_targets(argv, ps, cmd=False):
     """Return raw target operands for the write form represented by argv."""
-    name = argv[0].rstrip(". ")
+    name, low = _command_name(argv[0]), argv[0].lower()
     targets = []
     if name == "tee":
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
@@ -792,9 +882,8 @@ def _argv_write_targets(argv, ps, cmd=False):
         targets += [arg[3:] for arg in argv if arg.startswith("of=")]
     if name == "truncate":
         targets += [arg for arg in argv[1:] if not arg.startswith("-")]
-    if name in ("rm", "unlink", "shred"):
-        targets += [arg for arg in argv[1:] if not arg.startswith("-")]
-    low = argv[0].lower()
+    if name in ("rm", "unlink", "shred") or name == "rmdir" and not cmd:
+        targets += _posix_operands(argv)
     if ps and (low in _PS_WRITE_CMDLETS or low in _PS_COPY_CMDLETS):
         targets += _ps_write_targets(argv)
     if cmd:
@@ -812,10 +901,150 @@ def _argv_write_targets(argv, ps, cmd=False):
     return targets
 
 
+_PS_SUBTREE_CMDLETS = {"remove-item", "ri", "del", "erase", "rd", "rmdir",
+                       "move-item", "mi", "move", "rename-item", "rni", "ren"}
+
+
+def _argv_subtree_targets(argv, ps, cmd=False):
+    """Return (raw operands, moves) for the paths a delete or move form
+    removes or replaces with their whole subtree, so claims under them are
+    checked too (#184). Each move is (destination, sources, into): with
+    `into`, an existing destination directory receives the sources instead
+    of being replaced."""
+    name, low = _command_name(argv[0]), argv[0].lower()
+    if name in ("rm", "rmdir"):
+        operands = _posix_operands(argv)
+        options = argv[1:argv.index("--")] if "--" in argv else argv[1:]
+        if name == "rmdir" and any(
+                arg == "--parents" or (arg[:1] == "-" and arg[1:2] != "-"
+                                       and "p" in arg)
+                for arg in options):
+            # -p also removes each ancestor named in the operand.
+            operands += [part for op in operands
+                         for part in _path_ancestors(op)]
+        return operands, []
+    if name == "mv":
+        dest, sources = _copy_move_operands(argv)
+        # -T / --no-target-directory: an existing directory is replaced
+        # rather than receiving the sources.
+        into = not any(
+            arg == "--no-target-directory"
+            or (arg[:1] == "-" and arg[1:2] != "-" and "T" in arg.partition("t")[0])
+            for arg in argv[1:])
+        return sources, [(dest, sources, into)] if dest else []
+    if ps and low in _PS_SUBTREE_CMDLETS:
+        operands = _ps_write_targets(argv)
+        if low in ("rename-item", "rni", "ren") and operands:
+            # `-NewName` names the destination beside the source.
+            new_names = [argv[i + 1] for i in range(1, len(argv) - 1)
+                         if argv[i].lower() == "-newname"]
+            new_names += [arg.partition(":")[2] for arg in argv[1:]
+                          if arg.lower().startswith("-newname:")]
+            # Positional form: `Rename-Item src new`.
+            new_names = new_names or operands[1:]
+            parent = re.split(r"[/\\]", operands[0].rstrip("/\\"))[:-1]
+            operands += ["/".join(parent + [n]) for n in new_names]
+        return operands, []
+    if cmd and low in ("move", "ren", "rename"):
+        operands = [arg for arg in argv[1:] if not arg.startswith("/")]
+        if low == "move" and len(operands) > 1:
+            return operands[:-1], [(operands[-1], operands[:-1], True)]
+        if low != "move" and len(operands) > 1:
+            # `ren docs\old lib` names `docs\lib`: the new name has no path.
+            parent = re.split(r"[/\\]", operands[0].rstrip("/\\"))[:-1]
+            operands += ["/".join(parent + [operands[1]])]
+        return operands, []
+    if cmd and low in ("del", "erase", "rd", "rmdir"):
+        return [arg for arg in argv[1:] if not arg.startswith("/")], []
+    return [], []
+
+
+def _brace_expand(word):
+    """Bash brace expansion of an unquoted word: `{a,b}` yields each
+    alternative; a group without a top-level comma (`{1..3}`) becomes a
+    `*` glob, which over-approximates what it can expand to."""
+    for start, ch in enumerate(word):
+        if ch != "{":
+            continue
+        depth, commas = 0, []
+        for end in range(start, len(word)):
+            if word[end] == "{":
+                depth += 1
+            elif word[end] == "}":
+                depth -= 1
+                if not depth:
+                    break
+            elif word[end] == "," and depth == 1:
+                commas.append(end)
+        else:
+            continue  # unmatched `{` is literal; a later group still expands
+        head, tail = word[:start], word[end + 1:]
+        if not commas:
+            if ".." not in word[start:end]:
+                continue
+            return _brace_expand(head + "*" + tail)
+        cuts = [start] + commas + [end]
+        return [w for i in range(len(cuts) - 1)
+                for w in _brace_expand(head + word[cuts[i] + 1:cuts[i + 1]] + tail)]
+    return [word]
+
+
+def _expand_operand(op, cwd, bash):
+    """The paths a delete or move operand can name once the shell expands
+    braces (Bash only) and wildcards; a pattern matching nothing stays as
+    written."""
+    raw = op.strip("\"'")
+    words = _brace_expand(raw) if bash else [raw]
+    out = []
+    for word in words:
+        if bash:
+            word = os.path.expanduser(word)  # tilde expands before globbing
+        if re.search(r"[*?[]", word):
+            out += sorted(glob.glob(os.path.join(cwd, word))) or [word]
+        else:
+            out.append(word)
+    return out
+
+
+def _subtree_operands(operands, cwd, bash):
+    """Expand operands to what they name, so `rm -rf src/*` reaches a
+    `src/lib/*` claim, and drop symlinks: deleting or moving one touches
+    only the link, while `link/` still resolves to its target."""
+    return [path for op in operands for path in _expand_operand(op, cwd, bash)
+            if path.endswith(("/", "\\"))
+            or not os.path.islink(os.path.join(cwd, path))]
+
+
+def _move_destinations(moves, cwd, ps, cmd=False):
+    """Raw paths a move replaces: an existing destination directory gets
+    each source's basename under it, any other destination is replaced."""
+    raw, bash = [], not ps and not cmd
+    for dest, sources, into in moves:
+        sources = [path for src in sources
+                   for path in _expand_operand(src, cwd, bash)]
+        dests = _expand_operand(dest, cwd, bash)
+        if into and len(dests) > 1:
+            # A multi-match destination glob: only the last match is the
+            # target; earlier matches are moved into it as more sources.
+            sources += dests[:-1]
+            raw += dests[:-1]
+            dests = dests[-1:]
+        for dest in dests:
+            resolved = into and next(
+                _target_events([dest], cwd, ps, cmd=cmd), None)
+            if resolved and os.path.isdir(resolved[1]):
+                raw += [dest.rstrip("/\\") + "/" + re.split(
+                    r"[/\\]", src.strip("\"'").rstrip("/\\"))[-1]
+                    for src in sources]
+            else:
+                raw.append(dest)
+    return raw
+
+
 def _target_events(raw_targets, cwd, ps, cmd=False):
     """Yield resolved target events for raw shell write operands."""
     for target in raw_targets:
-        target = target.strip("\"'")
+        target = target.strip("\"'" + (_PS_SQ + _PS_DQ if ps else ""))
         if ps or cmd:
             target = target.replace("\\", "/")
         if ps and re.match(r"[A-Za-z]{2,}:", target):
@@ -910,18 +1139,66 @@ _UNMODELED_LOCATION = ("a location change the parser does not model; command "
                        "is denied because the working directory is unknown")
 
 
+_UNMODELED_HERE_STRING = ("a PowerShell here-string opener or comment the "
+                          "parser does not model; command is denied because "
+                          "its statements cannot be told from string data")
+
+
+def _ps_unmodeled_here_string(command):
+    """True when a quote the scan read as a string may be something else.
+
+    ponytail: the here-string and comment start rules are a subset of
+    PowerShell's grammar. An `@'`/`@"` opener outside them would pair its
+    quote with one in the body, and a `#` read as code that PowerShell reads
+    as a comment (`$x.y# '`) would let its quote open a string; either can
+    hide real statements, so it fails closed.
+    """
+    # A backtick escape ending right at the quote made its `@` literal.
+    prev_end, escaped = 0, False
+    for m in _PS_QUOTE_RE.finditer(command):
+        if m.group(0)[0] in _PS_SQ + _PS_DQ:
+            if (m.start() and command[m.start() - 1] == "@"
+                    and not (prev_end == m.start() and escaped)
+                    and re.match(rf"[ \t]*{_PS_EOL}", command[m.start() + 1:])):
+                return True
+        if _ps_ambiguous_hash(command, prev_end, m.start()):
+            return True
+        prev_end, escaped = m.end(), m.group(0)[0] == "`"
+    return _ps_ambiguous_hash(command, prev_end, len(command))
+
+
+def _ps_ambiguous_hash(command, start, end):
+    """A `#` the scan kept as code (`$x.y#`, `a#b`) is a comment in some
+    PowerShell modes; if a quote or backtick follows it on that line, the
+    two readings disagree about where strings and statements end."""
+    for h in re.finditer("#", command[start:end]):
+        rest = re.match(r"[^\r\n]*", command[start + h.end():]).group(0)
+        if re.search(f"[`{_PS_SQ}{_PS_DQ}]", rest):
+            return True
+    return False
+
+
 def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
     One parser feeds both the stateless main rule and the claim layer, so a
     write form covered by one is covered by the other.
     """
+    if ps and _ps_unmodeled_here_string(command):
+        yield ("opaque", cwd, _UNMODELED_HERE_STRING)
+        return
     effective_cwd = parent_cwd = cwd
     stack, parent_stack = [], []
     job = None
     bash = not ps and not cmd
     hidden_re = _HIDDEN_LOCATION_RE["ps" if ps else "cmd" if cmd else "bash"]
     scopes, closing = [], 0
+    if ps:
+        # A backtick before a line break continues the line (CRLF: only the
+        # CR is escaped, so the LF still ends it).
+        command = _PS_QUOTE_RE.sub(
+            lambda m: " " * len(m.group(0))
+            if re.fullmatch(r"`[\r\n]", m.group(0)) else m.group(0), command)
     masked_all = _mask_literals(command, cmd=cmd, ps=ps)
     if bash:
         # Bash drops an unquoted backslash-newline before splitting, so
@@ -935,7 +1212,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         # An escaped character is literal, so `\;` or `\&` never splits.
         masked_all = re.sub(r"\\[\s\S]", "  ", masked_all)
     for segment, seg_masked, seg_job in _shell_segments(
-            command, masked_all, cmd=cmd):
+            command, masked_all, cmd=cmd, ps=ps):
         for _ in range(min(closing, len(scopes))):
             # The previous segment closed a Bash subshell: its cd is undone.
             effective_cwd, stack, parent_cwd, parent_stack = scopes.pop()
@@ -1064,6 +1341,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             stages = _pipeline_stages(segment, seg_masked, bash=True)
         raw_targets = _redirect_targets(segment, seg_masked, bash=bash,
                                         cmd=cmd)
+        raw_subtrees, moves = [], []
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
             if argv and _exe_name(argv[0]) in _CMD_PREFIXES:
@@ -1089,12 +1367,24 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
                 continue
             yield ("git", argv, effective_cwd)
             raw_targets += _argv_write_targets(argv, ps, cmd=cmd)
+            operands, argv_moves = _argv_subtree_targets(argv, ps, cmd=cmd)
+            raw_subtrees += _subtree_operands(operands, effective_cwd, bash)
+            moves += argv_moves
         yield from _target_events(raw_targets, effective_cwd, ps, cmd=cmd)
+        raw_subtrees += _move_destinations(moves, effective_cwd, ps, cmd=cmd)
+        for event in _target_events(raw_subtrees, effective_cwd, ps, cmd=cmd):
+            yield ("subtree", event[1])
 
 
 def shell_write_targets(command, cwd, ps=False, cmd=False):
     return [e[1] for e in _shell_events(command, cwd, ps=ps, cmd=cmd)
             if e[0] == "target"]
+
+
+def shell_subtree_targets(command, cwd, ps=False, cmd=False):
+    """Delete and move operands, a subset of `shell_write_targets`."""
+    return [e[1] for e in _shell_events(command, cwd, ps=ps, cmd=cmd)
+            if e[0] == "subtree"]
 
 
 # --------------------------------------------------------------------------
@@ -1904,12 +2194,13 @@ def cmd_check(repo, session, targets):
     return ALLOW
 
 
-def claim_denial(claims, session, targets):
+def claim_denial(claims, session, targets, subtrees=()):
     """Positive claim validation, shared by `check` and the adapter so the
     automatic path is never weaker than the explicit command: others' globs,
     the caller's own file scope, and the branch claim of each target's tree.
+    `subtrees` are targets removed with everything under them.
     """
-    reason = glob_conflict(claims, session, targets)
+    reason = glob_conflict(claims, session, targets, subtrees)
     if reason or not session:
         return reason
     my_globs = [c["value"] for c in claims
@@ -1947,13 +2238,33 @@ def _branch_claim_denial(claims, session, branch):
     return None
 
 
-def glob_conflict(claims, session, targets):
+def glob_conflict(claims, session, targets, subtrees=()):
     """Reason string when a target sits in another session's file_glob.
 
     Paths are made repository-relative against the worktree that governs
     each target, so a claim of `src/*` matches `src/a.cs` identically from
-    the primary tree and from any linked worktree.
+    the primary tree and from any linked worktree. A `subtrees` target also
+    conflicts with a claim at or below it: deleting `src` removes `src/*`.
     """
+    for target in subtrees:
+        tree = tree_containing(target)
+        if tree is None:
+            continue
+        rel = os.path.relpath(_norm(target), tree).replace(os.sep, "/")
+        for record in claims:
+            prefix = _glob_prefix(record["value"]) \
+                if record["kind"] == "file_glob" else None
+            if prefix is None or record["session"] == session:
+                continue
+            if fnmatch.fnmatch(rel, record["value"]):
+                return (f"'{rel}' is inside file_glob '{record['value']}' "
+                        f"claimed by session {record['session']} "
+                        f"(claim {record['id']}).")
+            claimed = prefix.rstrip("/")
+            if rel == "." or claimed == rel or claimed.startswith(rel + "/"):
+                return (f"'{rel}' contains file_glob '{record['value']}' "
+                        f"claimed by session {record['session']} "
+                        f"(claim {record['id']}).")
     for target in targets:
         tree = tree_containing(target)
         if tree is None:
@@ -2095,6 +2406,8 @@ def hook_pre_tool_use(payload_text):
                             reason = claim_denial(
                                 list_claims(repo), session,
                                 shell_write_targets(
+                                    command, cwd, ps=parser_ps, cmd=cmd),
+                                subtrees=shell_subtree_targets(
                                     command, cwd, ps=parser_ps, cmd=cmd))
                         except RegistryError as exc:
                             reason = str(exc)
