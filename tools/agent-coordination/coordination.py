@@ -851,6 +851,13 @@ def _posix_operands(argv):
     return operands
 
 
+def _path_ancestors(path):
+    """`a/b/c` -> `a/b`, `a`: the directories `rmdir -p` also removes."""
+    parts = path.strip("\"'").rstrip("/\\").replace("\\", "/").split("/")
+    return ["/".join(parts[:i]) for i in range(len(parts) - 1, 0, -1)
+            if parts[:i] != [""]]
+
+
 def _command_name(token):
     """A bare command name with Windows' trailing `.`/space dropped, or the
     last component of a path-supplied command (`/bin/rm` is rm)."""
@@ -905,7 +912,16 @@ def _argv_subtree_targets(argv, ps, cmd=False):
     of being replaced."""
     name, low = _command_name(argv[0]), argv[0].lower()
     if name in ("rm", "rmdir"):
-        return _posix_operands(argv), []
+        operands = _posix_operands(argv)
+        options = argv[1:argv.index("--")] if "--" in argv else argv[1:]
+        if name == "rmdir" and any(
+                arg == "--parents" or (arg[:1] == "-" and arg[1:2] != "-"
+                                       and "p" in arg)
+                for arg in options):
+            # -p also removes each ancestor named in the operand.
+            operands += [part for op in operands
+                         for part in _path_ancestors(op)]
+        return operands, []
     if name == "mv":
         dest, sources = _copy_move_operands(argv)
         # -T / --no-target-directory: an existing directory is replaced
@@ -932,6 +948,10 @@ def _argv_subtree_targets(argv, ps, cmd=False):
         operands = [arg for arg in argv[1:] if not arg.startswith("/")]
         if low == "move" and len(operands) > 1:
             return operands[:-1], [(operands[-1], operands[:-1], True)]
+        if low != "move" and len(operands) > 1:
+            # `ren docs\old lib` names `docs\lib`: the new name has no path.
+            parent = re.split(r"[/\\]", operands[0].rstrip("/\\"))[:-1]
+            operands += ["/".join(parent + [operands[1]])]
         return operands, []
     if cmd and low in ("del", "erase", "rd", "rmdir"):
         return [arg for arg in argv[1:] if not arg.startswith("/")], []

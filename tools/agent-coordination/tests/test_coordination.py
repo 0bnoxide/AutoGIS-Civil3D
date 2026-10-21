@@ -1507,6 +1507,15 @@ class TestPreToolUseAdapter(TempRepoCase):
             with self.subTest(command=command):
                 self.assertIn("docs/lib", decide(command))
         self.assertEqual(decide("rm -rf docs/*.md"), "")
+        # rmdir -p also removes the ancestors; cmd ren names a sibling.
+        self.assertEqual(decide("rmdir docs/empty"), "")
+        for command, shell in (("rmdir -p docs/empty", ""),
+                               ("rmdir -vp docs/empty", ""),
+                               ("rmdir --parents docs/empty", ""),
+                               ("ren docs\\old lib", "cmd.exe"),
+                               ("rename docs\\old lib", "cmd.exe")):
+            with self.subTest(command=command):
+                self.assertIn("docs/lib", decide(command, shell))
         # A multi-match destination glob moves all but the last match.
         os.makedirs(os.path.join(self.repo_path, "dummy"))
         self.assertIn("docs/lib", decide("mv src d*"))
