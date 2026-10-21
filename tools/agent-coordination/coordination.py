@@ -574,7 +574,30 @@ _BASH_REDIR_TARGET_RE = re.compile(
     r">{1,2}\s*(\"[^\"]*\"|'[^']*'|(?:\\.|[^\s|;&<>\\])+)")
 
 
-def _mask_literals(command, cmd=False, ps=False):
+def _ps_certain_comment(command, start):
+    """True when the `#` or `<#` at start opens a comment in every reading.
+
+    The scan's comment rule is a subset of PowerShell's grammar, so a
+    comment is blanked only when nothing earlier on its line could have
+    changed tokenizing: no backtick (an escaped space or a continued line
+    makes the `#` part of a word), no `${` (a braced variable name may hold
+    `#`) and no `--%` (stop-parsing text is literal); nor may the previous
+    line end in a continuation. It must follow a space, tab or `;`, or open
+    the line.
+    """
+    line_start = max(command.rfind("\n", 0, start),
+                     command.rfind("\r", 0, start)) + 1
+    prefix = command[line_start:start]
+    if line_start and command[:line_start].rstrip("\r\n").endswith("`"):
+        return False
+    if re.search(r"\$\{[^}]*$", command[:start]):
+        return False  # inside a braced variable name spanning lines
+    # It must also start a token: `Foo<#x` is one word.
+    return (not re.search(r"`|\$\{|--%", prefix)
+            and (not prefix or prefix[-1] in " \t;"))
+
+
+def _mask_literals(command, cmd=False, ps=False, raw=None):
     """Blank quoted-string contents and heredoc bodies, preserving positions.
 
     Operator and redirect scanning runs on the masked text so commit
@@ -586,15 +609,25 @@ def _mask_literals(command, cmd=False, ps=False):
         if s[0] == "`":
             return "`" + " " * (len(s) - 1)  # escaped text is never syntax
         if s[0] == "#" or s.startswith("<#"):
-            # Matched only so its quotes open nothing; left visible so a
+            # Matched so its quotes open nothing. Blanked only where it is
+            # certainly a comment (#210); otherwise left visible, so a
             # misread comment can at worst over-deny, never hide a command.
+            if _ps_certain_comment(raw or command, m.start()):
+                return re.sub(r"[^\r\n]", " ", s)
             return s
         return s[0] + " " * (len(s) - 2) + s[-1]
-    # PowerShell backslashes are literal; backticks and doubled quotes escape.
-    quote_re = _PS_QUOTE_RE if ps else _QUOTE_RE
-    if cmd:
-        quote_re = re.compile(r'"[^"]*"')
-    masked = quote_re.sub(blank, command)
+    if ps:
+        # PowerShell backslashes are literal; backticks and doubled quotes
+        # escape.
+        masked = _PS_QUOTE_RE.sub(blank, command)
+        # After the stop-parsing token `--%`, the rest of the line up to a
+        # pipe is literal native-command text, `;` and braces included.
+        masked = re.sub(r"(?<![^\s;|&{}()])(?<!`[\s;|&{}()])--%[^\n|]*",
+                        lambda m: "--%" + " " * (len(m.group()) - 3), masked)
+    elif cmd:
+        masked = re.sub(r'"[^"]*"', blank, command)
+    else:
+        masked = _QUOTE_RE.sub(blank, command)
     if cmd:
         # `^x` is a literal x, so `^&` is not a separator (#185). Quoted
         # carets are already blanked. cmd has no single quotes or heredocs.
@@ -738,6 +771,44 @@ def _strip_ps_call_block(argv):
         if tok:
             stripped.append(tok)
     return stripped
+
+
+def _ps_block_spans(masked):
+    """Return (open, close) offsets of top-level PowerShell `{ ... }` blocks
+    in masked text. `${name}` is a variable, not a block; an unclosed block
+    runs to the end of the text."""
+    scan = re.sub(r"\$\{[^}]*\}", lambda m: " " * len(m.group()), masked)
+    # A backtick escapes the next character, so `` `{ `` is a literal brace.
+    scan = re.sub(r"`[\s\S]", lambda m: "  ", scan)
+    spans, depth, start = [], 0, 0
+    for i, ch in enumerate(scan):
+        if ch == "{":
+            if not depth:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if not depth:
+                spans.append((start, i))
+    if depth:
+        spans.append((start, len(scan)))
+    return spans
+
+
+def _blank_block_bodies(masked, spans):
+    """Blank each block's body, newlines included, keeping its braces."""
+    for start, end in spans:
+        masked = masked[:start + 1] + " " * (end - start - 1) + masked[end:]
+    return masked
+
+
+def _drop_block_braces(text, spans):
+    """Replace each block's braces with spaces, keeping its body."""
+    for start, end in spans:
+        for i in (start, end):
+            if i < len(text):
+                text = text[:i] + " " + text[i + 1:]
+    return text
 
 
 def _shell_segments(command, masked_all, cmd=False, ps=False):
@@ -1056,6 +1127,11 @@ def _target_events(raw_targets, cwd, ps, cmd=False):
         yield ("target", resolved)
 
 
+# Re-checks of a block body from the locations it moves to; a body still
+# moving after this many passes is denied.
+_MAX_BLOCK_PASSES = 3
+
+
 _UNMODELED_HERE_STRING = ("a PowerShell here-string opener or comment the "
                           "parser does not model; command is denied because "
                           "its statements cannot be told from string data")
@@ -1095,25 +1171,41 @@ def _ps_ambiguous_hash(command, start, end):
     return False
 
 
-def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
+def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
+                  _report_cwd=False):
+
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
     One parser feeds both the stateless main rule and the claim layer, so a
-    write form covered by one is covered by the other.
+    write form covered by one is covered by the other. With `_report_cwd`,
+    the possible final cwds follow as ("cwd", path) events.
     """
     if ps and _ps_unmodeled_here_string(command):
         yield ("opaque", cwd, _UNMODELED_HERE_STRING)
         return
     effective_cwd = parent_cwd = cwd
+    # PowerShell: other cwds a script block may have moved to. A block may
+    # or may not run, so later statements are checked in every one (#210).
+    alt = parent_alt = []
+
+    def cwds():
+        return [effective_cwd] + [c for c in alt if c != effective_cwd]
     job = None
     bash = not ps and not cmd
+    raw = command
     if ps:
         # A backtick before a line break continues the line (CRLF: only the
         # CR is escaped, so the LF still ends it).
         command = _PS_QUOTE_RE.sub(
             lambda m: " " * len(m.group(0))
             if re.fullmatch(r"`[\r\n]", m.group(0)) else m.group(0), command)
-    masked_all = _mask_literals(command, cmd=cmd, ps=ps)
+    # Comment certainty is judged on the text before continuations join.
+    masked_all = _mask_literals(command, cmd=cmd, ps=ps, raw=raw)
+    if ps:
+        # Script-block bodies are parsed on their own below (#210), so
+        # their separators must not split the statement that holds them.
+        masked_all = _blank_block_bodies(masked_all,
+                                         _ps_block_spans(masked_all))
     if bash:
         # Bash drops an unquoted backslash-newline before splitting, so
         # `> s\<newline>rc/x` writes `src/x` (#178). Quoted and heredoc text
@@ -1130,7 +1222,51 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
         if seg_job != job:
             # A background job's `cd` moves the rest of that job only; the
             # parent shell resumes where it was.
-            job, effective_cwd = seg_job, parent_cwd
+            job, effective_cwd, alt = seg_job, parent_cwd, list(parent_alt)
+        spans = _ps_block_spans(seg_masked) if ps else []
+        if spans:
+            # Check each block body as PowerShell, whether it runs (`if`,
+            # `ForEach-Object`, `&`) or not. The braces are dropped from the
+            # outer argv, so a block used as an argument value (`-Path {x}`)
+            # reads as that value.
+            # A block may move the location for later sibling blocks
+            # (`try { cd x } finally { ... }`) as well as later statements.
+            # Only one branch of an if/elseif/else chain runs, so an
+            # `else` body starts where the chain started.
+            chain_base, prev_end = cwds(), None
+            for start, end in spans:
+                if _depth >= _MAX_UNWRAP_DEPTH:
+                    yield ("opaque", effective_cwd)
+                    break
+                if prev_end is None or not re.fullmatch(
+                        r"(?i)\s*(?:else|elseif\s*\(.*\))\s*",
+                        seg_masked[prev_end + 1:start], re.S):
+                    chain_base = cwds()
+                prev_end = end
+                # A loop body runs again from wherever it moved to, so it
+                # is re-checked from each new location; a body that keeps
+                # moving (`foreach (...) { cd sub; ... }`) fails closed.
+                moved, frontier = [], list(chain_base)
+                for _ in range(_MAX_BLOCK_PASSES):
+                    reached = []
+                    for base in frontier:
+                        for event in _shell_events(
+                                segment[start + 1:end], base, ps=True,
+                                _depth=_depth + 1, _report_cwd=True):
+                            if event[0] == "cwd":
+                                reached.append(event[1])
+                            else:
+                                yield event
+                    frontier = [c for c in dict.fromkeys(reached)
+                                if c not in moved and c not in chain_base]
+                    moved += frontier
+                    if not frontier:
+                        break
+                else:
+                    yield ("opaque", effective_cwd)
+                alt += [c for c in moved if c not in cwds()]
+            if job is None:
+                parent_alt = list(alt)
         stages = _pipeline_stages(segment, seg_masked, bash=bash)
         # `cd` is read before group peeling, as before #209, so peeling
         # never turns `(cd x` or a piped `{ cd x` into a parent-shell `cd`.
@@ -1143,14 +1279,19 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
                 and len(first) > 2 else first[1]
             if ps or cmd:
                 path = path.replace("\\", "/")
+            alt = [path if os.path.isabs(path) else os.path.join(c or ".", path)
+                   for c in alt]
             effective_cwd = path if os.path.isabs(path) \
                 else os.path.join(effective_cwd or ".", path)
             if job is None:
-                parent_cwd = effective_cwd
+                parent_cwd, parent_alt = effective_cwd, list(alt)
             continue
         if bash:
             segment, seg_masked = _peel_bash_grouping(segment, seg_masked)
             stages = _pipeline_stages(segment, seg_masked, bash=True)
+        elif spans:
+            stages = _pipeline_stages(
+                _drop_block_braces(segment, spans), seg_masked)
         raw_targets = _redirect_targets(segment, seg_masked, bash=bash,
                                         cmd=cmd)
         raw_subtrees, moves = [], []
@@ -1169,23 +1310,30 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False):
             nested = _nested_script(argv)
             if nested is not None:
                 if _depth < _MAX_UNWRAP_DEPTH:
-                    yield from _shell_events(
-                        nested[0], effective_cwd, ps=nested[1],
-                        _depth=_depth + 1, cmd=nested[2])
+                    for base in cwds():
+                        yield from _shell_events(
+                            nested[0], base, ps=nested[1],
+                            _depth=_depth + 1, cmd=nested[2])
                     continue
                 # The opaque remainder could mutate this repository; never
                 # silently discard it at the parser depth limit.
                 yield ("opaque", effective_cwd)
                 continue
-            yield ("git", argv, effective_cwd)
+            for base in cwds():
+                yield ("git", argv, base)
             raw_targets += _argv_write_targets(argv, ps, cmd=cmd)
             operands, argv_moves = _argv_subtree_targets(argv, ps, cmd=cmd)
-            raw_subtrees += _subtree_operands(operands, effective_cwd, bash)
+            raw_subtrees += operands
             moves += argv_moves
-        yield from _target_events(raw_targets, effective_cwd, ps, cmd=cmd)
-        raw_subtrees += _move_destinations(moves, effective_cwd, ps, cmd=cmd)
-        for event in _target_events(raw_subtrees, effective_cwd, ps, cmd=cmd):
-            yield ("subtree", event[1])
+        for base in cwds():
+            yield from _target_events(raw_targets, base, ps, cmd=cmd)
+            subtrees = _subtree_operands(raw_subtrees, base, bash) \
+                + _move_destinations(moves, base, ps, cmd=cmd)
+            for event in _target_events(subtrees, base, ps, cmd=cmd):
+                yield ("subtree", event[1])
+    if _report_cwd:
+        for final in [parent_cwd] + parent_alt:
+            yield ("cwd", final)
 
 
 def shell_write_targets(command, cwd, ps=False, cmd=False):

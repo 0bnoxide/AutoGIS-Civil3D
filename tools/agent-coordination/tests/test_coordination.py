@@ -432,6 +432,116 @@ class TestMainRule(TempRepoCase):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo, ps=ps), cmd)
 
+    def test_powershell_script_block_bodies_are_checked(self):
+        # #210: commands inside `{ ... }` reach the main rule.
+        for cmd in ("if ($true) { git reset --hard }",
+                    "if($true){git reset --hard}",
+                    "try { git status } catch { git reset --hard }",
+                    "foreach ($f in 1) { Remove-Item seed.txt }",
+                    "if ($true) { Set-Content seed.txt x }",
+                    "if ($true) {\n  git status\n  git reset --hard\n}",
+                    "if ($a) { if ($b) { git reset --hard } }",
+                    "Get-ChildItem | ForEach-Object { git reset --hard }",
+                    # A block bound to a parameter is coerced to its text.
+                    "Remove-Item -Path {seed.txt}",
+                    # A quote inside a comment opens no string (review).
+                    '<# " #>; Remove-Item seed.txt; Write-Output "x"',
+                    "# '\ngit reset --hard; Write-Output 'x'",
+                    # `<#` inside a token opens no comment (review).
+                    "Write-Output Foo<#x; Remove-Item seed.txt; #>",
+                    "Write-Output foo`;#bar; Remove-Item seed.txt",
+                    'Write-Output "x"# "\nRemove-Item seed.txt; Write-Output "y"',
+                    "Write-Output 'x'<# ' #>; Remove-Item seed.txt; 'y'",
+                    "Write-Output foo` <#x; Remove-Item seed.txt #>",
+                    # A comment is blanked only where it is certain, so a
+                    # `#` PowerShell may read as text never hides code.
+                    'Write-Output foo `\n# "\nRemove-Item seed.txt; '
+                    'Write-Output "y"',
+                    "Write-Output foo `\n# x; Remove-Item seed.txt",
+                    "Write-Output foo` #x; Remove-Item seed.txt",
+                    "Write-Output ${a #}; Remove-Item seed.txt",
+                    "Write-Output ${a\n#}; Remove-Item seed.txt",
+                    "cmd.exe --% /c echo #x | Remove-Item seed.txt",
+                    # `--%` ends at a newline or pipe.
+                    "findstr.exe --% x\nRemove-Item seed.txt",
+                    "cmd.exe foo`;--% bar; Remove-Item seed.txt",
+                    "findstr.exe --% x | ForEach-Object { git reset --hard }"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=True), cmd)
+        for cmd in ("if ($true) { git status }",
+                    "Write-Output '{ git reset --hard }'",
+                    "Get-ChildItem | ForEach-Object { $_.Name }",
+                    "Write-Output ${env:TEMP}",
+                    # Comments are data, even when they hold a block.
+                    "# if ($true) { git reset --hard }",
+                    "<# { git reset --hard } #>",
+                    "Write-Output x # { git reset --hard }",
+                    "Write-Output x # git reset --hard",
+                    "Write-Output 'x'; # Remove-Item seed.txt",
+                    "<# Remove-Item seed.txt\ngit reset --hard #>\ngit status",
+                    "\t# Remove-Item seed.txt\ngit status",
+                    # A `#` inside a string opens no comment.
+                    "Write-Output '#'; git status",
+                    # After `--%` the line is literal native-command text.
+                    "findstr.exe --% { Remove-Item seed.txt }",
+                    "findstr.exe --% x; git reset --hard"):
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                cmd, self.repo_path, self.repo, ps=True), cmd)
+
+    def test_powershell_block_cd_stays_inside_the_block(self):
+        # A block may not run: its `cd` must not move later statements.
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe, exist_ok=True)
+        main = self.repo_path.replace(os.sep, "/")
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"if ($false) {{ cd {safe} }}; git reset --hard",
+            self.repo_path, self.repo, ps=True))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"cd {safe}; if ($true) {{ cd {main}; git reset --hard }}",
+            self.repo_path, self.repo, ps=True))
+
+    def test_powershell_block_cd_may_move_later_statements(self):
+        # Review of #210: a block that runs moves the location for later
+        # statements, so they are checked in both possible locations.
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe, exist_ok=True)
+        main = self.repo_path.replace(os.sep, "/")
+        for cmd in (f"if ($true) {{ cd {main} }}; git reset --hard",
+                    f"try {{ cd {main} }} finally {{ git reset --hard }}",
+                    f"if ($a) {{ cd {main} }} else {{ }}; git reset --hard",
+                    f"if ($a) {{ if ($b) {{ cd {main} }} }}; git reset --hard",
+                    f"if ($true) {{ cd {self.base} }}; cd repo; "
+                    "git reset --hard"):
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                cmd, safe, self.repo, ps=True), cmd)
+        for cmd in (f"if ($true) {{ cd {main} }}; cd {safe}; git reset --hard",
+                    # Only one branch of an if/else chain runs.
+                    f"if ($true) {{ cd {main} }} else {{ git reset --hard }}",
+                    f"if ($a) {{ cd {main} }} elseif ($b) {{ git reset --hard }}",
+                    # A background job's location never reaches the parent.
+                    f"& {{ cd {main} }} & git reset --hard"):
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                cmd, safe, self.repo, ps=True), cmd)
+
+    def test_powershell_repeated_block_is_checked_from_where_it_moved(self):
+        # Review of #210: a loop body runs again from where it moved to.
+        main = self.repo_path.replace(os.sep, "/")
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            "foreach ($x in 1,2) { cd sub; git reset --hard }", safe,
+            self.repo, ps=True))
+        events = list(coordination._shell_events(
+            f"foreach ($x in 1,2) {{ cd {main}; git status }}", safe, ps=True))
+        self.assertNotIn("opaque", [e[0] for e in events])
+        self.assertIn(main, [e[2] for e in events if e[0] == "git"])
+
+    def test_powershell_backtick_escaped_brace_is_not_a_block(self):
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            "Write-Output `{ Remove-Item seed.txt", self.repo_path, self.repo,
+            ps=True))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            "Write-Output ``{ Remove-Item seed.txt }", self.repo_path,
+            self.repo, ps=True))
     def test_bash_pipe_ampersand_stage_is_checked(self):
         # #208: the stage after `|&` must not start with `&`.
         for cmd in ("git status |& git reset --hard",
@@ -1412,6 +1522,17 @@ class TestPreToolUseAdapter(TempRepoCase):
                 })
                 self.assertIn("claimed by session s2", out)
 
+    def test_powershell_script_block_writes_reach_claim_layer(self):
+        # #210: the claim layer shares the same parser.
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        rc, out = self.decide({
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "if ($true) { Remove-Item src/code.cs }"},
+            "cwd": self.repo_path, "session_id": "s1",
+        })
+        self.assertIn("claimed by session s2", out)
     def test_bash_grouped_and_pipe_ampersand_writes_reach_claim_layer(self):
         # #208, #209: the claim layer shares the same parser.
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
