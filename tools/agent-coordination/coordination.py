@@ -1169,13 +1169,24 @@ def _location_change(word, args, ps, cmd):
     `-StackName` or an unknown parameter) reports modeled=False so the
     caller fails closed rather than guessing the new directory (#183)."""
     if ps:
-        allowed = {"-path", "-literalpath", "-passthru"} | _PS_VALUE_PARAMS
-        if any(a.startswith("-") and a.lower().partition(":")[0]
-               not in allowed for a in args):
-            return None, False
-        flagged, positional = _ps_operands([word] + args)
-        paths = [v for _, v in flagged] + positional
-        if any(re.search(r"::|[$*?\[\]`(]", p) for p in paths):
+        paths, passthru = [], False
+        operands = iter(args)
+        for arg in operands:
+            if arg.lower() == "-passthru":
+                if passthru:
+                    return None, False
+                passthru = True
+                continue
+            param, colon, value = arg.partition(":")
+            if param.lower() in ("-path", "-literalpath"):
+                if paths:
+                    return None, False
+                arg = value if colon else next(operands, "")
+            if not arg or arg.startswith("-"):
+                return None, False
+            paths.append(arg)
+        if any(p.startswith("@") or re.search(r"::|[$*?\[\]`(]", p)
+               for p in paths):
             # Provider paths, variables and wildcards resolve in PowerShell,
             # not here; only a plain path is modeled.
             return None, False
@@ -1431,7 +1442,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             continue
         if ps and len(stages) > 1 and any(
                 (_argv_of(st, ps=True)[:1] or [""])[0].lower()
-                in _PS_CD_WORDS for st in stages):
+                .rpartition("\\")[2] in _PS_CD_WORDS for st in stages):
             # PowerShell location cmdlets take piped paths and, unlike a
             # Bash subshell, move the session: the new directory is unknown.
             yield ("opaque", effective_cwd, _UNMODELED_LOCATION)

@@ -479,7 +479,7 @@ class TestMainRule(TempRepoCase):
                     None, **kw))
         # Forms the parser does not model fail closed (#183 review): pushd -n
         # keeps the cwd, -StackName selects another stack, cd - returns to
-        # OLDPWD. A value-taking common parameter does not hide -Path.
+        # OLDPWD. Common parameters are deliberately unmodeled here.
         for command, kw in (
                 (f"pushd -n {safe} && git reset --hard", {}),
                 (f"pushd {safe} && pushd +1 && git reset --hard", {}),
@@ -534,6 +534,68 @@ class TestMainRule(TempRepoCase):
             with self.subTest(command=command):
                 self.assertIsNone(coordination.deny_reason_for_shell(
                     command, safe, None, **kw))
+
+    def test_powershell_location_parameters_require_complete_binding(self):
+        safe = os.path.join(self.base, "safe directory").replace(os.sep, "/")
+        os.makedirs(safe)
+        with mock.patch.dict(os.environ, {"HOME": safe, "USERPROFILE": safe}):
+            for location in (
+                    "Set-Location -Encoding utf8",
+                    "Set-Location -Path",
+                    "Set-Location -Path:",
+                    "Set-Location -Path -PassThru",
+                    f"Set-Location '{safe}' -Path '{safe}'",
+                    f"Set-Location -Path '{safe}' -LiteralPath '{safe}'",
+                    f"Set-Location '{safe}' '{safe}'",
+                    f"Set-Location '{safe}' -PassThru -PassThru",
+                    f"Set-Location '{safe}' -PassThru:$true",
+                    f"Pop-Location -Path:'{safe}'",
+                    f"Push-Location '{safe}' -StackName other",
+                    "Set-Location @paths"):
+                command = location + "; git reset --hard"
+                with self.subTest(command=command):
+                    self.assertIsNotNone(coordination.deny_reason_for_shell(
+                        command, self.repo_path, self.repo, ps=True))
+                    self.assertIn(
+                        ("opaque", self.repo_path,
+                         coordination._UNMODELED_LOCATION),
+                        list(coordination._shell_events(
+                            command, self.repo_path, ps=True)))
+            for location in (
+                    f"Set-Location '{safe}'",
+                    f"Set-Location -Path:'{safe}' -PassThru",
+                    f"Set-Location -PassThru -LiteralPath '{safe}'",
+                    f"Push-Location -LiteralPath:'{safe}' -PassThru",
+                    "Set-Location -PassThru",
+                    "cd",
+                    f"Set-Location '{safe}'; Push-Location -PassThru; "
+                    "Pop-Location -PassThru"):
+                command = location + "; git reset --hard"
+                with self.subTest(command=command):
+                    self.assertIsNone(coordination.deny_reason_for_shell(
+                        command, self.repo_path, self.repo, ps=True))
+
+    def test_module_qualified_location_in_any_pipeline_stage_is_denied(self):
+        main = self.repo_path.replace(os.sep, "/")
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe)
+        for name in ("Set-Location", "Push-Location", "POP-LOCATION"):
+            qualified = "Microsoft.PowerShell.Management\\" + name
+            for pipeline in (
+                    f"{qualified} | Write-Output",
+                    f"'{main}' | {qualified}",
+                    f"'{main}' | {qualified} | Write-Output"):
+                command = pipeline + "; git reset --hard"
+                with self.subTest(command=command):
+                    # No repo hint: an opaque location can enter any repo.
+                    self.assertIsNotNone(coordination.deny_reason_for_shell(
+                        command, safe, None, ps=True))
+                    self.assertIn(
+                        ("opaque", safe, coordination._UNMODELED_LOCATION),
+                        list(coordination._shell_events(command, safe, ps=True)))
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            "Write-Output 'Microsoft.PowerShell.Management\\Set-Location' "
+            "| Write-Output; git reset --hard", safe, None, ps=True))
 
     def test_cd_inside_pipeline_does_not_move_later_segments(self):
         safe = os.path.join(self.base, "safe").replace(os.sep, "/")
