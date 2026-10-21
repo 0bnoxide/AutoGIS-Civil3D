@@ -602,23 +602,41 @@ class TestMainRule(TempRepoCase):
             "Write-Output 'Microsoft.PowerShell.Management\\Set-Location' "
             "| Write-Output; git reset --hard", safe, None, ps=True))
 
-    def test_quoted_location_names_are_pipeline_data(self):
+    def test_quoted_location_names_are_data(self):
         safe = os.path.join(self.base, "safe").replace(os.sep, "/")
         os.makedirs(safe)
         for name in ("cd", "Set-Location",
                      "Microsoft.PowerShell.Management\\Set-Location"):
             for quote in ("'", '"'):
-                for prefix in ("", "$label = ", "$label="):
-                    pipeline = f"{prefix}{quote}{name}{quote} | Write-Output"
-                    with self.subTest(pipeline=pipeline):
+                for template in ("{}", "$label = {}", "$label={}",
+                                 "{} | Write-Output", "$label = {} | Write-Output",
+                                 "$label={} | Write-Output", "& {{ {} }}"):
+                    command = template.format(f"{quote}{name}{quote}")
+                    with self.subTest(command=command), mock.patch.dict(
+                            os.environ, {"HOME": safe, "USERPROFILE": safe}):
                         self.assertIsNone(coordination.deny_reason_for_shell(
-                            pipeline, self.repo_path, self.repo, ps=True))
+                            command, self.repo_path, self.repo, ps=True))
                         self.assertIsNone(coordination.deny_reason_for_shell(
-                            pipeline + "; git reset --hard", safe, None,
+                            command + "; git reset --hard", safe, None,
                             ps=True))
                         self.assertIsNotNone(coordination.deny_reason_for_shell(
-                            pipeline + "; git reset --hard", self.repo_path,
+                            command + "; git reset --hard", self.repo_path,
                             self.repo, ps=True))
+
+    def test_assigned_literal_location_calls_move_the_session(self):
+        main = self.repo_path.replace(os.sep, "/")
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe)
+        for operator in ("&", "."):
+            for prefix in ("", "$label = ", "$label="):
+                call = f"{prefix}{operator} 'Set-Location'"
+                with self.subTest(call=call):
+                    self.assertIsNotNone(coordination.deny_reason_for_shell(
+                        f"{call} '{main}'; git reset --hard", safe, None,
+                        ps=True))
+                    self.assertIsNone(coordination.deny_reason_for_shell(
+                        f"{call} '{safe}'; git reset --hard", self.repo_path,
+                        self.repo, ps=True))
 
     def test_cd_inside_pipeline_does_not_move_later_segments(self):
         safe = os.path.join(self.base, "safe").replace(os.sep, "/")

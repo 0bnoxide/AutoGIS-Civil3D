@@ -774,14 +774,16 @@ def _strip_ps_call_block(argv):
     return stripped
 
 
-def _ps_command_word(stage):
+def _ps_location_argv(stage):
     assignment = re.match(_PS_ASSIGN, stage)
     stage = stage[assignment.end():].lstrip() if assignment else stage.lstrip()
     # A quoted expression is pipeline data; &/. explicitly invokes its value.
     if not stage or stage[0] in _PS_SQ + _PS_DQ:
-        return ""
-    argv = _strip_ps_call_block(_argv_of(stage, ps=True))
-    return argv[0].lower() if argv else ""
+        return []
+    argv = _argv_of(stage, ps=True)
+    while argv[:1] in (["&"], ["."]):
+        argv = argv[1:]
+    return argv  # Block bodies are checked recursively, never flattened here.
 
 
 def _ps_block_spans(masked):
@@ -1423,7 +1425,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         stages = _pipeline_stages(segment, seg_masked, bash=bash)
         # `cd` is read before group peeling, as before #209, so peeling
         # never turns `(cd x` or a piped `{ cd x` into a parent-shell `cd`.
-        first = _argv_of(stages[0], ps=ps, cmd=cmd)
+        ps_stages = [_ps_location_argv(st) for st in stages] if ps else []
+        first = ps_stages[0] if ps else _argv_of(stages[0], cmd=cmd)
         # `command pushd x` / `builtin cd x` still run in this shell; other
         # wrappers (env, sudo, xargs) start a process that cannot move it.
         # `command -v pushd` only describes pushd, so `-v`/`-V` stop the
@@ -1441,22 +1444,17 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             if any(set(o) & set("vV") for o in first[1:n]):
                 break
             first = first[n + (first[n:n + 1] == ["--"]):]
-        # `& Set-Location x` / `. Set-Location x` run the cmdlet here.
-        while ps and first[:1] in (["&"], ["."]):
-            first = first[1:]
         if cmd and first and first[0].startswith("@"):
             first = [first[0][1:]] + first[1:]  # `@cd x` only hides the echo
         word = first[0].lower() if first and (ps or cmd) \
             else first[0] if first else ""
-        ps_words = [_ps_command_word(st) for st in stages] if ps else []
-        if ps and ps_words[0].rpartition("\\")[2] in _PS_CD_WORDS \
-                and "\\" in ps_words[0]:
+        if ps and word.rpartition("\\")[2] in _PS_CD_WORDS and "\\" in word:
             # `Microsoft.PowerShell.Management\Set-Location x` is the cmdlet.
             yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
             continue
         if ps and len(stages) > 1 and any(
-                name.rpartition("\\")[2] in _PS_CD_WORDS | _CD_WORDS
-                for name in ps_words):
+                (argv[:1] or [""])[0].lower().rpartition("\\")[2]
+                in _PS_CD_WORDS | _CD_WORDS for argv in ps_stages):
             # PowerShell location cmdlets take piped paths and, unlike a
             # Bash subshell, move the session: the new directory is unknown.
             yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
