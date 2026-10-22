@@ -375,7 +375,8 @@ class TestMainRule(TempRepoCase):
                                           "USERPROFILE": self.base}):
             for command in ('cd ~"/safe"; git reset --hard',
                             "cd \\~/safe; git reset --hard",
-                            "cd '~/safe'; git reset --hard"):
+                            "cd '~/safe'; git reset --hard",
+                            'cd "~/safe" > ~/log; git reset --hard'):
                 with self.subTest(command=command):
                     self.assertIsNotNone(coordination.deny_reason_for_shell(
                         command, self.repo_path, self.repo))
@@ -384,8 +385,35 @@ class TestMainRule(TempRepoCase):
                                           "USERPROFILE": self.base}):
             self.assertIsNone(coordination.deny_reason_for_shell(
                 "cd ~/safe; git reset --hard", self.repo_path, self.repo))
+            os.makedirs(os.path.join(self.base, "safe folder"))
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                'cd ~/"safe folder"; git reset --hard', self.repo_path,
+                self.repo))
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 "cd ~/repo; git reset --hard", safe, None))
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink and Bash -L semantics")
+    def test_location_dotdot_is_lexical(self):
+        main = self.repo_path
+        safe = os.path.join(self.base, "safe")
+        os.makedirs(safe)
+        # `..` is lexical unless Bash's -P asks for the physical path.
+        os.symlink(safe, os.path.join(main, "link"))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"cd {main}/link/..; git reset --hard", safe, None))
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            f"cd -P {main}/link/..; git reset --hard", main, self.repo))
+        # A lexical target that exists is certain whatever the link names;
+        # one that does not may fall back to the physical path or fail.
+        os.makedirs(os.path.join(self.base, "elsewhere", "inner"))
+        os.symlink(os.path.join(self.base, "elsewhere", "inner"),
+                   os.path.join(safe, "deep"))
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            f"cd {safe}/deep/../deep; git reset --hard", main, self.repo))
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            f"cd {safe}/deep/../inner; git reset --hard", safe, None))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"cd {safe}/deep/../inner; git reset --hard", main, self.repo))
 
     def test_failed_location_change_keeps_old_directory(self):
         # #230: a change into a directory that does not exist now may fail
@@ -414,12 +442,6 @@ class TestMainRule(TempRepoCase):
             with self.subTest(command=command):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     command, main, self.repo, **kw))
-        # `..` is lexical unless Bash's -P asks for the physical path.
-        os.symlink(safe, os.path.join(main, "link"))
-        self.assertIsNotNone(coordination.deny_reason_for_shell(
-            f"cd {main}/link/..; git reset --hard", safe, None))
-        self.assertIsNone(coordination.deny_reason_for_shell(
-            f"cd -P {main}/link/..; git reset --hard", main, self.repo))
         # cmd's cd without /d does not switch drives.
         def cwds(command):
             return {e[1] for e in coordination._shell_events(

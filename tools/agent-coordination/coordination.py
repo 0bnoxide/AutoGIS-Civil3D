@@ -1249,12 +1249,33 @@ _UNRESOLVED_LOCATION = ("a location operand the parser cannot resolve "
                         "unknown")
 # Characters that make a location operand depend on expansion the shell does
 # at run time, from an environment the hook does not see (#230). Only a
-# plain literal path (plus a leading unquoted `~`) is modeled.
+# plain literal path (plus a leading unquoted `~` or `~/`) is modeled; a
+# `~` left at the start (`~user`, quoted) is not. Elsewhere `~` is literal
+# (Windows short names such as `RUNNER~1`).
 _UNRESOLVED_OPERAND_RE = {
-    "bash": re.compile(r"[$`*?\[\]{}~]"),
-    "ps": re.compile(r"[$`*?\[\]~]"),
+    "bash": re.compile(r"[$`*?\[\]{}]|^~"),
+    "ps": re.compile(r"[$`*?\[\]]|^~"),
     "cmd": re.compile(r"[%!*?]"),
 }
+
+
+_RAW_WORD_RE = re.compile(
+    r"""(?:[^\s"'\\;&|<>()]|\\.|"(?:\\.|[^"\\])*"|'[^']*')+""")
+
+
+def _bash_tilde_unquoted(segment, path):
+    """True when the raw word that lexes to `path` starts with an unquoted
+    `~/` or is a bare `~`: Bash expands a tilde prefix only when none of its
+    characters is quoted (`~/"a b"` expands, `"~/x"` and `~"/x"` do not)."""
+    for m in _RAW_WORD_RE.finditer(segment):
+        word = m.group(0)
+        try:
+            lexed = shlex.split(word)
+        except ValueError:
+            continue
+        if lexed == [path]:
+            return word == "~" or word[:2] == "~/"
+    return False
 
 
 def _enterable(path):
@@ -1526,12 +1547,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             elif path:
                 if ps or cmd:
                     path = path.replace("\\", "/")
-                # Bash expands a tilde only in an unquoted, unescaped word:
-                # the operand must appear in the segment as lexed.
-                if path[:1] == "~" and (ps or bash and (
-                        not set(args) - {"-L", "-P", "--"} or re.search(
-                            r"(?<!\S)" + re.escape(path) + r"(?![^\s;&|<>)])",
-                            segment))):
+                if (path == "~" or path[:2] == "~/") and (ps or bash and (
+                        not set(args) - {"-L", "-P", "--"}
+                        or _bash_tilde_unquoted(segment, path))):
                     path = os.path.expanduser(path)
                 # An assignment prefix can set HOME or CDPATH for the change
                 # itself, so it is unresolved too.
@@ -1547,11 +1565,16 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                     joined = path if os.path.isabs(path) \
                         else os.path.join(base or ".", path)
                     # `..` is taken lexically (Bash -L, PowerShell, cmd).
+                    # Bash -L may fall back to the physical path when the
+                    # lexical one cannot be entered; that stays uncertain.
                     target = os.path.realpath(joined) if physical \
                         else os.path.normpath(joined).replace(os.sep, "/") \
                         if ps or cmd else os.path.normpath(joined)
+                    if bash and not physical and not _enterable(target) \
+                            and _enterable(joined):
+                        reached.append(os.path.realpath(joined))
                     reached.append(target)
-                    if not (_enterable(target) and _enterable(joined)) or (
+                    if not _enterable(target) or (
                             cmd and word != "pushd" and "/d" not in
                             [a.lower() for a in args] and
                             ntpath.splitdrive(target)[0].lower() !=
