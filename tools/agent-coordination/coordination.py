@@ -1264,18 +1264,23 @@ _RAW_WORD_RE = re.compile(
 
 
 def _bash_tilde_unquoted(segment, path):
-    """True when the raw word that lexes to `path` starts with an unquoted
+    """True when every raw word that lexes to `path` starts with an unquoted
     `~/` or is a bare `~`: Bash expands a tilde prefix only when none of its
-    characters is quoted (`~/"a b"` expands, `"~/x"` and `~"/x"` do not)."""
+    characters is quoted (`~/"a b"` expands, `"~/x"` and `~"/x"` do not).
+    Any quoted spelling of the same text (a redirect target, say) makes the
+    operand's own spelling unknown, so it is not expanded."""
+    found = False
     for m in _RAW_WORD_RE.finditer(segment):
         word = m.group(0)
         try:
             lexed = shlex.split(word)
         except ValueError:
-            continue
+            return False
         if lexed == [path]:
-            return word == "~" or word[:2] == "~/"
-    return False
+            if not (word == "~" or word[:2] == "~/"):
+                return False
+            found = True
+    return found
 
 
 def _enterable(path):

@@ -376,7 +376,8 @@ class TestMainRule(TempRepoCase):
             for command in ('cd ~"/safe"; git reset --hard',
                             "cd \\~/safe; git reset --hard",
                             "cd '~/safe'; git reset --hard",
-                            'cd "~/safe" > ~/log; git reset --hard'):
+                            'cd "~/safe" > ~/log; git reset --hard',
+                            'cd < ~/safe "~/safe"; git reset --hard'):
                 with self.subTest(command=command):
                     self.assertIsNotNone(coordination.deny_reason_for_shell(
                         command, self.repo_path, self.repo))
@@ -445,10 +446,10 @@ class TestMainRule(TempRepoCase):
         # cmd's cd without /d does not switch drives.
         def cwds(command):
             return {e[1] for e in coordination._shell_events(
-                command, "C:/main", cmd=True, _report_cwd=True)
+                command, "Z:/main", cmd=True, _report_cwd=True)
                 if e[0] == "cwd"}
-        self.assertIn("C:/main", cwds(f"cd {safe} & dir"))
-        self.assertNotIn("C:/main", cwds(f"cd /d {safe} & dir"))
+        self.assertIn("Z:/main", cwds(f"cd {safe} & dir"))
+        self.assertNotIn("Z:/main", cwds(f"cd /d {safe} & dir"))
         # A push that may fail leaves no known entry for a later pop.
         self.assertIsNotNone(coordination.deny_reason_for_shell(
             f"pushd {missing}; cd {main}; popd; git reset --hard", safe, None))
