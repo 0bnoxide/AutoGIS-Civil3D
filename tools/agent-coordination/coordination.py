@@ -30,6 +30,7 @@ import fnmatch
 import glob
 import hashlib
 import json
+import ntpath
 import os
 import re
 import shlex
@@ -1242,6 +1243,24 @@ def _drop_redirects(args):
 
 _UNMODELED_LOCATION = ("a location change the parser does not model; command "
                        "is denied because the working directory is unknown")
+_UNRESOLVED_LOCATION = ("a location operand the parser cannot resolve "
+                        "(variable, substitution, wildcard or quoted tilde); "
+                        "command is denied because the working directory is "
+                        "unknown")
+# Characters that make a location operand depend on expansion the shell does
+# at run time, from an environment the hook does not see (#230). Only a
+# plain literal path (plus a leading unquoted `~`) is modeled.
+_UNRESOLVED_OPERAND_RE = {
+    "bash": re.compile(r"[$`*?\[\]{}~]"),
+    "ps": re.compile(r"[$`*?\[\]~]"),
+    "cmd": re.compile(r"[%!*?]"),
+}
+
+
+def _enterable(path):
+    """True when a change into `path` would succeed now: an existing,
+    searchable directory. Anything else may fail at run time (#230)."""
+    return os.path.isdir(path) and os.access(path, os.X_OK)
 
 
 # Re-checks of a block body from the locations it moves to; a body still
@@ -1341,7 +1360,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             command, masked_all, cmd=cmd, ps=ps):
         for _ in range(min(closing, len(scopes))):
             # The previous segment closed a Bash subshell: its cd is undone.
-            effective_cwd, stack, parent_cwd, parent_stack = scopes.pop()
+            (effective_cwd, stack, alt, parent_cwd, parent_stack,
+             parent_alt) = scopes.pop()
         closing = 0
         check = seg_masked
         if bash:
@@ -1349,8 +1369,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             lead = re.match(r"[\s(]*", seg_masked).group(0)
             check = " " * len(lead) + seg_masked[len(lead):]
             for _ in range(lead.count("(")):
-                scopes.append((effective_cwd, list(stack), parent_cwd,
-                               list(parent_stack)))
+                scopes.append((effective_cwd, list(stack), list(alt),
+                               parent_cwd, list(parent_stack),
+                               list(parent_alt)))
             closers, depth = [], 0
             for i, ch in enumerate(seg_masked):
                 if i < len(lead):
@@ -1433,8 +1454,10 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         # wrappers (env, sudo, xargs) start a process that cannot move it.
         # `command -v pushd` only describes pushd, so `-v`/`-V` stop the
         # peel; the stage is then an ordinary command.
+        assigns = False
         while bash and first and re.fullmatch(r"[A-Za-z_]\w*\+?=.*", first[0]):
             first = first[1:]  # `X=1 pushd x` still runs pushd in this shell
+            assigns = True
         while not (ps or cmd) and first[:1] in (["command"], ["builtin"]):
             if first[0] == "builtin" and first[1:2] != ["--"] \
                     and first[1:2] and first[1].startswith("-"):
@@ -1481,14 +1504,18 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 yield from _target_events(_redirect_targets(
                     segment, seg_masked, bash=bash, cmd=cmd), base, ps,
                     cmd=cmd)
-            path, modeled = _location_change(
-                word, _drop_redirects(first[1:]), ps, cmd)
-            if not modeled or alt and not path and word not in _PUSHD_WORDS:
-                # A stack pop after a script block moved the location: the
-                # block's own pushes are not on this stack.
+            args = _drop_redirects(first[1:])
+            path, modeled = _location_change(word, args, ps, cmd)
+            if not modeled or alt and not path and (
+                    word not in _PUSHD_WORDS or not ps):
+                # A stack pop or Bash swap after the location became one of
+                # several: the stack the shell holds is not known.
                 yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
                 continue
             if word in _POPD_WORDS:
+                if stack and stack[-1] is None:
+                    yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
+                    continue
                 if stack:
                     effective_cwd = stack.pop()
                 elif _report_cwd:
@@ -1499,17 +1526,53 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             elif path:
                 if ps or cmd:
                     path = path.replace("\\", "/")
-                # The shell expands ~ and set variables before the change;
-                # an unset `$VAR` stays unresolved, as it always has (#56).
-                path = os.path.expandvars(os.path.expanduser(path))
+                # Bash expands a tilde only in an unquoted, unescaped word:
+                # the operand must appear in the segment as lexed.
+                if path[:1] == "~" and (ps or bash and (
+                        not set(args) - {"-L", "-P", "--"} or re.search(
+                            r"(?<!\S)" + re.escape(path) + r"(?![^\s;&|<>)])",
+                            segment))):
+                    path = os.path.expanduser(path)
+                # An assignment prefix can set HOME or CDPATH for the change
+                # itself, so it is unresolved too.
+                if assigns or _UNRESOLVED_OPERAND_RE[
+                        "ps" if ps else "cmd" if cmd else "bash"].search(path):
+                    yield ("opaque", effective_cwd, _UNRESOLVED_LOCATION)
+                    continue
+                before, certain = effective_cwd, not alt
+                reached = []
+                physical = bash and [a for a in args
+                                     if a in ("-L", "-P")][-1:] == ["-P"]
+                for base in cwds():
+                    joined = path if os.path.isabs(path) \
+                        else os.path.join(base or ".", path)
+                    # `..` is taken lexically (Bash -L, PowerShell, cmd).
+                    target = os.path.realpath(joined) if physical \
+                        else os.path.normpath(joined).replace(os.sep, "/") \
+                        if ps or cmd else os.path.normpath(joined)
+                    reached.append(target)
+                    if not (_enterable(target) and _enterable(joined)) or (
+                            cmd and word != "pushd" and "/d" not in
+                            [a.lower() for a in args] and
+                            ntpath.splitdrive(target)[0].lower() !=
+                            ntpath.splitdrive(base or "")[0].lower()):
+                        # The change can fail and leave the shell where it
+                        # was, so later statements are checked there too;
+                        # cmd's cd without /d sets another drive's directory
+                        # without switching to it.
+                        reached.append(base)
+                reached = list(dict.fromkeys(reached))
+                effective_cwd, alt = reached[0], reached[1:]
                 if word in _PUSHD_WORDS:
-                    stack.append(effective_cwd)
-                alt = [path if os.path.isabs(path)
-                       else os.path.join(c or ".", path) for c in alt]
-                effective_cwd = path if os.path.isabs(path) \
-                    else os.path.join(effective_cwd or ".", path)
+                    # An entry pushed while the location was one of several,
+                    # or by a push that may fail, is not known (None).
+                    stack.append(before if certain and not alt else None)
             elif word in _PUSHD_WORDS and ps:
-                stack.append(effective_cwd)  # bare Push-Location: no move
+                # Bare Push-Location: no move.
+                stack.append(None if alt else effective_cwd)
+            elif word in _PUSHD_WORDS and stack and stack[-1] is None:
+                yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
+                continue
             elif word in _PUSHD_WORDS and stack and not alt:
                 # Bare Bash pushd swaps the top two directories.
                 effective_cwd, stack[-1] = stack[-1], effective_cwd

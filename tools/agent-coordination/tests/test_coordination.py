@@ -347,12 +347,104 @@ class TestMainRule(TempRepoCase):
             self.assertIsNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo), cmd)
 
-    def test_cd_into_unexpanded_var_skips_relative_targets(self):
-        # #56: `cd "$D"` sets an unresolvable effective cwd; a later plain
-        # relative target (no `$` of its own) must not be measured as a bogus
-        # repo-relative path and false-denied as out of file scope.
-        self.assertEqual(coordination.shell_write_targets(
-            'cd "$D"\nprintf x > Bad.cs', self.repo_path), [])
+    def test_unresolved_location_operand_denied(self):
+        # #230 (supersedes #56's skip): a location operand that needs run-time
+        # expansion leaves the working directory unknown, so the command is
+        # denied, even outside a repository.
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe)
+        for command, kw in (
+                ('cd "$D"\nprintf x > Bad.cs', {}),
+                ("cd $(git rev-parse --show-toplevel) && git reset --hard", {}),
+                ("cd `pwd`; git reset --hard", {}),
+                ("cd s*; git reset --hard", {}),
+                ("cd {safe,x}; git reset --hard", {}),
+                ('cd "~"; git reset --hard', {}),
+                ("cd ~nosuchuser230; git reset --hard", {}),
+                ("pushd $HOME; git reset --hard", {}),
+                (f"HOME={safe} cd; git reset --hard", {}),
+                ("Set-Location $env:REPO; git reset --hard", {"ps": True}),
+                ("Set-Location s*; git reset --hard", {"ps": True}),
+                ("cd %REPO% & git reset --hard", {"cmd": True}),
+                ("cd !REPO! & git reset --hard", {"cmd": True})):
+            for cwd, repo in ((self.repo_path, self.repo), (safe, None)):
+                with self.subTest(command=command, cwd=cwd):
+                    self.assertIsNotNone(coordination.deny_reason_for_shell(
+                        command, cwd, repo, **kw))
+        with mock.patch.dict(os.environ, {"HOME": self.base,
+                                          "USERPROFILE": self.base}):
+            for command in ('cd ~"/safe"; git reset --hard',
+                            "cd \\~/safe; git reset --hard",
+                            "cd '~/safe'; git reset --hard"):
+                with self.subTest(command=command):
+                    self.assertIsNotNone(coordination.deny_reason_for_shell(
+                        command, self.repo_path, self.repo))
+        # A leading unquoted tilde is still resolved.
+        with mock.patch.dict(os.environ, {"HOME": self.base,
+                                          "USERPROFILE": self.base}):
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                "cd ~/safe; git reset --hard", self.repo_path, self.repo))
+            self.assertIsNotNone(coordination.deny_reason_for_shell(
+                "cd ~/repo; git reset --hard", safe, None))
+
+    def test_failed_location_change_keeps_old_directory(self):
+        # #230: a change into a directory that does not exist now may fail
+        # and leave the shell where it was, so later statements are checked
+        # in both places.
+        main = self.repo_path.replace(os.sep, "/")
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe)
+        missing = os.path.join(self.base, "missing").replace(os.sep, "/")
+        for command, kw in (
+                (f"cd {missing}; git reset --hard", {}),
+                (f"cd {missing}\ngit reset --hard", {}),
+                (f"cd {missing} || git reset --hard", {}),
+                (f"pushd {missing}; git reset --hard", {}),
+                ("cd seed.txt; git reset --hard", {}),
+                (f"cd {missing}; cd sub; git reset --hard", {}),
+                (f"cd {missing}; (cd {safe}); git reset --hard", {}),
+                (f"cd {missing}; pushd {safe}; pushd; git reset --hard", {}),
+                (f"cd {missing}; pushd {safe}; popd; git reset --hard", {}),
+                (f"Set-Location {missing}; Push-Location {safe}; Pop-Location;"
+                 " git reset --hard", {"ps": True}),
+                (f"Set-Location {missing}; git reset --hard", {"ps": True}),
+                (f"Push-Location {missing}; git reset --hard", {"ps": True}),
+                (f"cd {missing} & git reset --hard", {"cmd": True}),
+                ("cd ~ & git reset --hard", {"cmd": True})):
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, main, self.repo, **kw))
+        # `..` is lexical unless Bash's -P asks for the physical path.
+        os.symlink(safe, os.path.join(main, "link"))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"cd {main}/link/..; git reset --hard", safe, None))
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            f"cd -P {main}/link/..; git reset --hard", main, self.repo))
+        # cmd's cd without /d does not switch drives.
+        def cwds(command):
+            return {e[1] for e in coordination._shell_events(
+                command, "C:/main", cmd=True, _report_cwd=True)
+                if e[0] == "cwd"}
+        self.assertIn("C:/main", cwds(f"cd {safe} & dir"))
+        self.assertNotIn("C:/main", cwds(f"cd /d {safe} & dir"))
+        # A push that may fail leaves no known entry for a later pop.
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"pushd {missing}; cd {main}; popd; git reset --hard", safe, None))
+        # Every place the shell can be is safe: allowed.
+        for command, kw in (
+                (f"cd {missing}; git reset --hard", {}),
+                ("mkdir new && cd new && git reset --hard", {}),
+                (f"Set-Location {missing}; git reset --hard", {"ps": True})):
+            with self.subTest(command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, safe, None, **kw))
+        # An existing target is certain; a later absolute change collapses
+        # the candidates.
+        for command in (f"cd {safe}\ngit reset --hard",
+                        f"cd {missing}; cd {safe}; git reset --hard"):
+            with self.subTest(command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, main, self.repo))
 
     def test_quoted_literal_redirect_still_denied(self):
         for cmd in ('echo x > "seed.txt"', "echo x > 'seed.txt'"):
