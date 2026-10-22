@@ -416,6 +416,234 @@ class TestMainRule(TempRepoCase):
             f"cd {other} && git reset --hard", self.base, None)
         self.assertIsNotNone(reason)
 
+    def test_directory_stack_commands_move_the_shell(self):
+        # #183: pushd/popd and PowerShell's location cmdlets move the shell
+        # like cd; popd returns to where pushd left.
+        main = self.repo_path.replace(os.sep, "/")
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe, exist_ok=True)
+        denied = (
+            (f"pushd {main} && git reset --hard", {}),
+            (f"pushd {main} & git reset --hard", {"cmd": True}),
+            (f"pushd /d {main} & git reset --hard", {"cmd": True}),
+            (f"Push-Location {main}; git reset --hard", {"ps": True}),
+            (f"Set-Location -Path {main}; Remove-Item seed.txt", {"ps": True}),
+            (f"sl {main}; git reset --hard", {"ps": True}),
+            (f"CD {main}; git reset --hard", {"ps": True}),
+            (f"pushd {safe} && popd && git reset --hard", {}),
+            (f"pushd {safe} && pushd {main} && pushd && pushd && "
+             "git reset --hard", {}),
+            (f"pushd {safe}; pushd /tmp; dirs -c; cd {main}; popd; "
+             "git reset --hard", {}),
+            ("command -v pushd /tmp; git reset --hard", {}),
+            (f"if cd {main}; then git reset --hard; fi", {}),
+            (f"{{ cd {main}; }}; git reset --hard", {}),
+            (f"echo $(cd {main}; git reset --hard)", {}),
+            (f"case x in x) cd {main};; esac; git reset --hard", {}),
+            (f"cd {safe} {main}; git reset --hard", {}),
+            (f"& {{ Set-Location {main} }}; git reset --hard", {"ps": True}),
+            (f"if ($true) {{ cd {main} }}; git reset --hard", {"ps": True}),
+            (f"if exist x cd {main} & git reset --hard", {"cmd": True}),
+            (f"command -p -- pushd {main} && git reset --hard", {}),
+            (f"command -p pushd {main} && git reset --hard", {}),
+            (f"X=1 pushd {main}; git reset --hard", {}),
+            ("builtin -p pushd /tmp; git reset --hard", {}),
+            ("dirs -c > seed.txt", {}),
+            (f"& Set-Location {main}; git reset --hard", {"ps": True}),
+            (f". Set-Location {main}; git reset --hard", {"ps": True}),
+            (f"eval 'cd {main}'; git reset --hard", {}),
+            (f"iex 'cd {main}'; git reset --hard", {"ps": True}),
+            (f"Set-Alias c Set-Location; c {main}; git reset --hard",
+             {"ps": True}),
+            (f"$ExecutionContext.SessionState.Path.SetLocation('{main}'); "
+             "git reset --hard", {"ps": True}),
+            (f"cd {main}; cd {safe}; cd ~-; git reset --hard", {}),
+            (f"@cd {main} & git reset --hard", {"cmd": True}),
+            (f"(cd {main}) & git reset --hard", {"cmd": True}),
+            (f"pushd {safe}; cd /tmp; pushd >/dev/null; git reset --hard", {}),
+            (f"cd {safe} > /dev/null 2>&1; pushd {main} 2>$null; "
+             "git reset --hard", {"ps": True}),
+            (f"cd {safe} >nul & cd {main} 2>nul & git reset --hard",
+             {"cmd": True}),
+            ("cd /tmp > seed.txt", {}),
+            (f"Microsoft.PowerShell.Management\\Set-Location {main}; "
+             "git reset --hard", {"ps": True}),
+            (f"Set-Location FileSystem::{main}; git reset --hard",
+             {"ps": True}),
+            (f"Set-Location {main[:-1]}*; git reset --hard", {"ps": True}),
+        )
+        for command, kw in denied:
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, safe if main in command else self.repo_path,
+                    None, **kw))
+        # Forms the parser does not model fail closed (#183 review): pushd -n
+        # keeps the cwd, -StackName selects another stack, cd - returns to
+        # OLDPWD. Common parameters are deliberately unmodeled here.
+        for command, kw in (
+                (f"pushd -n {safe} && git reset --hard", {}),
+                (f"pushd {safe} && pushd +1 && git reset --hard", {}),
+                (f"cd {safe} && cd - && git reset --hard", {}),
+                (f"pushd /d {safe} & git reset --hard", {"cmd": True}),
+                (f"Push-Location {safe}; if ($true) {{ Pop-Location }}; "
+                 "git reset --hard", {"ps": True}),
+                (f"if ($true) {{ Push-Location {safe} }}; Pop-Location; "
+                 "git reset --hard", {"ps": True}),
+                (f"Push-Location {safe} -StackName A; Push-Location /x "
+                 "-StackName B; Pop-Location -StackName A; git reset --hard",
+                 {"ps": True})):
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, self.repo_path, self.repo, **kw))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"Set-Location -ErrorAction Stop -Path {main}; git reset --hard",
+            safe, None, ps=True))
+        # Outside any repository an unmodeled form could still enter one, and
+        # a PowerShell location cmdlet in a pipeline takes a piped path.
+        home = os.path.dirname(main)
+        with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home,
+                                          "MAINREPO": main}):
+            for command, kw in (
+                    (f"Push-Location {main}; Push-Location; git reset --hard",
+                     {"ps": True}),
+                    (f"command pushd {main} && git reset --hard", {}),
+                    (f"builtin cd {main} && git reset --hard", {}),
+                    (f"pushd ~/{os.path.basename(main)} && git reset --hard",
+                     {}),
+                    ("pushd $MAINREPO && git reset --hard", {}),
+                    ("cd && cd " + os.path.basename(main)
+                     + " && git reset --hard", {}),
+                    ("Set-Location; Set-Location " + os.path.basename(main)
+                     + "; git reset --hard", {"ps": True})):
+                with self.subTest(command=command):
+                    self.assertIsNotNone(coordination.deny_reason_for_shell(
+                        command, safe, None, **kw))
+        for command in (
+                f"Push-Location {main} -StackName A; git reset --hard",
+                f"'{main}' | Set-Location; git reset --hard"):
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, safe, None, ps=True))
+        # A wrapper that starts a process cannot move this shell.
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"env pushd {safe}; git reset --hard", main, None))
+        for command, kw in (
+                (f"pushd {main} && popd && git reset --hard", {}),
+                (f"Push-Location {main}; Pop-Location; git reset --hard",
+                 {"ps": True})):
+            with self.subTest(command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, safe, None, **kw))
+
+    def test_powershell_location_parameters_require_complete_binding(self):
+        safe = os.path.join(self.base, "safe directory").replace(os.sep, "/")
+        os.makedirs(safe)
+        with mock.patch.dict(os.environ, {"HOME": safe, "USERPROFILE": safe}):
+            for location in (
+                    "Set-Location -Encoding utf8",
+                    "Set-Location -Path",
+                    "Set-Location -Path:",
+                    "Set-Location -Path -PassThru",
+                    f"Set-Location '{safe}' -Path '{safe}'",
+                    f"Set-Location -Path '{safe}' -LiteralPath '{safe}'",
+                    f"Set-Location '{safe}' '{safe}'",
+                    f"Set-Location '{safe}' -PassThru -PassThru",
+                    f"Set-Location '{safe}' -PassThru:$true",
+                    f"Pop-Location -Path:'{safe}'",
+                    f"Push-Location '{safe}' -StackName other",
+                    "Set-Location @paths"):
+                command = location + "; git reset --hard"
+                with self.subTest(command=command):
+                    self.assertIsNotNone(coordination.deny_reason_for_shell(
+                        command, self.repo_path, self.repo, ps=True))
+                    self.assertIn(
+                        ("opaque", self.repo_path,
+                         coordination._UNMODELED_LOCATION),
+                        list(coordination._shell_events(
+                            command, self.repo_path, ps=True)))
+            for location in (
+                    f"Set-Location '{safe}'",
+                    f"Set-Location -Path:'{safe}' -PassThru",
+                    f"Set-Location -PassThru -LiteralPath '{safe}'",
+                    f"Push-Location -LiteralPath:'{safe}' -PassThru",
+                    "Set-Location -PassThru",
+                    "cd",
+                    f"Set-Location '{safe}'; Push-Location -PassThru; "
+                    "Pop-Location -PassThru"):
+                command = location + "; git reset --hard"
+                with self.subTest(command=command):
+                    self.assertIsNone(coordination.deny_reason_for_shell(
+                        command, self.repo_path, self.repo, ps=True))
+
+    def test_location_pipeline_stage_invocations_are_denied(self):
+        main = self.repo_path.replace(os.sep, "/")
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe)
+        for name in ("Microsoft.PowerShell.Management\\Set-Location",
+                     "Microsoft.PowerShell.Management\\Push-Location",
+                     "Microsoft.PowerShell.Management\\POP-LOCATION",
+                     "Set-Location", "cd"):
+            for invocation in (name, "& " + name, ". " + name,
+                               "& '" + name + "'", '. "' + name + '"',
+                               "$label = & '" + name + "'",
+                               "&'" + name + "'", "$label=&'" + name + "'",
+                               ".'" + name + "'", "$label=.'" + name + "'"):
+                for pipeline in (
+                        f"{invocation} | Write-Output",
+                        f"'{main}' | {invocation}",
+                        f"'{main}' | {invocation} | Write-Output"):
+                    command = pipeline + "; git reset --hard"
+                    with self.subTest(command=command):
+                        # No repo hint: an opaque location can enter any repo.
+                        self.assertIsNotNone(coordination.deny_reason_for_shell(
+                            command, safe, None, ps=True))
+                        self.assertIn(
+                            ("opaque", safe, coordination._UNMODELED_LOCATION),
+                            list(coordination._shell_events(
+                                command, safe, ps=True)))
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            "Write-Output 'Microsoft.PowerShell.Management\\Set-Location' "
+            "| Write-Output; git reset --hard", safe, None, ps=True))
+
+    def test_quoted_location_names_are_data(self):
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe)
+        for name in ("cd", "Set-Location",
+                     "Microsoft.PowerShell.Management\\Set-Location"):
+            for quote in ("'", '"'):
+                for template in ("{}", "$label = {}", "$label={}",
+                                 "{} | Write-Output", "$label = {} | Write-Output",
+                                 "$label={} | Write-Output", "& {{ {} }}"):
+                    command = template.format(f"{quote}{name}{quote}")
+                    with self.subTest(command=command), mock.patch.dict(
+                            os.environ, {"HOME": safe, "USERPROFILE": safe}):
+                        self.assertIsNone(coordination.deny_reason_for_shell(
+                            command, self.repo_path, self.repo, ps=True))
+                        self.assertIsNone(coordination.deny_reason_for_shell(
+                            command + "; git reset --hard", safe, None,
+                            ps=True))
+                        self.assertIsNotNone(coordination.deny_reason_for_shell(
+                            command + "; git reset --hard", self.repo_path,
+                            self.repo, ps=True))
+
+    def test_assigned_literal_location_calls_move_the_session(self):
+        main = self.repo_path.replace(os.sep, "/")
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe)
+        for operator in ("& ", "&", ". ", "."):
+            for prefix in ("", "$label = ", "$label="):
+                call = f"{prefix}{operator}'Set-Location'"
+                with self.subTest(call=call):
+                    self.assertIsNotNone(coordination.deny_reason_for_shell(
+                        f"{call} '{main}'; git reset --hard", safe, None,
+                        ps=True))
+                    self.assertIsNone(coordination.deny_reason_for_shell(
+                        f"{call} '{safe}'; git reset --hard", self.repo_path,
+                        self.repo, ps=True))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f".Set-Location '{safe}'; git reset --hard", self.repo_path,
+            self.repo, ps=True))
+
     def test_cd_inside_pipeline_does_not_move_later_segments(self):
         safe = os.path.join(self.base, "safe").replace(os.sep, "/")
         os.makedirs(safe, exist_ok=True)
@@ -574,11 +802,16 @@ class TestMainRule(TempRepoCase):
                     f"(cd {safe} && true) | cat; git reset --hard",
                     f"{{ cd {safe}; true; }} | cat; git reset --hard",
                     f"{{ cd {safe}; true; }} & git reset --hard",
-                    f"(cd {safe} && git reset --hard)",
                     "(git reset --hard) >/dev/null",
                     "cat | { git reset --hard; }"):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo), cmd)
+        # Inside the subshell the cd does apply (#224 review).
+        main = self.repo_path.replace(os.sep, "/")
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"(cd {main} && git reset --hard); true", safe, None))
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            f"(cd {safe} && git reset --hard)", self.repo_path, self.repo))
 
     def test_backgrounded_cd_does_not_move_later_segments(self):
         # `cd x &` runs in a background subshell/job: the parent stays put.
@@ -1957,6 +2190,20 @@ class TestPreToolUseAdapter(TempRepoCase):
                         }, "cwd": cwd,
                     })
                     self.assertIn("main is read-only", out)
+
+    def test_pushd_reaches_foreign_claims(self):
+        run_git(["checkout", "-q", "-b", "feature"], self.repo_path)
+        coordination.claim(self.repo, "s1", "branch", "feature")
+        coordination.claim(self.repo, "s2", "file_glob", "src/*")
+        for tool, command in (
+                ("Bash", "pushd src && rm code.cs"),
+                ("PowerShell", "Push-Location src; Remove-Item code.cs")):
+            with self.subTest(command=command):
+                rc, out = self.decide({
+                    "tool_name": tool, "tool_input": {"command": command},
+                    "cwd": self.repo_path, "session_id": "s1",
+                })
+                self.assertIn("claimed by session s2", out)
 
     def test_nested_interpreter_forms_reach_main_rule(self):
         # #182: unquoted cmd /c tails, path- or .exe-supplied interpreters,
