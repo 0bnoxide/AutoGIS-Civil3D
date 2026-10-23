@@ -1389,9 +1389,12 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                         openers.pop()
                     else:
                         closers.append(i)
-                elif ch == "{" and re.fullmatch(
-                        r"(?:.*[|({!])?\s*", seg_masked[:i], re.S) \
-                        and seg_masked[i + 1:i + 2].isspace():
+                elif ch == "{" and (i == 0 or seg_masked[i - 1] in
+                                    " \t|({!") \
+                        and seg_masked[i + 1:i + 2] in ("", " ", "\t"):
+                    # Any standalone `{` word, so reserved-word prefixes
+                    # (`time {`, `coproc X {`, `then {`) are not missed; an
+                    # argument `{` only adds a scope no `}` closes.
                     openers.append(i)
             # Unmatched closers all come before unmatched openers, so they
             # close scopes opened before this segment.
@@ -1399,9 +1402,11 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 closed = scopes[-len(closers):]
                 del scopes[-len(closers):]
             # A group opened later in a pipeline (`x | (cd y` or
-            # `x | { cd y`) is a subshell whatever closes it.
+            # `x | { cd y`) or by `coproc` is a subshell whatever closes it.
             for i in openers:
-                scopes.append(("(" if _PIPE_RE.search(seg_masked, 0, i) else
+                scopes.append(("(" if _PIPE_RE.search(seg_masked, 0, i) or
+                               re.search(r"(?<![\w-])coproc(?![\w-])",
+                                         seg_masked[:i]) else
                                seg_masked[i], effective_cwd, list(stack),
                                parent_cwd, list(parent_stack)))
             if closed and _PIPE_RE.search(seg_masked, closers[-1]) and \
