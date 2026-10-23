@@ -29,7 +29,7 @@ $productDlls = @(
     "AutoGIS.Civil3D.Adapter.dll",
     "AutoGIS.Civil3D.Proposal.dll"
 )
-$actualDlls = @(Get-ChildItem -LiteralPath $SourceBuildDirectory -Filter *.dll -File | ForEach-Object Name)
+$actualDlls = @(Get-ChildItem -LiteralPath $SourceBuildDirectory -Filter *.dll -File -Force | ForEach-Object Name)
 $unexpectedDlls = @($actualDlls | Where-Object { $_ -notin $productDlls })
 if ($unexpectedDlls.Count -ne 0) {
     throw "Unexpected DLL in preview build output: $($unexpectedDlls -join ', ')"
@@ -92,16 +92,5 @@ $json = $buildInfo | ConvertTo-Json -Depth 4
     [System.Text.UTF8Encoding]::new($false)
 )
 
-$expectedInventory = @(
-    "AutoGIS.Civil3D.Adapter.dll",
-    "AutoGIS.Civil3D.Proposal.dll",
-    "build-info.json",
-    "new-proposal-preview.md",
-    "new-proposal-smoke.scr"
-)
-$actualInventory = @(Get-ChildItem -LiteralPath $DestinationDirectory -File | ForEach-Object Name | Sort-Object)
-if ((Compare-Object $expectedInventory $actualInventory).Count -ne 0) {
-    throw "Preview artifact inventory is not the expected product-only set."
-}
-
-$actualInventory
+. (Join-Path $PSScriptRoot "preview-inventory.ps1")
+Assert-PreviewInventory $DestinationDirectory

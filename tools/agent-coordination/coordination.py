@@ -30,6 +30,7 @@ import fnmatch
 import glob
 import hashlib
 import json
+import ntpath
 import os
 import re
 import shlex
@@ -150,7 +151,12 @@ GIT_MUTATORS = {
     # tree and ref with no commit of its own.
     "read-tree", "checkout-index", "sparse-checkout", "pull",
 }
-REDIRECT_RE = re.compile(r"(?<![<>])>{1,2}\s*([^\s|;&<>]+)")
+# Every operator that opens its word for writing: `>`, `>>`, Bash's clobber
+# `>|` and read-write `<>`, and `>&` before a filename (`>&2`, `>&-` only
+# duplicate or close a descriptor, quoted or not; `>&2file` is a filename).
+_WRITE_REDIR_OP = (r"(?:>{1,2}\|?|<>|>&(?!\s*(?:\d+|-|\"(?:\d+|-)\""
+                   r"|'(?:\d+|-)')(?![^\s|;&<>])))")
+REDIRECT_RE = re.compile(rf"(?<![<>]){_WRITE_REDIR_OP}\s*([^\s|;&<>]+)")
 
 
 def deny_reason_for_target(target_path, repo_hint=None):
@@ -569,10 +575,11 @@ _PS_QUOTE_RE = re.compile(
     rf"|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*[{_PS_SQ}]"
     rf"|[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*[{_PS_DQ}]")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
-_REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
+_REDIR_TARGET_RE = re.compile(
+    rf"{_WRITE_REDIR_OP}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
 # Bash: a backslash escapes the next character, including a space (#178).
 _BASH_REDIR_TARGET_RE = re.compile(
-    r">{1,2}\s*(\"[^\"]*\"|'[^']*'|(?:\\.|[^\s|;&<>\\])+)")
+    rf"{_WRITE_REDIR_OP}\s*(\"[^\"]*\"|'[^']*'|(?:\\.|[^\s|;&<>\\])+)")
 
 
 def _ps_certain_comment(command, start):
@@ -863,14 +870,17 @@ def _shell_segments(command, masked_all, cmd=False, ps=False):
             pending = []
 
 
+_BASH_PIPE_RE = re.compile(r"(?<!>)\|&?")
+
+
 def _pipeline_stages(segment, segment_masked, bash=False):
     """Split a segment on unquoted pipeline separators.
 
     Bash `|&` is one separator (`2>&1 |`), so the next stage does not start
-    with `&` (#208).
+    with `&` (#208); `>|` is a redirect, not a pipe.
     """
     pipe_cuts = [m.span() for m in re.finditer(
-        r"\|&?" if bash else r"\|", segment_masked)] \
+        _BASH_PIPE_RE if bash else r"\|", segment_masked)] \
         + [(len(segment), len(segment))]
     stages, last = [], 0
     for cut_start, cut_end in pipe_cuts:
@@ -890,7 +900,7 @@ def _peel_bash_grouping(segment, masked):
     command and its last word is not `--hard)` (#209). Parentheses balanced
     inside the segment, such as `$( ... )`, are kept."""
     blanks, stage_start = set(), 0
-    for m in re.finditer(r"\|&?|$", masked):
+    for m in re.finditer(rf"{_BASH_PIPE_RE.pattern}|$", masked):
         lead = _BASH_GROUP_OPEN_RE.match(masked, stage_start)
         blanks.update(i for i in range(lead.start(), lead.end())
                       if not masked[i].isspace())
@@ -1226,7 +1236,10 @@ def _location_change(word, args, ps, cmd):
     return (paths[0] if paths else None), True
 
 
-_REDIR_OP_RE = re.compile(r"(?:\d*&?|\*)>>?|\d*<")
+# Any redirect operator, with its optional descriptor (`2`, Bash `{fd}`,
+# PowerShell `*`): here-strings and here-docs, `<>`, dups, `&>`, clobber.
+_REDIR_OP_RE = re.compile(
+    r"(?:\{\w+\}|\d+|\*)?(?:<<<|<<-?|<>|[<>]&|&>>?|>>?\|?|<)")
 
 
 def _drop_redirects(args):
@@ -1244,6 +1257,90 @@ def _drop_redirects(args):
 
 _UNMODELED_LOCATION = ("a location change the parser does not model; command "
                        "is denied because the working directory is unknown")
+_UNRESOLVED_LOCATION = ("a location operand the parser cannot resolve "
+                        "(variable, substitution, wildcard or quoted tilde); "
+                        "command is denied because the working directory is "
+                        "unknown")
+# Characters that make a location operand depend on expansion the shell does
+# at run time, from an environment the hook does not see (#230). Only a
+# plain literal path (plus a leading unquoted `~` or `~/`) is modeled; a
+# `~` left at the start (`~user`, quoted) is not. Elsewhere `~` is literal
+# (Windows short names such as `RUNNER~1`).
+_UNRESOLVED_OPERAND_RE = {
+    "bash": re.compile(r"[$`*?\[\]{}]|^~"),
+    "ps": re.compile(r"[$`*?\[\]]|^~"),
+    "cmd": re.compile(r"[%!*?]"),
+}
+
+
+# Variables Bash's cd/pushd consult: the bare-cd target, the search path,
+# `cd -`, the logical base for -L, and POSIX-mode resolution.
+_CD_ENV_VARS = {"HOME", "CDPATH", "OLDPWD", "PWD", "POSIXLY_CORRECT"}
+
+
+_ASSIGN_WORD = r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?="
+
+
+def _array_prefixes_command(masked):
+    """True when an array assignment (`A=(x y)`) shares its statement with
+    anything but assignments and redirections.
+
+    The lexer splits the array into several words, so the words around it
+    (a prefixed command, or what a scalar prefix sets) are not known; a bare
+    `A=(x y)` statement, with or without a redirect, is fine.
+    """
+    text = re.sub(r"\"[^\"]*\"|'[^']*'", "Q", masked)
+    out, pos = [], 0
+    for m in re.finditer(rf"(?<![^\s;&|(]){_ASSIGN_WORD}\(", text):
+        if m.start() < pos:
+            continue
+        out.append(text[pos:m.end() - 1])
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[i], 0)
+            i += 1
+        if depth:
+            return True
+        pos = i
+    if not out:
+        return False
+    words = _drop_redirects(("".join(out) + " " + text[pos:]).split())
+    return any(not re.fullmatch(rf"{_ASSIGN_WORD}\S*", w) for w in words)
+
+
+# A shell word as written, redirect operators included, split like argv.
+_RAW_TOKEN_RE = re.compile(
+    r"""(?:[^\s"'\\;|()]|\\.|"(?:\\.|[^"\\])*"|'[^']*')+""")
+
+
+_RAW_WORD_RE = re.compile(
+    r"""(?:[^\s"'\\;&|<>()]|\\.|"(?:\\.|[^"\\])*"|'[^']*')+""")
+
+
+def _bash_tilde_unquoted(segment, path):
+    """True when every raw word that lexes to `path` starts with an unquoted
+    `~/` or is a bare `~`: Bash expands a tilde prefix only when none of its
+    characters is quoted (`~/"a b"` expands, `"~/x"` and `~"/x"` do not).
+    Any quoted spelling of the same text (a redirect target, say) makes the
+    operand's own spelling unknown, so it is not expanded."""
+    found = False
+    for m in _RAW_WORD_RE.finditer(segment):
+        word = m.group(0)
+        try:
+            lexed = shlex.split(word)
+        except ValueError:
+            return False
+        if lexed == [path]:
+            if not (word == "~" or word[:2] == "~/"):
+                return False
+            found = True
+    return found
+
+
+def _enterable(path):
+    """True when a change into `path` would succeed now: an existing,
+    searchable directory. Anything else may fail at run time (#230)."""
+    return os.path.isdir(path) and os.access(path, os.X_OK)
 
 
 # Re-checks of a block body from the locations it moves to; a body still
@@ -1291,7 +1388,7 @@ def _ps_ambiguous_hash(command, start, end):
 
 
 def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
-                  _report_cwd=False):
+                  _report_cwd=False, _fs_touched=False):
 
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
@@ -1315,6 +1412,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
     raw = command
     hidden_re = _HIDDEN_LOCATION_RE["ps" if ps else "cmd" if cmd else "bash"]
     scopes, closed = [], []
+    # Set once a statement other than a location change has run: from then
+    # on no target's existence is taken from the disk as it is now.
+    ran = False
     if ps:
         # A backtick before a line break continues the line (CRLF: only the
         # CR is escaped, so the LF still ends it).
@@ -1343,7 +1443,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             command, masked_all, cmd=cmd, ps=ps):
         if closed:
             # The previous segment closed a Bash subshell: its cd is undone.
-            effective_cwd, stack, parent_cwd, parent_stack = closed[0][1:]
+            (effective_cwd, stack, alt, parent_cwd, parent_stack,
+             parent_alt) = closed[0][1:]
             closed = []
         if seg_job != job:
             # A background job's `cd` moves the rest of that job only; the
@@ -1364,7 +1465,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 # element or backgrounded; then its cd is undone (#227).
                 if kind != "{" or seg_job is not None \
                         or _PIPE_RE.search(seg_masked, i):
-                    effective_cwd, stack, parent_cwd, parent_stack = saved
+                    (effective_cwd, stack, alt, parent_cwd, parent_stack,
+                     parent_alt) = saved
                 else:
                     # `{ cd x; } > f` opens f before the group runs.
                     yield from _target_events(_redirect_targets(
@@ -1376,8 +1478,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             lead = re.match(r"[\s(]*", seg_masked).group(0)
             check = " " * len(lead) + seg_masked[len(lead):]
             for _ in range(lead.count("(")):
-                scopes.append(("(", effective_cwd, list(stack), parent_cwd,
-                               list(parent_stack)))
+                scopes.append(("(", effective_cwd, list(stack), list(alt),
+                               parent_cwd, list(parent_stack),
+                               list(parent_alt)))
             closers, openers = [], []
             for i, ch in enumerate(seg_masked):
                 if i < len(lead):
@@ -1408,10 +1511,11 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                                re.search(r"(?<![\w-])coproc(?![\w-])",
                                          seg_masked[:i]) else
                                seg_masked[i], effective_cwd, list(stack),
-                               parent_cwd, list(parent_stack)))
+                               list(alt), parent_cwd, list(parent_stack),
+                               list(parent_alt)))
             if closed and _PIPE_RE.search(seg_masked, closers[-1]) and \
-                    closed[0][1:] != (effective_cwd, stack, parent_cwd,
-                                      parent_stack):
+                    closed[0][1:] != (effective_cwd, stack, alt,
+                                      parent_cwd, parent_stack, parent_alt):
                 # `(cd x; y) | git z`: the stages after `)` run where the
                 # group started, the ones before it where it moved to.
                 yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
@@ -1451,15 +1555,20 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 # A loop body runs again from wherever it moved to, so it
                 # is re-checked from each new location; a body that keeps
                 # moving (`foreach (...) { cd sub; ... }`) fails closed.
-                moved, frontier = [], list(chain_base)
+                moved, frontier, ran_block = [], list(chain_base), False
                 for _ in range(_MAX_BLOCK_PASSES):
                     reached = []
                     for base in frontier:
+                        # A body may repeat after its own commands ran, so
+                        # its location targets are never taken as certain.
                         for event in _shell_events(
                                 segment[start + 1:end], base, ps=True,
-                                _depth=_depth + 1, _report_cwd=True):
+                                _depth=_depth + 1, _report_cwd=True,
+                                _fs_touched=True):
                             if event[0] == "cwd":
                                 reached.append(event[1])
+                            elif event[0] == "ran":
+                                ran_block = True
                             else:
                                 yield event
                     frontier = [c for c in dict.fromkeys(reached)
@@ -1470,19 +1579,36 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 else:
                     yield ("opaque", effective_cwd)
                 alt += [c for c in moved if c not in cwds()]
+                ran = ran or ran_block
             if job is None:
                 parent_alt = list(alt)
         stages = _pipeline_stages(segment, seg_masked, bash=bash)
         # `cd` is read before group peeling, as before #209, so peeling
         # never turns `(cd x` or a piped `{ cd x` into a parent-shell `cd`.
         ps_stages = [_ps_location_argv(st) for st in stages] if ps else []
-        first = ps_stages[0] if ps else _argv_of(stages[0], cmd=cmd)
+        # A redirect may come before the command word (`> f cd x`).
+        first = _drop_redirects(
+            ps_stages[0] if ps else _argv_of(stages[0], cmd=cmd))
         # `command pushd x` / `builtin cd x` still run in this shell; other
         # wrappers (env, sudo, xargs) start a process that cannot move it.
         # `command -v pushd` only describes pushd, so `-v`/`-V` stop the
         # peel; the stage is then an ordinary command.
-        while bash and first and re.fullmatch(r"[A-Za-z_]\w*\+?=.*", first[0]):
+        if bash and _array_prefixes_command(_pipeline_stages(
+                seg_masked, seg_masked, bash=True)[0]):
+            # `A=(x y) c\d z`: the command after an array prefix is unknown.
+            yield ("opaque", effective_cwd, _UNRESOLVED_LOCATION)
+            continue
+        assigns, peeled = False, 0
+        raw_words = _drop_redirects(_RAW_TOKEN_RE.findall(stages[0])) \
+            if bash and stages else []
+        while bash and first and re.fullmatch(
+                r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=.*", first[0]):
+            if not re.match(_ASSIGN_WORD, (raw_words[peeled:] or [""])[0]):
+                break  # `F\OO=x cd y` runs a command named `FOO=x`
+            # Only the variables Bash's cd/pushd read can redirect them.
+            assigns |= re.match(r"\w+", first[0]).group(0) in _CD_ENV_VARS
             first = first[1:]  # `X=1 pushd x` still runs pushd in this shell
+            peeled += 1
         while not (ps or cmd) and first[:1] in (["command"], ["builtin"]):
             if first[0] == "builtin" and first[1:2] != ["--"] \
                     and first[1:2] and first[1].startswith("-"):
@@ -1529,14 +1655,18 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 yield from _target_events(_redirect_targets(
                     segment, seg_masked, bash=bash, cmd=cmd), base, ps,
                     cmd=cmd)
-            path, modeled = _location_change(
-                word, _drop_redirects(first[1:]), ps, cmd)
-            if not modeled or alt and not path and word not in _PUSHD_WORDS:
-                # A stack pop after a script block moved the location: the
-                # block's own pushes are not on this stack.
+            args = _drop_redirects(first[1:])
+            path, modeled = _location_change(word, args, ps, cmd)
+            if not modeled or alt and not path and (
+                    word not in _PUSHD_WORDS or not ps):
+                # A stack pop or Bash swap after the location became one of
+                # several: the stack the shell holds is not known.
                 yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
                 continue
             if word in _POPD_WORDS:
+                if stack and stack[-1] is None:
+                    yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
+                    continue
                 if stack:
                     effective_cwd = stack.pop()
                 elif _report_cwd:
@@ -1547,17 +1677,57 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             elif path:
                 if ps or cmd:
                     path = path.replace("\\", "/")
-                # The shell expands ~ and set variables before the change;
-                # an unset `$VAR` stays unresolved, as it always has (#56).
-                path = os.path.expandvars(os.path.expanduser(path))
+                if (path == "~" or path[:2] == "~/") and (ps or bash and (
+                        not set(args) - {"-L", "-P", "--"}
+                        or _bash_tilde_unquoted(segment, path))):
+                    path = os.path.expanduser(path)
+                # An assignment prefix can set HOME or CDPATH for the change
+                # itself, so it is unresolved too.
+                if assigns or _UNRESOLVED_OPERAND_RE[
+                        "ps" if ps else "cmd" if cmd else "bash"].search(path):
+                    yield ("opaque", effective_cwd, _UNRESOLVED_LOCATION)
+                    continue
+                before, certain = effective_cwd, not alt
+                reached = []
+                physical = bash and [a for a in args
+                                     if a in ("-L", "-P")][-1:] == ["-P"]
+                for base in cwds():
+                    joined = path if os.path.isabs(path) \
+                        else os.path.join(base or ".", path)
+                    # `..` is taken lexically (Bash -L, PowerShell, cmd).
+                    # Bash -L may fall back to the physical path when the
+                    # lexical one cannot be entered; that stays uncertain.
+                    target = os.path.realpath(joined) if physical \
+                        else os.path.normpath(joined).replace(os.sep, "/") \
+                        if ps or cmd else os.path.normpath(joined)
+                    if bash and not physical and not _enterable(target) \
+                            and _enterable(joined):
+                        reached.append(os.path.realpath(joined))
+                    reached.append(target)
+                    # Existence is judged now; an earlier statement may
+                    # remove or replace the directory before this runs.
+                    if _fs_touched or ran or not _enterable(target) or (
+                            cmd and word != "pushd" and "/d" not in
+                            [a.lower() for a in args] and
+                            ntpath.splitdrive(target)[0].lower() !=
+                            ntpath.splitdrive(base or "")[0].lower()):
+                        # The change can fail and leave the shell where it
+                        # was, so later statements are checked there too;
+                        # cmd's cd without /d sets another drive's directory
+                        # without switching to it.
+                        reached.append(base)
+                reached = list(dict.fromkeys(reached))
+                effective_cwd, alt = reached[0], reached[1:]
                 if word in _PUSHD_WORDS:
-                    stack.append(effective_cwd)
-                alt = [path if os.path.isabs(path)
-                       else os.path.join(c or ".", path) for c in alt]
-                effective_cwd = path if os.path.isabs(path) \
-                    else os.path.join(effective_cwd or ".", path)
+                    # An entry pushed while the location was one of several,
+                    # or by a push that may fail, is not known (None).
+                    stack.append(before if certain and not alt else None)
             elif word in _PUSHD_WORDS and ps:
-                stack.append(effective_cwd)  # bare Push-Location: no move
+                # Bare Push-Location: no move.
+                stack.append(None if alt else effective_cwd)
+            elif word in _PUSHD_WORDS and stack and stack[-1] is None:
+                yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
+                continue
             elif word in _PUSHD_WORDS and stack and not alt:
                 # Bare Bash pushd swaps the top two directories.
                 effective_cwd, stack[-1] = stack[-1], effective_cwd
@@ -1567,6 +1737,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 parent_cwd, parent_stack = effective_cwd, list(stack)
                 parent_alt = list(alt)
             continue
+        ran = True  # a command, not a location change, runs here
         if bash:
             segment, seg_masked = _peel_bash_grouping(segment, seg_masked)
             stages = _pipeline_stages(segment, seg_masked, bash=True)
@@ -1594,7 +1765,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                     for base in cwds():
                         yield from _shell_events(
                             nested[0], base, ps=nested[1],
-                            _depth=_depth + 1, cmd=nested[2])
+                            _depth=_depth + 1, cmd=nested[2],
+                            _fs_touched=_fs_touched or ran)
                     continue
                 # The opaque remainder could mutate this repository; never
                 # silently discard it at the parser depth limit.
@@ -1615,6 +1787,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
     if _report_cwd:
         for final in [parent_cwd] + parent_alt:
             yield ("cwd", final)
+        if ran:
+            yield ("ran", None)
 
 
 def shell_write_targets(command, cwd, ps=False, cmd=False):
@@ -1788,10 +1962,17 @@ def _glob_prefix(value):
     return None
 
 
+def _fold(path):
+    """Case- and separator-fold a repo-relative path with the platform's
+    rules, so a claim spelled `Src/*` meets a target `src` on Windows (#233)."""
+    return os.path.normcase(path).replace("\\", "/")
+
+
 def _globs_overlap(a, b):
     pa, pb = _glob_prefix(a), _glob_prefix(b)
     if pa is None or pb is None:
         return True  # unvalidatable legacy pattern: treat as conflicting
+    pa, pb = _fold(pa), _fold(pb)
     # Segment-boundary comparison: `src` and `srclib/*` are siblings, not a
     # conflict, and `src/main` vs `src/main2` differ. A directory claim
     # conflicts with anything at or under its prefix.
@@ -2501,8 +2682,9 @@ def glob_conflict(claims, session, targets, subtrees=()):
                 return (f"'{rel}' is inside file_glob '{record['value']}' "
                         f"claimed by session {record['session']} "
                         f"(claim {record['id']}).")
-            claimed = prefix.rstrip("/")
-            if rel == "." or claimed == rel or claimed.startswith(rel + "/"):
+            claimed = _fold(prefix).rstrip("/")
+            if rel == "." or claimed == _fold(rel) \
+                    or claimed.startswith(_fold(rel) + "/"):
                 return (f"'{rel}' contains file_glob '{record['value']}' "
                         f"claimed by session {record['session']} "
                         f"(claim {record['id']}).")

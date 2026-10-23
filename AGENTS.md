@@ -19,6 +19,11 @@ Harness specifics:
 - For every coding task, automatically invoke the `ponytail` skill at its
   default full intensity. It remains active unless the user explicitly says
   `stop ponytail` or `normal mode`.
+- Without the ponytail plugin installed, the vendored skills load
+  unnamespaced: invoke them as `$ponytail`, `$ponytail-review`,
+  `$ponytail-help`, etc. The vendored `ponytail-help` card's
+  `$ponytail:<skill>` forms apply only when the plugin itself is installed;
+  that text is upstream's and stays unpatched in the vendored copy.
 - The required Sonar secret scan deliberately authenticates through the host
   OS Keychain. A sandbox-only missing-token result is an execution boundary,
   not a request to reauthenticate: verify with host-scope `sonar auth status`

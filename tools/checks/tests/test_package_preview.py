@@ -1,5 +1,7 @@
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -8,6 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "tools" / "package-preview.ps1"
+INVENTORY = ROOT / "tools" / "preview-inventory.ps1"
+POWERSHELL = shutil.which("powershell") or shutil.which("pwsh") or "powershell"
 PRODUCT_DLLS = (
     "AutoGIS.Civil3D.Adapter.dll",
     "AutoGIS.Civil3D.Proposal.dll",
@@ -19,7 +23,7 @@ class PackagePreviewTests(unittest.TestCase):
     def run_package(self, source: Path, destination: Path, year: str = "2026") -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
-                "powershell",
+                POWERSHELL,
                 "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
@@ -102,6 +106,60 @@ class PackagePreviewTests(unittest.TestCase):
 
             self.assertNotEqual(0, result.returncode)
             self.assertIn("2026", result.stdout + result.stderr)
+
+
+    def assert_inventory(self, directory: Path) -> subprocess.CompletedProcess[str]:
+        command = f". '{INVENTORY}'; Assert-PreviewInventory '{directory}'"
+        return subprocess.run(
+            [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_inventory_guard_rejects_hidden_entries_and_directories(self) -> None:
+        # #235: every direct entry counts, hidden ones included.
+        expected = (*PRODUCT_DLLS, "build-info.json", "new-proposal-preview.md", "new-proposal-smoke.scr")
+        for extra, is_dir, hidden in (
+            (None, False, False),
+            (".scanner.tmp", False, True),
+            ("scanner", True, False),
+            (".scanner", True, True),
+        ):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as temporary_directory:
+                package = Path(temporary_directory)
+                for name in expected:
+                    (package / name).write_bytes(b"x")
+                if extra:
+                    path = package / extra
+                    path.mkdir() if is_dir else path.write_bytes(b"")
+                    if hidden and os.name == "nt":
+                        subprocess.run(["attrib", "+h", str(path)], check=True)
+
+                result = self.assert_inventory(package)
+
+                if extra is None:
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                else:
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn(extra, result.stdout + result.stderr)
+                    self.assertTrue(path.exists(), "the guard must not delete content")
+
+    def test_rejects_hidden_unexpected_dll(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "source"
+            source.mkdir()
+            for name in PRODUCT_DLLS:
+                (source / name).write_bytes(b"product")
+            hidden = source / ".AcMgd.dll"
+            hidden.write_bytes(b"must not ship")
+            if os.name == "nt":
+                subprocess.run(["attrib", "+h", str(hidden)], check=True)
+
+            result = self.run_package(source, Path(temporary_directory) / "destination")
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("Unexpected DLL", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
