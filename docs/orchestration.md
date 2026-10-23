@@ -507,3 +507,16 @@ Known limit: the Codex verifier needs network access to restore packages,
 so only its prompt stops it from writing to GitHub. Compare its output with
 the PR's activity; a verifier that posted or pushed anything counts as no
 verdict.
+
+Known limit: the Codex sandbox blocks `tasklist`, so `_pid_snapshot()` in
+`tools/agent-coordination/coordination.py` returns `None` ("unknown") and
+the coordination PID-liveness tests fail there whatever the change under
+review. That is the designed answer when no snapshot can be taken, not a
+defect in the PR. The verifier must issue the usable verdict itself, so
+give it the evidence before it runs: run
+`python -m unittest discover -s tools/agent-coordination/tests` in host
+context on the submitted SHA, then append an environment note to the
+verifier prompt stating this limit and quoting that host result. A FAIL
+issued without the note is rerun on the same SHA with it. The CI
+`coordination` job, which runs the suite outside the sandbox, must still
+pass. Do not relax the tests or the sandbox to make them pass.
