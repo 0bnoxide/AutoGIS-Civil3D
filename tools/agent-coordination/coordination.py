@@ -1541,13 +1541,16 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             if closers:
                 closed = scopes[-len(closers):]
                 del scopes[-len(closers):]
-            # A group opened by `coproc` is a subshell whatever closes it; one
+            # A group that `coproc` (its stage's first word) opens is a
+            # subshell whatever closes it; one
             # opened later in a pipeline (`x | { cd y`) is unless it is last.
             for i in openers:
                 piped = seg_masked[i] == "{" and _opener_piped(seg_masked, i)
                 scopes.append((
-                    "(" if re.search(r"(?<![\w-])coproc(?![\w-])",
-                                     seg_masked[:i]) else
+                    "(" if re.fullmatch(
+                        r"(?:.*\|&?)?(?:\s|[(!]|time\b|-p\b)*coproc\s+"
+                        r"(?:[A-Za-z_]\w*\s+)?",
+                        seg_masked[:i], re.S) else
                     "|" if piped else
                     "?" if piped is None else seg_masked[i],
                     effective_cwd, list(stack), list(alt), parent_cwd,

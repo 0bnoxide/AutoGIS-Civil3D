@@ -1051,6 +1051,7 @@ class TestMainRule(TempRepoCase):
                     f"time {{ true; cd {safe}; }} | cat; git reset --hard",
                     f"coproc X {{ true; cd {safe}; }}; git reset --hard",
                     f"coproc {{ true; cd {safe}; }}; git reset --hard",
+                    f"time ! coproc {{ true; cd {safe}; }}; git reset --hard",
                     f"{{\ntrue; cd {safe}\n}} | cat; git reset --hard"):
             with self.subTest(cmd=cmd):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
@@ -1088,7 +1089,9 @@ class TestMainRule(TempRepoCase):
                     f"{{ true; cd {main}; }}; git reset --hard",
                     f"true | time {{ true; cd {main}; }}; git reset --hard",
                     "bash -O lastpipe -c 'set +m; true | "
-                    f"{{ cd {main}; }}; git reset --hard'"):
+                    f"{{ cd {main}; }}; git reset --hard'",
+                    f"printf coproc | {{ cd {main}; }}; git reset --hard",
+                    f"echo coproc {{ cd {main}; }}; git reset --hard"):
             with self.subTest(cmd=cmd):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     cmd, safe, None))
