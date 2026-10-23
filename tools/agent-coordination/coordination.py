@@ -1341,28 +1341,67 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             command, masked_all, cmd=cmd, ps=ps):
         for _ in range(min(closing, len(scopes))):
             # The previous segment closed a Bash subshell: its cd is undone.
-            effective_cwd, stack, parent_cwd, parent_stack = scopes.pop()
+            effective_cwd, stack, parent_cwd, parent_stack = \
+                scopes.pop()[1:]
         closing = 0
         check = seg_masked
         if bash:
+            # A `}` or `)` that starts the segment ends its group before the
+            # rest of the segment runs (`{ cd x; } | git y`).
+            lead_close = re.match(r"[\s)}]*", seg_masked).group(0)
+            for i, ch in enumerate(lead_close):
+                if ch.isspace() or not scopes:
+                    continue
+                kind, *saved = scopes.pop()
+                # A brace group runs in this shell unless it is a pipeline
+                # element or backgrounded; then its cd is undone (#227).
+                if kind != "{" or seg_job is not None \
+                        or "|" in seg_masked[i:]:
+                    effective_cwd, stack, parent_cwd, parent_stack = saved
+                else:
+                    # `{ cd x; } > f` opens f before the group runs.
+                    yield from _target_events(_redirect_targets(
+                        segment, seg_masked, bash=True), saved[0], ps)
+                if ch == ")":
+                    segment = segment[:i] + " " + segment[i + 1:]
+                    seg_masked = seg_masked[:i] + " " + seg_masked[i + 1:]
+            check = seg_masked
             # `(cd x; git y)` moves the subshell, not the shell after `)`.
             lead = re.match(r"[\s(]*", seg_masked).group(0)
             check = " " * len(lead) + seg_masked[len(lead):]
             for _ in range(lead.count("(")):
-                scopes.append((effective_cwd, list(stack), parent_cwd,
+                scopes.append(("(", effective_cwd, list(stack), parent_cwd,
                                list(parent_stack)))
-            closers, depth = [], 0
+            closers, openers, depth = [], [], 0
             for i, ch in enumerate(seg_masked):
                 if i < len(lead):
                     continue
                 if ch == "(":
-                    depth += 1
+                    openers.append(i)
                 elif ch == ")":
-                    if depth:
-                        depth -= 1
+                    if openers:
+                        openers.pop()
                     else:
                         closers.append(i)
+                elif ch == "{" and re.fullmatch(
+                        r"(?:.*[|({!])?\s*", seg_masked[:i], re.S) \
+                        and seg_masked[i + 1:i + 2].isspace():
+                    openers.append(i)
+            # A group opened later in a pipeline (`x | (cd y` or
+            # `x | { cd y`) is a subshell whatever closes it.
+            for i in openers:
+                scopes.append(("(" if "|" in seg_masked[:i] else
+                               seg_masked[i], effective_cwd, list(stack),
+                               parent_cwd, list(parent_stack)))
             closing = len(closers)
+            if closers and "|" in seg_masked[closers[-1]:] and any(
+                    scope[1:] != (effective_cwd, stack, parent_cwd,
+                                  parent_stack)
+                    for scope in scopes[max(0, len(scopes) - closing):]):
+                # `(cd x; y) | git z`: the stages after `)` run where the
+                # group started, the ones before it where it moved to.
+                yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
+                continue
             for i in [i for i, ch in enumerate(lead) if ch == "("] + closers:
                 segment = segment[:i] + " " + segment[i + 1:]
                 seg_masked = seg_masked[:i] + " " + seg_masked[i + 1:]

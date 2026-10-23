@@ -813,6 +813,46 @@ class TestMainRule(TempRepoCase):
         self.assertIsNone(coordination.deny_reason_for_shell(
             f"(cd {safe} && git reset --hard)", self.repo_path, self.repo))
 
+    def test_cd_later_in_a_group_does_not_move_past_it(self):
+        # #227: the `cd` is its own segment inside the group.
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe, exist_ok=True)
+        main = self.repo_path.replace(os.sep, "/")
+        for cmd in (f"(true; cd {safe}); git reset --hard",
+                    f"{{ true; cd {safe}; }} | cat; git reset --hard",
+                    f"{{ true; cd {safe}; }} |& cat; git reset --hard",
+                    f"{{ true; cd {safe}; }} & git reset --hard",
+                    f"{{ true; cd {safe}; }} | git reset --hard",
+                    f"cat | {{ true; cd {safe}; }}; git reset --hard",
+                    f"cat | (true; cd {safe}); git reset --hard",
+                    f"true | ! {{ true; cd {safe}; }}; git reset --hard",
+                    f"{{ {{ true; cd {safe}; }} | cat; }}; git reset --hard",
+                    f"(cd {safe}; true) | git reset --hard"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    cmd, self.repo_path, self.repo))
+        # The tracked path never keeps the closing `)`.
+        cwds = [e[1] for e in coordination._shell_events(
+            f"(true; cd {safe}); true", main, _report_cwd=True)
+            if e[0] == "cwd"]
+        self.assertEqual([main], cwds)
+        # A brace group that is not piped or backgrounded runs in this
+        # shell, so its cd does move later statements, both ways.
+        for cmd, cwd, repo in (
+                (f"{{ true; cd {safe}; }}; git reset --hard", main, self.repo),
+                (f"{{ true; cd {safe}; }} && git reset --hard", main,
+                 self.repo),
+                (f"{{ true; cd {main}; }} | cat; git reset --hard", safe,
+                 None)):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    cmd, cwd, repo))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"{{ true; cd {main}; }}; git reset --hard", safe, None))
+        # Its redirect opens before the group runs, where it started.
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"{{ true; cd {safe}; }} > seed.txt", main, self.repo))
+
     def test_backgrounded_cd_does_not_move_later_segments(self):
         # `cd x &` runs in a background subshell/job: the parent stays put.
         safe = os.path.join(self.base, "safe").replace(os.sep, "/")
