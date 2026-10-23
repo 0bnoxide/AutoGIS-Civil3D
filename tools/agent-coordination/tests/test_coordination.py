@@ -1066,7 +1066,12 @@ class TestMainRule(TempRepoCase):
         self.assertIsNone(coordination.deny_reason_for_shell(
             f"{{ true; cd {main}; }} | cat; git reset --hard", safe, None))
         for cmd in (f"{{ true; cd {main}; }}; git reset --hard",
-                    f"{{ true; cd {main}; }} >| out; git reset --hard"):
+                    f"{{ true; cd {main}; }} >| out; git reset --hard",
+                    f"{{ true; cd {main}; }} > $((1|2)); git reset --hard",
+                    f"{{ true; cd {main}; }} > `echo a|cat`; "
+                    "git reset --hard",
+                    f"{{ true; cd {main}; }} > ${{x|y}}; git reset --hard",
+                    f"{{ true; cd {main}; }} < <(a|b); git reset --hard"):
             with self.subTest(cmd=cmd):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     cmd, safe, None))
