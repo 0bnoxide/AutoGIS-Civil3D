@@ -1434,6 +1434,11 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         return [effective_cwd] + [c for c in alt if c != effective_cwd]
     job = None
     bash = not ps and not cmd
+    # `shopt -s lastpipe` runs a pipeline's last stage in this shell, so
+    # whether a piped group's cd persists is unknown (#227). Quotes and
+    # escapes are dropped so `last''pipe` still counts.
+    lastpipe = bash and re.search(r"lastpipe|shopt|BASHOPTS", re.sub(
+        r"[\"'\\]", "", command))
     raw = command
     hidden_re = _HIDDEN_LOCATION_RE["ps" if ps else "cmd" if cmd else "bash"]
     scopes, closed = [], []
@@ -1483,6 +1488,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             # rest of the segment runs (`{ cd x; } | git y`).
             lead_close = re.match(r"[\s)}]*", seg_masked).group(0)
             piped = _group_piped(seg_masked, len(lead_close))
+            if piped and lastpipe:
+                piped = None
             for i, ch in enumerate(lead_close):
                 if ch.isspace() or not scopes:
                     continue
@@ -1542,6 +1549,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             # `x | { cd y`) or by `coproc` is a subshell whatever closes it.
             for i in openers:
                 piped = seg_masked[i] == "{" and _opener_piped(seg_masked, i)
+                if piped and lastpipe:
+                    piped = None
                 scopes.append((
                     "(" if piped or re.search(r"(?<![\w-])coproc(?![\w-])",
                                               seg_masked[:i]) else

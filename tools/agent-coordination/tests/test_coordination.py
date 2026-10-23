@@ -1080,7 +1080,13 @@ class TestMainRule(TempRepoCase):
                     f"{{ true; cd {main}; }} > $[1|2]; git reset --hard",
                     f"{{ true; cd {main}; }} > @(a|b); git reset --hard",
                     f"{{ true; cd {main}; }} # a|b\ngit reset --hard",
-                    f"echo $[1|2] {{ true; cd {main}; }}; git reset --hard"):
+                    f"echo $[1|2] {{ true; cd {main}; }}; git reset --hard",
+                    "set +m; shopt -s lastpipe; true | "
+                    f"{{ true; cd {main}; }}; git reset --hard",
+                    f"sh''opt -s last\\pipe; true | {{ cd {main}; }}; "
+                    "git reset --hard",
+                    f"shopt -s lastpipe; {{ true; cd {main}; }} | cat; "
+                    "git reset --hard"):
             with self.subTest(cmd=cmd):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     cmd, safe, None))
