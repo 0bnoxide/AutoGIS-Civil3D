@@ -894,36 +894,29 @@ _BASH_GROUP_OPEN_RE = re.compile(r"\s*(?:[!({]\s*)*")
 _PIPE_RE = re.compile(r"(?<!>)\|")
 
 
-def _mask_expansions(masked):
-    """Blank the insides of `$(...)`, `$((...))`, `<(...)`, `>(...)`,
-    `${...}` and backticks, so a `|` there is not read as a pipeline
-    (`{ cd x; } > $((1|2))`, #227). Returns (text, ok); ok is False when
-    one is left open, so the caller fails closed."""
-    out, i, n = list(masked), 0, len(masked)
-    while i < n:
-        if masked[i] == "`":
-            end = masked.find("`", i + 1)
-            if end == -1:
-                return masked, False
-        elif masked[i] in "$<>" and masked[i + 1:i + 2] in ("(", "{"):
-            close = ")" if masked[i + 1] == "(" else "}"
-            depth, end = 0, i + 1
-            while end < n:
-                if masked[end] == masked[i + 1]:
-                    depth += 1
-                elif masked[end] == close:
-                    depth -= 1
-                    if not depth:
-                        break
-                end += 1
-            if end >= n:
-                return masked, False
-        else:
-            i += 1
-            continue
-        out[i + 1:end] = " " * (end - i - 1)
-        i = end + 1
-    return "".join(out), True
+
+# After a group's `}`, only redirections may come before its pipe (#227).
+_GROUP_TAIL_PIPE_RE = re.compile(
+    r"\s*(?:\d*(?:&>>?|>>?|>\||<<-?|<<<|<>|<&|>&|<)\s*[\w./~:@%+=,-]+\s*)*"
+    r"\|(?!\|)")
+
+
+def _group_piped(masked, end):
+    """Whether the group closed just before `end` is a pipeline element:
+    True or False when certain, None when the tail cannot be read (a `|`
+    that may sit in `$[1|2]`, `@(a|b)` or a comment), so callers fail
+    closed."""
+    if _GROUP_TAIL_PIPE_RE.match(masked, end):
+        return True
+    return None if _PIPE_RE.search(masked, end) else False
+
+
+def _opener_piped(masked, start):
+    """Like `_group_piped`, for a `{` at `start`: True only when a pipe
+    directly precedes it (`x | {`, `x | time {`, `x | ! {`)."""
+    if re.search(r"\|&?\s*(?:(?:time(?:\s+-p)?|!)\s+)*$", masked[:start]):
+        return True
+    return None if _PIPE_RE.search(masked, 0, start) else False
 
 
 def _peel_bash_grouping(segment, masked):
@@ -1489,21 +1482,17 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             # A `}` or `)` that starts the segment ends its group before the
             # rest of the segment runs (`{ cd x; } | git y`).
             lead_close = re.match(r"[\s)}]*", seg_masked).group(0)
-            pipes, pipes_ok = _mask_expansions(seg_masked)
-            if not pipes_ok and (scopes or re.search(r"(?<![$<>])[({]",
-                                                     seg_masked)):
-                # An unclosed expansion near a group: which `|` is a
-                # pipeline is unknown.
-                yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
-                continue
+            piped = _group_piped(seg_masked, len(lead_close))
             for i, ch in enumerate(lead_close):
                 if ch.isspace() or not scopes:
                     continue
                 kind, *saved = scopes.pop()
+                if kind == "{" and seg_job is None and piped is None \
+                        or kind == "?":
+                    break
                 # A brace group runs in this shell unless it is a pipeline
                 # element or backgrounded; then its cd is undone (#227).
-                if kind != "{" or seg_job is not None \
-                        or _PIPE_RE.search(pipes, i):
+                if kind != "{" or seg_job is not None or piped:
                     (effective_cwd, stack, alt, parent_cwd, parent_stack,
                      parent_alt) = saved
                 else:
@@ -1513,6 +1502,12 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 if ch == ")":
                     segment = segment[:i] + " " + segment[i + 1:]
                     seg_masked = seg_masked[:i] + " " + seg_masked[i + 1:]
+            else:
+                kind = None
+            if kind is not None:
+                # Whether the group was piped cannot be told.
+                yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
+                continue
             # `(cd x; git y)` moves the subshell, not the shell after `)`.
             lead = re.match(r"[\s(]*", seg_masked).group(0)
             check = " " * len(lead) + seg_masked[len(lead):]
@@ -1546,13 +1541,14 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             # A group opened later in a pipeline (`x | (cd y` or
             # `x | { cd y`) or by `coproc` is a subshell whatever closes it.
             for i in openers:
-                scopes.append(("(" if _PIPE_RE.search(pipes, 0, i) or
-                               re.search(r"(?<![\w-])coproc(?![\w-])",
-                                         seg_masked[:i]) else
-                               seg_masked[i], effective_cwd, list(stack),
-                               list(alt), parent_cwd, list(parent_stack),
-                               list(parent_alt)))
-            if closed and _PIPE_RE.search(pipes, closers[-1]) and \
+                piped = seg_masked[i] == "{" and _opener_piped(seg_masked, i)
+                scopes.append((
+                    "(" if piped or re.search(r"(?<![\w-])coproc(?![\w-])",
+                                              seg_masked[:i]) else
+                    "?" if piped is None else seg_masked[i],
+                    effective_cwd, list(stack), list(alt), parent_cwd,
+                    list(parent_stack), list(parent_alt)))
+            if closed and _PIPE_RE.search(seg_masked, closers[-1]) and \
                     closed[0][1:] != (effective_cwd, stack, alt,
                                       parent_cwd, parent_stack, parent_alt):
                 # `(cd x; y) | git z`: the stages after `)` run where the
