@@ -403,6 +403,12 @@ class TestMainRule(TempRepoCase):
             with self.subTest(command=command):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     command, safe, None))
+        # A quoted name makes the word a command, not an assignment.
+        for command in (f"F\\OO=x cd {safe}; git reset --hard",
+                        f"'FOO'=x cd {safe}; git reset --hard"):
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, self.repo_path, self.repo))
         # A bare array assignment, or one quoted as data, is not a prefix.
         for command in ("A=(x y); git status", "A=(x y)\ngit status",
                         "A=($(echo x)) B=1",

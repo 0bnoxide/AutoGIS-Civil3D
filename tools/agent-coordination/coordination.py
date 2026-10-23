@@ -1515,12 +1515,16 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             # `A=(x y) c\d z`: the command after an array prefix is unknown.
             yield ("opaque", effective_cwd, _UNRESOLVED_LOCATION)
             continue
-        assigns = False
+        assigns, peeled = False, 0
+        raw_words = _RAW_WORD_RE.findall(stages[0]) if bash and stages else []
         while bash and first and re.fullmatch(
                 r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=.*", first[0]):
+            if not re.match(_ASSIGN_WORD, (raw_words[peeled:] or [""])[0]):
+                break  # `F\OO=x cd y` runs a command named `FOO=x`
             # Only the variables Bash's cd/pushd read can redirect them.
             assigns |= re.match(r"\w+", first[0]).group(0) in _CD_ENV_VARS
             first = first[1:]  # `X=1 pushd x` still runs pushd in this shell
+            peeled += 1
         while not (ps or cmd) and first[:1] in (["command"], ["builtin"]):
             if first[0] == "builtin" and first[1:2] != ["--"] \
                     and first[1:2] and first[1].startswith("-"):
