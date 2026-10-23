@@ -1060,13 +1060,16 @@ class TestMainRule(TempRepoCase):
             f"(true; cd {safe}); true", main, _report_cwd=True)
             if e[0] == "cwd"]
         self.assertEqual([main], cwds)
-        # A piped brace group runs in a subshell, so its cd does not move
-        # later statements. (An unpiped group's cd away from main after a
-        # command stays denied: once anything has run, cd is uncertain.)
+        # A brace group piped into a later stage runs in a subshell, even
+        # with lastpipe, so its cd does not move later statements. A last
+        # stage may run in this shell, so it is denied. (An unpiped group's
+        # cd away from main after a command stays denied: once anything has
+        # run, cd is uncertain.)
         for cmd in (f"{{ true; cd {main}; }} | cat; git reset --hard",
                     f"{{ true; cd {main}; }} 2>&1 >out.txt |& cat; "
                     "git reset --hard",
-                    f"true | time {{ true; cd {main}; }}; git reset --hard"):
+                    f"shopt -s lastpipe; {{ true; cd {main}; }} | cat; "
+                    "git reset --hard"):
             with self.subTest(cmd=cmd):
                 self.assertIsNone(coordination.deny_reason_for_shell(
                     cmd, safe, None))
@@ -1083,10 +1086,9 @@ class TestMainRule(TempRepoCase):
                     f"echo $[1|2] {{ true; cd {main}; }}; git reset --hard",
                     "set +m; shopt -s lastpipe; true | "
                     f"{{ true; cd {main}; }}; git reset --hard",
-                    f"sh''opt -s last\\pipe; true | {{ cd {main}; }}; "
-                    "git reset --hard",
-                    f"shopt -s lastpipe; {{ true; cd {main}; }} | cat; "
-                    "git reset --hard"):
+                    f"true | time {{ true; cd {main}; }}; git reset --hard",
+                    "bash -O lastpipe -c 'set +m; true | "
+                    f"{{ cd {main}; }}; git reset --hard'"):
             with self.subTest(cmd=cmd):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     cmd, safe, None))

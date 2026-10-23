@@ -1434,11 +1434,6 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         return [effective_cwd] + [c for c in alt if c != effective_cwd]
     job = None
     bash = not ps and not cmd
-    # `shopt -s lastpipe` runs a pipeline's last stage in this shell, so
-    # whether a piped group's cd persists is unknown (#227). Quotes and
-    # escapes are dropped so `last''pipe` still counts.
-    lastpipe = bash and re.search(r"lastpipe|shopt|BASHOPTS", re.sub(
-        r"[\"'\\]", "", command))
     raw = command
     hidden_re = _HIDDEN_LOCATION_RE["ps" if ps else "cmd" if cmd else "bash"]
     scopes, closed = [], []
@@ -1488,17 +1483,18 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             # rest of the segment runs (`{ cd x; } | git y`).
             lead_close = re.match(r"[\s)}]*", seg_masked).group(0)
             piped = _group_piped(seg_masked, len(lead_close))
-            if piped and lastpipe:
-                piped = None
             for i, ch in enumerate(lead_close):
                 if ch.isspace() or not scopes:
                     continue
                 kind, *saved = scopes.pop()
-                if kind == "{" and seg_job is None and piped is None \
-                        or kind == "?":
-                    break
                 # A brace group runs in this shell unless it is a pipeline
-                # element or backgrounded; then its cd is undone (#227).
+                # element before the last or backgrounded; then its cd is
+                # undone (#227). The last stage may run here too (lastpipe,
+                # set by -O, BASHOPTS or BASH_ENV), so it is unmodeled.
+                if seg_job is None and (kind == "?" or kind in "{|" and
+                                        not piped and
+                                        (kind == "|" or piped is None)):
+                    break
                 if kind != "{" or seg_job is not None or piped:
                     (effective_cwd, stack, alt, parent_cwd, parent_stack,
                      parent_alt) = saved
@@ -1545,15 +1541,14 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             if closers:
                 closed = scopes[-len(closers):]
                 del scopes[-len(closers):]
-            # A group opened later in a pipeline (`x | (cd y` or
-            # `x | { cd y`) or by `coproc` is a subshell whatever closes it.
+            # A group opened by `coproc` is a subshell whatever closes it; one
+            # opened later in a pipeline (`x | { cd y`) is unless it is last.
             for i in openers:
                 piped = seg_masked[i] == "{" and _opener_piped(seg_masked, i)
-                if piped and lastpipe:
-                    piped = None
                 scopes.append((
-                    "(" if piped or re.search(r"(?<![\w-])coproc(?![\w-])",
-                                              seg_masked[:i]) else
+                    "(" if re.search(r"(?<![\w-])coproc(?![\w-])",
+                                     seg_masked[:i]) else
+                    "|" if piped else
                     "?" if piped is None else seg_masked[i],
                     effective_cwd, list(stack), list(alt), parent_cwd,
                     list(parent_stack), list(parent_alt)))
