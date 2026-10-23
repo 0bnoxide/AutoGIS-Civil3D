@@ -828,7 +828,12 @@ class TestMainRule(TempRepoCase):
                     f"true | ! {{ true; cd {safe}; }}; git reset --hard",
                     f"{{ {{ true; cd {safe}; }} | cat; }}; git reset --hard",
                     f"(cd {safe}; true) | git reset --hard",
-                    f"(true) | (true; cd {safe}; true); git reset --hard"):
+                    f"(true) | (true; cd {safe}; true); git reset --hard",
+                    f"cd {safe} && true & true | (true; true); "
+                    "git reset --hard",
+                    f"cd {safe} && true & (true; true); git reset --hard",
+                    f"cd {safe} && true & {{ true; }} | cat; "
+                    "git reset --hard"):
             with self.subTest(cmd=cmd):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     cmd, self.repo_path, self.repo))

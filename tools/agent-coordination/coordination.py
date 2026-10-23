@@ -1343,6 +1343,12 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             # The previous segment closed a Bash subshell: its cd is undone.
             effective_cwd, stack, parent_cwd, parent_stack = closed[0][1:]
             closed = []
+        if seg_job != job:
+            # A background job's `cd` moves the rest of that job only; the
+            # parent shell resumes where it was. Switch before a group
+            # below saves where it starts.
+            job, effective_cwd, alt = seg_job, parent_cwd, list(parent_alt)
+            stack = list(parent_stack)
         check = seg_masked
         if bash:
             # A `}` or `)` that starts the segment ends its group before the
@@ -1415,11 +1421,6 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 ).match(check) and _LOCATION_TEXT_RE.search(segment):
             yield ("opaque", effective_cwd, _UNMODELED_LOCATION)
             continue
-        if seg_job != job:
-            # A background job's `cd` moves the rest of that job only; the
-            # parent shell resumes where it was.
-            job, effective_cwd, alt = seg_job, parent_cwd, list(parent_alt)
-            stack = list(parent_stack)
         spans = _ps_block_spans(seg_masked) if ps else []
         if spans:
             # Check each block body as PowerShell, whether it runs (`if`,
