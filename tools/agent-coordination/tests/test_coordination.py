@@ -342,11 +342,13 @@ class TestMainRule(TempRepoCase):
         # Clobber, read-write and `>&` with a filename open it for writing
         # too; `>&2` only duplicates a descriptor.
         for command in ("echo boom >| seed.txt", "echo boom <> seed.txt",
-                        "echo boom 1<>seed.txt", "echo boom >& seed.txt"):
+                        "echo boom 1<>seed.txt", "echo boom >& seed.txt",
+                        "echo boom >& 2seed.txt", "echo boom >&-seed.txt"):
             with self.subTest(command=command):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     command, self.repo_path, self.repo))
-        for command in ("echo boom >&2", "echo boom 2>&1", "echo boom >&-"):
+        for command in ("echo boom >&2", "echo boom 2>&1", "echo boom >&-",
+                        "echo boom >& 2; git status", "echo boom 2>&1|cat"):
             with self.subTest(command=command):
                 self.assertIsNone(coordination.deny_reason_for_shell(
                     command, self.repo_path, self.repo))
