@@ -1264,6 +1264,10 @@ _UNRESOLVED_OPERAND_RE = {
 _CD_ENV_VARS = {"HOME", "CDPATH", "OLDPWD", "PWD", "POSIXLY_CORRECT"}
 
 
+_ARRAY_ASSIGN_RE = re.compile(
+    r"(?<![^\s;&|(])[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=\(")
+
+
 _RAW_WORD_RE = re.compile(
     r"""(?:[^\s"'\\;&|<>()]|\\.|"(?:\\.|[^"\\])*"|'[^']*')+""")
 
@@ -1485,8 +1489,15 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         # wrappers (env, sudo, xargs) start a process that cannot move it.
         # `command -v pushd` only describes pushd, so `-v`/`-V` stop the
         # peel; the stage is then an ordinary command.
+        if bash and _ARRAY_ASSIGN_RE.search(stages[0] if stages else "") \
+                and _LOCATION_TEXT_RE.search(segment):
+            # `A=(x y) cd z`: the lexer splits an array assignment into
+            # several words, so the prefix (and what it sets) is not known.
+            yield ("opaque", effective_cwd, _UNRESOLVED_LOCATION)
+            continue
         assigns = False
-        while bash and first and re.fullmatch(r"[A-Za-z_]\w*\+?=.*", first[0]):
+        while bash and first and re.fullmatch(
+                r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=.*", first[0]):
             # Only the variables Bash's cd/pushd read can redirect them.
             assigns |= re.match(r"\w+", first[0]).group(0) in _CD_ENV_VARS
             first = first[1:]  # `X=1 pushd x` still runs pushd in this shell
