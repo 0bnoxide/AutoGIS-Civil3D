@@ -1027,6 +1027,78 @@ class TestMainRule(TempRepoCase):
         self.assertIsNone(coordination.deny_reason_for_shell(
             f"(cd {safe} && git reset --hard)", self.repo_path, self.repo))
 
+    def test_cd_later_in_a_group_does_not_move_past_it(self):
+        # #227: the `cd` is its own segment inside the group.
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe, exist_ok=True)
+        main = self.repo_path.replace(os.sep, "/")
+        for cmd in (f"(true; cd {safe}); git reset --hard",
+                    f"{{ true; cd {safe}; }} | cat; git reset --hard",
+                    f"{{ true; cd {safe}; }} |& cat; git reset --hard",
+                    f"{{ true; cd {safe}; }} & git reset --hard",
+                    f"{{ true; cd {safe}; }} | git reset --hard",
+                    f"cat | {{ true; cd {safe}; }}; git reset --hard",
+                    f"cat | (true; cd {safe}); git reset --hard",
+                    f"true | ! {{ true; cd {safe}; }}; git reset --hard",
+                    f"{{ {{ true; cd {safe}; }} | cat; }}; git reset --hard",
+                    f"(cd {safe}; true) | git reset --hard",
+                    f"(true) | (true; cd {safe}; true); git reset --hard",
+                    f"cd {safe} && true & true | (true; true); "
+                    "git reset --hard",
+                    f"cd {safe} && true & (true; true); git reset --hard",
+                    f"cd {safe} && true & {{ true; }} | cat; "
+                    "git reset --hard",
+                    f"time {{ true; cd {safe}; }} | cat; git reset --hard",
+                    f"coproc X {{ true; cd {safe}; }}; git reset --hard",
+                    f"coproc {{ true; cd {safe}; }}; git reset --hard",
+                    f"time ! coproc {{ true; cd {safe}; }}; git reset --hard",
+                    f"{{\ntrue; cd {safe}\n}} | cat; git reset --hard"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    cmd, self.repo_path, self.repo))
+        # The tracked path never keeps the closing `)`.
+        cwds = [e[1] for e in coordination._shell_events(
+            f"(true; cd {safe}); true", main, _report_cwd=True)
+            if e[0] == "cwd"]
+        self.assertEqual([main], cwds)
+        # A brace group piped into a later stage runs in a subshell, even
+        # with lastpipe, so its cd does not move later statements. A last
+        # stage may run in this shell, so it is denied. (An unpiped group's
+        # cd away from main after a command stays denied: once anything has
+        # run, cd is uncertain.)
+        for cmd in (f"{{ true; cd {main}; }} | cat; git reset --hard",
+                    f"{{ true; cd {main}; }} 2>&1 >out.txt |& cat; "
+                    "git reset --hard",
+                    f"shopt -s lastpipe; {{ true; cd {main}; }} | cat; "
+                    "git reset --hard"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    cmd, safe, None))
+        for cmd in (f"{{ true; cd {main}; }}; git reset --hard",
+                    f"{{ true; cd {main}; }} >| out; git reset --hard",
+                    f"{{ true; cd {main}; }} > $((1|2)); git reset --hard",
+                    f"{{ true; cd {main}; }} > `echo a|cat`; "
+                    "git reset --hard",
+                    f"{{ true; cd {main}; }} > ${{x|y}}; git reset --hard",
+                    f"{{ true; cd {main}; }} < <(a|b); git reset --hard",
+                    f"{{ true; cd {main}; }} > $[1|2]; git reset --hard",
+                    f"{{ true; cd {main}; }} > @(a|b); git reset --hard",
+                    f"{{ true; cd {main}; }} # a|b\ngit reset --hard",
+                    f"echo $[1|2] {{ true; cd {main}; }}; git reset --hard",
+                    "set +m; shopt -s lastpipe; true | "
+                    f"{{ true; cd {main}; }}; git reset --hard",
+                    f"true | time {{ true; cd {main}; }}; git reset --hard",
+                    "bash -O lastpipe -c 'set +m; true | "
+                    f"{{ cd {main}; }}; git reset --hard'",
+                    f"printf coproc | {{ cd {main}; }}; git reset --hard",
+                    f"echo coproc {{ cd {main}; }}; git reset --hard"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    cmd, safe, None))
+        # Its redirect opens before the group runs, where it started.
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"{{ true; cd {safe}; }} > seed.txt", main, self.repo))
+
     def test_backgrounded_cd_does_not_move_later_segments(self):
         # `cd x &` runs in a background subshell/job: the parent stays put.
         safe = os.path.join(self.base, "safe").replace(os.sep, "/")
