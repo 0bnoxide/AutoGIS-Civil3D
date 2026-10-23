@@ -405,6 +405,13 @@ class TestMainRule(TempRepoCase):
             with self.subTest(command=command):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     command, safe, None))
+        # A redirect may come before the prefix or the command word.
+        for command in (f"> {safe}/out HOME={main} cd; git reset --hard",
+                        f"2>&1 >{safe}/out X=1 cd {main}; git reset --hard",
+                        f"> {safe}/out cd {main}; git reset --hard"):
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, safe, None))
         # A quoted name makes the word a command, not an assignment.
         for command in (f"F\\OO=x cd {safe}; git reset --hard",
                         f"'FOO'=x cd {safe}; git reset --hard"):

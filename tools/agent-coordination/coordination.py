@@ -1294,6 +1294,11 @@ def _array_prefixes_command(masked):
     return any(not re.fullmatch(rf"{_ASSIGN_WORD}\S*", w) for w in words)
 
 
+# A shell word as written, redirect operators included, split like argv.
+_RAW_TOKEN_RE = re.compile(
+    r"""(?:[^\s"'\\;|()]|\\.|"(?:\\.|[^"\\])*"|'[^']*')+""")
+
+
 _RAW_WORD_RE = re.compile(
     r"""(?:[^\s"'\\;&|<>()]|\\.|"(?:\\.|[^"\\])*"|'[^']*')+""")
 
@@ -1519,7 +1524,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         # `cd` is read before group peeling, as before #209, so peeling
         # never turns `(cd x` or a piped `{ cd x` into a parent-shell `cd`.
         ps_stages = [_ps_location_argv(st) for st in stages] if ps else []
-        first = ps_stages[0] if ps else _argv_of(stages[0], cmd=cmd)
+        # A redirect may come before the command word (`> f cd x`).
+        first = _drop_redirects(
+            ps_stages[0] if ps else _argv_of(stages[0], cmd=cmd))
         # `command pushd x` / `builtin cd x` still run in this shell; other
         # wrappers (env, sudo, xargs) start a process that cannot move it.
         # `command -v pushd` only describes pushd, so `-v`/`-V` stop the
@@ -1530,7 +1537,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             yield ("opaque", effective_cwd, _UNRESOLVED_LOCATION)
             continue
         assigns, peeled = False, 0
-        raw_words = _RAW_WORD_RE.findall(stages[0]) if bash and stages else []
+        raw_words = _drop_redirects(_RAW_TOKEN_RE.findall(stages[0])) \
+            if bash and stages else []
         while bash and first and re.fullmatch(
                 r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=.*", first[0]):
             if not re.match(_ASSIGN_WORD, (raw_words[peeled:] or [""])[0]):
