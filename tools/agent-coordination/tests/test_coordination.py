@@ -399,7 +399,9 @@ class TestMainRule(TempRepoCase):
                         f"A[1]=x cd {main}; git reset --hard",
                         f"A=(x y) HOME={main} c\\d; git reset --hard",
                         f"A=(x y) HOME={main} 'cd'; git reset --hard",
-                        f"A=($(echo x)) cd {main}; git reset --hard"):
+                        f"A=($(echo x)) cd {main}; git reset --hard",
+                        f'X="a b" A=(x y) c\\d {main}; git reset --hard',
+                        f"X=a\\ b A=(x y) cd {main}; git reset --hard"):
             with self.subTest(command=command):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     command, safe, None))
@@ -411,6 +413,7 @@ class TestMainRule(TempRepoCase):
                     command, self.repo_path, self.repo))
         # A bare array assignment, or one quoted as data, is not a prefix.
         for command in ("A=(x y); git status", "A=(x y)\ngit status",
+                        "A=(x y) > out.txt", 'X="a b" A=(x)',
                         "A=($(echo x)) B=1",
                         "printf '%s\\n' 'example A=(x y) cd /tmp'"):
             with self.subTest(command=command):
@@ -495,6 +498,16 @@ class TestMainRule(TempRepoCase):
                 if e[0] == "cwd"}
         self.assertIn("Z:/main", cwds(f"cd {safe} & dir"))
         self.assertNotIn("Z:/main", cwds(f"cd /d {safe} & dir"))
+        # A statement before the change may remove its target (#230).
+        for command, kw in (
+                (f"rmdir {safe}; cd {safe}; git reset --hard", {}),
+                (f"git status; cd {safe}; git reset --hard", {}),
+                (f"Remove-Item {safe}; Set-Location {safe}; git reset --hard",
+                 {"ps": True}),
+                (f"bash -c 'rmdir {safe}; cd {safe}; git reset --hard'", {})):
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, main, self.repo, **kw))
         # A push that may fail leaves no known entry for a later pop.
         self.assertIsNotNone(coordination.deny_reason_for_shell(
             f"pushd {missing}; cd {main}; popd; git reset --hard", safe, None))
@@ -902,8 +915,11 @@ class TestMainRule(TempRepoCase):
                     "git reset --hard"):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, safe, self.repo, ps=True), cmd)
-        for cmd in (f"if ($true) {{ cd {main} }}; cd {safe}; git reset --hard",
-                    # Only one branch of an if/else chain runs.
+        # #230: the `if` ran code first, so `cd {safe}` may fail.
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            f"if ($true) {{ cd {main} }}; cd {safe}; git reset --hard", safe,
+            self.repo, ps=True))
+        for cmd in (# Only one branch of an if/else chain runs.
                     f"if ($true) {{ cd {main} }} else {{ git reset --hard }}",
                     f"if ($a) {{ cd {main} }} elseif ($b) {{ git reset --hard }}",
                     # A background job's location never reaches the parent.

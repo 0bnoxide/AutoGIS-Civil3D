@@ -1265,28 +1265,33 @@ _CD_ENV_VARS = {"HOME", "CDPATH", "OLDPWD", "PWD", "POSIXLY_CORRECT"}
 
 
 _ASSIGN_WORD = r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?="
-# Leading assignment words, then an array assignment's opening paren.
-_ARRAY_ASSIGN_RE = re.compile(
-    rf"[\s(]*(?:{_ASSIGN_WORD}[^\s(]*\s+)*{_ASSIGN_WORD}\(")
 
 
 def _array_prefixes_command(masked):
-    """True when an array assignment (`A=(x y)`) prefixes a command word.
+    """True when an array assignment (`A=(x y)`) shares its statement with
+    anything but assignments and redirections.
 
-    The lexer splits the array into several words, so neither the prefix nor
-    the command after it is known; a bare `A=(x y)` statement is fine.
+    The lexer splits the array into several words, so the words around it
+    (a prefixed command, or what a scalar prefix sets) are not known; a bare
+    `A=(x y)` statement, with or without a redirect, is fine.
     """
-    m = _ARRAY_ASSIGN_RE.match(masked)
-    if not m:
+    text = re.sub(r"\"[^\"]*\"|'[^']*'", "Q", masked)
+    out, pos = [], 0
+    for m in re.finditer(rf"(?<![^\s;&|(]){_ASSIGN_WORD}\(", text):
+        if m.start() < pos:
+            continue
+        out.append(text[pos:m.end() - 1])
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[i], 0)
+            i += 1
+        if depth:
+            return True
+        pos = i
+    if not out:
         return False
-    depth, i = 1, m.end()
-    while i < len(masked) and depth:
-        depth += {"(": 1, ")": -1}.get(masked[i], 0)
-        i += 1
-    rest = masked[i:]
-    return bool(rest.strip()) and (depth > 0 or bool(
-        re.match(r"\s", rest)) and not re.fullmatch(
-            rf"(?:\s+{_ASSIGN_WORD}\S*)*\s*", rest))
+    words = _drop_redirects(("".join(out) + " " + text[pos:]).split())
+    return any(not re.fullmatch(rf"{_ASSIGN_WORD}\S*", w) for w in words)
 
 
 _RAW_WORD_RE = re.compile(
@@ -1364,7 +1369,7 @@ def _ps_ambiguous_hash(command, start, end):
 
 
 def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
-                  _report_cwd=False):
+                  _report_cwd=False, _fs_touched=False):
 
     """Yield ("git", argv, cwd) and ("target", resolved_path) events.
 
@@ -1388,6 +1393,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
     raw = command
     hidden_re = _HIDDEN_LOCATION_RE["ps" if ps else "cmd" if cmd else "bash"]
     scopes, closing = [], 0
+    # Set once a statement other than a location change has run: from then
+    # on no target's existence is taken from the disk as it is now.
+    ran = False
     if ps:
         # A backtick before a line break continues the line (CRLF: only the
         # CR is escaped, so the LF still ends it).
@@ -1480,15 +1488,20 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 # A loop body runs again from wherever it moved to, so it
                 # is re-checked from each new location; a body that keeps
                 # moving (`foreach (...) { cd sub; ... }`) fails closed.
-                moved, frontier = [], list(chain_base)
+                moved, frontier, ran_block = [], list(chain_base), False
                 for _ in range(_MAX_BLOCK_PASSES):
                     reached = []
                     for base in frontier:
+                        # A body may repeat after its own commands ran, so
+                        # its location targets are never taken as certain.
                         for event in _shell_events(
                                 segment[start + 1:end], base, ps=True,
-                                _depth=_depth + 1, _report_cwd=True):
+                                _depth=_depth + 1, _report_cwd=True,
+                                _fs_touched=True):
                             if event[0] == "cwd":
                                 reached.append(event[1])
+                            elif event[0] == "ran":
+                                ran_block = True
                             else:
                                 yield event
                     frontier = [c for c in dict.fromkeys(reached)
@@ -1499,6 +1512,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 else:
                     yield ("opaque", effective_cwd)
                 alt += [c for c in moved if c not in cwds()]
+                ran = ran or ran_block
             if job is None:
                 parent_alt = list(alt)
         stages = _pipeline_stages(segment, seg_masked, bash=bash)
@@ -1620,7 +1634,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                             and _enterable(joined):
                         reached.append(os.path.realpath(joined))
                     reached.append(target)
-                    if not _enterable(target) or (
+                    # Existence is judged now; an earlier statement may
+                    # remove or replace the directory before this runs.
+                    if _fs_touched or ran or not _enterable(target) or (
                             cmd and word != "pushd" and "/d" not in
                             [a.lower() for a in args] and
                             ntpath.splitdrive(target)[0].lower() !=
@@ -1651,6 +1667,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 parent_cwd, parent_stack = effective_cwd, list(stack)
                 parent_alt = list(alt)
             continue
+        ran = True  # a command, not a location change, runs here
         if bash:
             segment, seg_masked = _peel_bash_grouping(segment, seg_masked)
             stages = _pipeline_stages(segment, seg_masked, bash=True)
@@ -1678,7 +1695,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                     for base in cwds():
                         yield from _shell_events(
                             nested[0], base, ps=nested[1],
-                            _depth=_depth + 1, cmd=nested[2])
+                            _depth=_depth + 1, cmd=nested[2],
+                            _fs_touched=_fs_touched or ran)
                     continue
                 # The opaque remainder could mutate this repository; never
                 # silently discard it at the parser depth limit.
@@ -1699,6 +1717,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
     if _report_cwd:
         for final in [parent_cwd] + parent_alt:
             yield ("cwd", final)
+        if ran:
+            yield ("ran", None)
 
 
 def shell_write_targets(command, cwd, ps=False, cmd=False):
