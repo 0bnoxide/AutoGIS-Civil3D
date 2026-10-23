@@ -1833,9 +1833,10 @@ class TestPreToolUseAdapter(TempRepoCase):
         coordination.claim(self.repo, "s2", "file_glob", "Src/Lib/*")
         claims = coordination.list_claims(self.repo)
         target = os.path.join(self.repo_path, "src")
-        self.assertIsNone(coordination.glob_conflict(
-            claims, "s1", [], subtrees=[target]))  # POSIX: distinct paths
-        self.assertFalse(coordination._globs_overlap("Src/*", "src/a.cs"))
+        if os.name != "nt":  # case-sensitive: distinct paths
+            self.assertIsNone(coordination.glob_conflict(
+                claims, "s1", [], subtrees=[target]))
+            self.assertFalse(coordination._globs_overlap("Src/*", "src/a.cs"))
         with mock.patch("os.path.normcase", lambda p: p.lower()):
             self.assertIn("contains file_glob 'Src/Lib/*'",
                           coordination.glob_conflict(
