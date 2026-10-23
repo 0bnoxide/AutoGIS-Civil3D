@@ -512,9 +512,11 @@ Known limit: the Codex sandbox blocks `tasklist`, so `_pid_snapshot()` in
 `tools/agent-coordination/coordination.py` returns `None` ("unknown") and
 the coordination PID-liveness tests fail there whatever the change under
 review. That is the designed answer when no snapshot can be taken, not a
-defect in the PR. Those failures alone do not count against the PR: run
+defect in the PR. The verifier must issue the usable verdict itself, so
+give it the evidence before it runs: run
 `python -m unittest discover -s tools/agent-coordination/tests` in host
-context on the same SHA, record the result with the verdict, and require the
-CI `coordination` job, which runs the suite outside the sandbox, to pass.
-Every other finding in the verdict still stands. Do not relax
-the tests or the sandbox to make them pass.
+context on the submitted SHA, then append an environment note to the
+verifier prompt stating this limit and quoting that host result. A FAIL
+issued without the note is rerun on the same SHA with it. The CI
+`coordination` job, which runs the suite outside the sandbox, must still
+pass. Do not relax the tests or the sandbox to make them pass.
