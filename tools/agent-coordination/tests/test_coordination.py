@@ -381,6 +381,16 @@ class TestMainRule(TempRepoCase):
                 with self.subTest(command=command):
                     self.assertIsNotNone(coordination.deny_reason_for_shell(
                         command, self.repo_path, self.repo))
+        # An assignment cd does not read leaves the change modeled.
+        for command in (f"FOO=x cd {safe}; git reset --hard",
+                        f"FOO=x pushd {safe} && git reset --hard"):
+            with self.subTest(command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, self.repo_path, self.repo))
+        for name in ("CDPATH", "OLDPWD", "PWD", "POSIXLY_CORRECT"):
+            with self.subTest(name=name):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    f"FOO=1 {name}=x cd {safe}; git reset --hard", safe, None))
         # A leading unquoted tilde is still resolved.
         with mock.patch.dict(os.environ, {"HOME": self.base,
                                           "USERPROFILE": self.base}):

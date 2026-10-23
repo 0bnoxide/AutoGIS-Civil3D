@@ -1259,6 +1259,11 @@ _UNRESOLVED_OPERAND_RE = {
 }
 
 
+# Variables Bash's cd/pushd consult: the bare-cd target, the search path,
+# `cd -`, the logical base for -L, and POSIX-mode resolution.
+_CD_ENV_VARS = {"HOME", "CDPATH", "OLDPWD", "PWD", "POSIXLY_CORRECT"}
+
+
 _RAW_WORD_RE = re.compile(
     r"""(?:[^\s"'\\;&|<>()]|\\.|"(?:\\.|[^"\\])*"|'[^']*')+""")
 
@@ -1482,8 +1487,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         # peel; the stage is then an ordinary command.
         assigns = False
         while bash and first and re.fullmatch(r"[A-Za-z_]\w*\+?=.*", first[0]):
+            # Only the variables Bash's cd/pushd read can redirect them.
+            assigns |= re.match(r"\w+", first[0]).group(0) in _CD_ENV_VARS
             first = first[1:]  # `X=1 pushd x` still runs pushd in this shell
-            assigns = True
         while not (ps or cmd) and first[:1] in (["command"], ["builtin"]):
             if first[0] == "builtin" and first[1:2] != ["--"] \
                     and first[1:2] and first[1].startswith("-"):
