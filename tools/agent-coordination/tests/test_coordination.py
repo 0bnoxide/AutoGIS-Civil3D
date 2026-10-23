@@ -1827,6 +1827,24 @@ class TestPreToolUseAdapter(TempRepoCase):
         self.assertIn("outside your claimed file scope",
                       decide("Bash", "rmdir srclib"))
 
+    def test_subtree_and_overlap_checks_fold_case_on_windows(self):
+        # #233: on a case-insensitive checkout a claim keeps its spelling
+        # (`Src/Lib/*`) while the normalized target is `src`.
+        coordination.claim(self.repo, "s2", "file_glob", "Src/Lib/*")
+        claims = coordination.list_claims(self.repo)
+        target = os.path.join(self.repo_path, "src")
+        if os.name != "nt":  # case-sensitive: distinct paths
+            self.assertIsNone(coordination.glob_conflict(
+                claims, "s1", [], subtrees=[target]))
+            self.assertFalse(coordination._globs_overlap("Src/*", "src/a.cs"))
+        with mock.patch("os.path.normcase", lambda p: p.lower()):
+            self.assertIn("contains file_glob 'Src/Lib/*'",
+                          coordination.glob_conflict(
+                              claims, "s1", [], subtrees=[target]))
+            self.assertTrue(coordination._globs_overlap("Src/*", "src/a.cs"))
+            self.assertIsNone(coordination.glob_conflict(
+                claims, "s1", [], subtrees=[target + "lib"]))
+
     def test_move_into_existing_directory_checks_the_moved_path(self):
         # Review of #184: `mv src docs` writes `docs/src` when docs exists.
         run_git(["checkout", "-q", "-b", "feature"], self.repo_path)

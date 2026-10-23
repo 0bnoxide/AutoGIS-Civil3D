@@ -1740,10 +1740,17 @@ def _glob_prefix(value):
     return None
 
 
+def _fold(path):
+    """Case- and separator-fold a repo-relative path with the platform's
+    rules, so a claim spelled `Src/*` meets a target `src` on Windows (#233)."""
+    return os.path.normcase(path).replace("\\", "/")
+
+
 def _globs_overlap(a, b):
     pa, pb = _glob_prefix(a), _glob_prefix(b)
     if pa is None or pb is None:
         return True  # unvalidatable legacy pattern: treat as conflicting
+    pa, pb = _fold(pa), _fold(pb)
     # Segment-boundary comparison: `src` and `srclib/*` are siblings, not a
     # conflict, and `src/main` vs `src/main2` differ. A directory claim
     # conflicts with anything at or under its prefix.
@@ -2453,8 +2460,9 @@ def glob_conflict(claims, session, targets, subtrees=()):
                 return (f"'{rel}' is inside file_glob '{record['value']}' "
                         f"claimed by session {record['session']} "
                         f"(claim {record['id']}).")
-            claimed = prefix.rstrip("/")
-            if rel == "." or claimed == rel or claimed.startswith(rel + "/"):
+            claimed = _fold(prefix).rstrip("/")
+            if rel == "." or claimed == _fold(rel) \
+                    or claimed.startswith(_fold(rel) + "/"):
                 return (f"'{rel}' contains file_glob '{record['value']}' "
                         f"claimed by session {record['session']} "
                         f"(claim {record['id']}).")
