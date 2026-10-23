@@ -416,6 +416,16 @@ class TestMainRule(TempRepoCase):
         self.assertIsNotNone(coordination.deny_reason_for_shell(
             f"cd {safe}/deep/../inner; git reset --hard", main, self.repo))
 
+    def test_stationary_block_cd_reaches_a_fixed_point(self):
+        # #234: `cd .` in a block normalizes to the same directory, so the
+        # re-check settles instead of exhausting its passes.
+        self.assertIsNone(coordination.deny_reason_for_shell(
+            "if ($true) { cd . }; git status", self.repo_path, self.repo,
+            ps=True))
+        self.assertIsNotNone(coordination.deny_reason_for_shell(
+            "if ($true) { cd . }; git reset --hard", self.repo_path,
+            self.repo, ps=True))
+
     def test_failed_location_change_keeps_old_directory(self):
         # #230: a change into a directory that does not exist now may fail
         # and leave the shell where it was, so later statements are checked
