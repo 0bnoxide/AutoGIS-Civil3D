@@ -153,8 +153,9 @@ GIT_MUTATORS = {
 }
 # Every operator that opens its word for writing: `>`, `>>`, Bash's clobber
 # `>|` and read-write `<>`, and `>&` before a filename (`>&2`, `>&-` only
-# duplicate or close a descriptor; `>&2file` is a filename).
-_WRITE_REDIR_OP = r"(?:>{1,2}\|?|<>|>&(?!\s*(?:\d+|-)(?![^\s|;&<>])))"
+# duplicate or close a descriptor, quoted or not; `>&2file` is a filename).
+_WRITE_REDIR_OP = (r"(?:>{1,2}\|?|<>|>&(?!\s*(?:\d+|-|\"(?:\d+|-)\""
+                   r"|'(?:\d+|-)')(?![^\s|;&<>])))")
 REDIRECT_RE = re.compile(rf"(?<![<>]){_WRITE_REDIR_OP}\s*([^\s|;&<>]+)")
 
 
