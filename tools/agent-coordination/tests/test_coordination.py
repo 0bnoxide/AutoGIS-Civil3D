@@ -396,9 +396,19 @@ class TestMainRule(TempRepoCase):
         for command in (f"A=(x y) HOME={main} cd; git reset --hard",
                         f"A=(x y) cd {main}; git reset --hard",
                         f"A[1]=x HOME={main} cd; git reset --hard",
-                        f"A[1]=x cd {main}; git reset --hard"):
+                        f"A[1]=x cd {main}; git reset --hard",
+                        f"A=(x y) HOME={main} c\\d; git reset --hard",
+                        f"A=(x y) HOME={main} 'cd'; git reset --hard",
+                        f"A=($(echo x)) cd {main}; git reset --hard"):
             with self.subTest(command=command):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, safe, None))
+        # A bare array assignment, or one quoted as data, is not a prefix.
+        for command in ("A=(x y); git status", "A=(x y)\ngit status",
+                        "A=($(echo x)) B=1",
+                        "printf '%s\\n' 'example A=(x y) cd /tmp'"):
+            with self.subTest(command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
                     command, safe, None))
         # A leading unquoted tilde is still resolved.
         with mock.patch.dict(os.environ, {"HOME": self.base,

@@ -1264,8 +1264,29 @@ _UNRESOLVED_OPERAND_RE = {
 _CD_ENV_VARS = {"HOME", "CDPATH", "OLDPWD", "PWD", "POSIXLY_CORRECT"}
 
 
+_ASSIGN_WORD = r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?="
+# Leading assignment words, then an array assignment's opening paren.
 _ARRAY_ASSIGN_RE = re.compile(
-    r"(?<![^\s;&|(])[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=\(")
+    rf"[\s(]*(?:{_ASSIGN_WORD}[^\s(]*\s+)*{_ASSIGN_WORD}\(")
+
+
+def _array_prefixes_command(masked):
+    """True when an array assignment (`A=(x y)`) prefixes a command word.
+
+    The lexer splits the array into several words, so neither the prefix nor
+    the command after it is known; a bare `A=(x y)` statement is fine.
+    """
+    m = _ARRAY_ASSIGN_RE.match(masked)
+    if not m:
+        return False
+    depth, i = 1, m.end()
+    while i < len(masked) and depth:
+        depth += {"(": 1, ")": -1}.get(masked[i], 0)
+        i += 1
+    rest = masked[i:]
+    return bool(rest.strip()) and (depth > 0 or bool(
+        re.match(r"\s", rest)) and not re.fullmatch(
+            rf"(?:\s+{_ASSIGN_WORD}\S*)*\s*", rest))
 
 
 _RAW_WORD_RE = re.compile(
@@ -1489,10 +1510,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         # wrappers (env, sudo, xargs) start a process that cannot move it.
         # `command -v pushd` only describes pushd, so `-v`/`-V` stop the
         # peel; the stage is then an ordinary command.
-        if bash and _ARRAY_ASSIGN_RE.search(stages[0] if stages else "") \
-                and _LOCATION_TEXT_RE.search(segment):
-            # `A=(x y) cd z`: the lexer splits an array assignment into
-            # several words, so the prefix (and what it sets) is not known.
+        if bash and _array_prefixes_command(_pipeline_stages(
+                seg_masked, seg_masked, bash=True)[0]):
+            # `A=(x y) c\d z`: the command after an array prefix is unknown.
             yield ("opaque", effective_cwd, _UNRESOLVED_LOCATION)
             continue
         assigns = False
