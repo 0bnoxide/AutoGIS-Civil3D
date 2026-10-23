@@ -853,8 +853,11 @@ class TestMainRule(TempRepoCase):
             with self.subTest(cmd=cmd):
                 self.assertIsNone(coordination.deny_reason_for_shell(
                     cmd, cwd, repo))
-        self.assertIsNotNone(coordination.deny_reason_for_shell(
-            f"{{ true; cd {main}; }}; git reset --hard", safe, None))
+        for cmd in (f"{{ true; cd {main}; }}; git reset --hard",
+                    f"{{ true; cd {main}; }} >| out; git reset --hard"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    cmd, safe, None))
         # Its redirect opens before the group runs, where it started.
         self.assertIsNotNone(coordination.deny_reason_for_shell(
             f"{{ true; cd {safe}; }} > seed.txt", main, self.repo))

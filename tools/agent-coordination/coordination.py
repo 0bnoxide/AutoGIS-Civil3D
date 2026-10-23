@@ -880,6 +880,8 @@ def _pipeline_stages(segment, segment_masked, bash=False):
 
 
 _BASH_GROUP_OPEN_RE = re.compile(r"\s*(?:[!({]\s*)*")
+# A pipeline `|` or `|&`, not the clobber redirect `>|` (#227).
+_PIPE_RE = re.compile(r"(?<!>)\|")
 
 
 def _peel_bash_grouping(segment, masked):
@@ -1361,7 +1363,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 # A brace group runs in this shell unless it is a pipeline
                 # element or backgrounded; then its cd is undone (#227).
                 if kind != "{" or seg_job is not None \
-                        or "|" in seg_masked[i:]:
+                        or _PIPE_RE.search(seg_masked, i):
                     effective_cwd, stack, parent_cwd, parent_stack = saved
                 else:
                     # `{ cd x; } > f` opens f before the group runs.
@@ -1399,10 +1401,10 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             # A group opened later in a pipeline (`x | (cd y` or
             # `x | { cd y`) is a subshell whatever closes it.
             for i in openers:
-                scopes.append(("(" if "|" in seg_masked[:i] else
+                scopes.append(("(" if _PIPE_RE.search(seg_masked, 0, i) else
                                seg_masked[i], effective_cwd, list(stack),
                                parent_cwd, list(parent_stack)))
-            if closed and "|" in seg_masked[closers[-1]:] and \
+            if closed and _PIPE_RE.search(seg_masked, closers[-1]) and \
                     closed[0][1:] != (effective_cwd, stack, parent_cwd,
                                       parent_stack):
                 # `(cd x; y) | git z`: the stages after `)` run where the
