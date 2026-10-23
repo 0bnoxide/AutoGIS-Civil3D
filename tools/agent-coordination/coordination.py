@@ -151,7 +151,11 @@ GIT_MUTATORS = {
     # tree and ref with no commit of its own.
     "read-tree", "checkout-index", "sparse-checkout", "pull",
 }
-REDIRECT_RE = re.compile(r"(?<![<>])>{1,2}\s*([^\s|;&<>]+)")
+# Every operator that opens its word for writing: `>`, `>>`, Bash's clobber
+# `>|` and read-write `<>`, and `>&` before a filename (`>&2`, `>&-` only
+# duplicate or close a descriptor).
+_WRITE_REDIR_OP = r"(?:>{1,2}\|?|<>|>&(?!\s*[\d-]))"
+REDIRECT_RE = re.compile(rf"(?<![<>]){_WRITE_REDIR_OP}\s*([^\s|;&<>]+)")
 
 
 def deny_reason_for_target(target_path, repo_hint=None):
@@ -570,10 +574,11 @@ _PS_QUOTE_RE = re.compile(
     rf"|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*[{_PS_SQ}]"
     rf"|[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*[{_PS_DQ}]")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
-_REDIR_TARGET_RE = re.compile(r">{1,2}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
+_REDIR_TARGET_RE = re.compile(
+    rf"{_WRITE_REDIR_OP}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
 # Bash: a backslash escapes the next character, including a space (#178).
 _BASH_REDIR_TARGET_RE = re.compile(
-    r">{1,2}\s*(\"[^\"]*\"|'[^']*'|(?:\\.|[^\s|;&<>\\])+)")
+    rf"{_WRITE_REDIR_OP}\s*(\"[^\"]*\"|'[^']*'|(?:\\.|[^\s|;&<>\\])+)")
 
 
 def _ps_certain_comment(command, start):
@@ -864,14 +869,17 @@ def _shell_segments(command, masked_all, cmd=False, ps=False):
             pending = []
 
 
+_BASH_PIPE_RE = re.compile(r"(?<!>)\|&?")
+
+
 def _pipeline_stages(segment, segment_masked, bash=False):
     """Split a segment on unquoted pipeline separators.
 
     Bash `|&` is one separator (`2>&1 |`), so the next stage does not start
-    with `&` (#208).
+    with `&` (#208); `>|` is a redirect, not a pipe.
     """
     pipe_cuts = [m.span() for m in re.finditer(
-        r"\|&?" if bash else r"\|", segment_masked)] \
+        _BASH_PIPE_RE if bash else r"\|", segment_masked)] \
         + [(len(segment), len(segment))]
     stages, last = [], 0
     for cut_start, cut_end in pipe_cuts:
@@ -889,7 +897,7 @@ def _peel_bash_grouping(segment, masked):
     command and its last word is not `--hard)` (#209). Parentheses balanced
     inside the segment, such as `$( ... )`, are kept."""
     blanks, stage_start = set(), 0
-    for m in re.finditer(r"\|&?|$", masked):
+    for m in re.finditer(rf"{_BASH_PIPE_RE.pattern}|$", masked):
         lead = _BASH_GROUP_OPEN_RE.match(masked, stage_start)
         blanks.update(i for i in range(lead.start(), lead.end())
                       if not masked[i].isspace())
@@ -1225,7 +1233,10 @@ def _location_change(word, args, ps, cmd):
     return (paths[0] if paths else None), True
 
 
-_REDIR_OP_RE = re.compile(r"(?:\d*&?|\*)>>?|\d*<")
+# Any redirect operator, with its optional descriptor (`2`, Bash `{fd}`,
+# PowerShell `*`): here-strings and here-docs, `<>`, dups, `&>`, clobber.
+_REDIR_OP_RE = re.compile(
+    r"(?:\{\w+\}|\d+|\*)?(?:<<<|<<-?|<>|[<>]&|&>>?|>>?\|?|<)")
 
 
 def _drop_redirects(args):

@@ -339,6 +339,17 @@ class TestMainRule(TempRepoCase):
         reason = coordination.deny_reason_for_shell(
             "echo boom > seed.txt", self.repo_path, self.repo)
         self.assertIsNotNone(reason)
+        # Clobber, read-write and `>&` with a filename open it for writing
+        # too; `>&2` only duplicates a descriptor.
+        for command in ("echo boom >| seed.txt", "echo boom <> seed.txt",
+                        "echo boom 1<>seed.txt", "echo boom >& seed.txt"):
+            with self.subTest(command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, self.repo_path, self.repo))
+        for command in ("echo boom >&2", "echo boom 2>&1", "echo boom >&-"):
+            with self.subTest(command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, self.repo_path, self.repo))
 
     def test_unexpanded_var_redirect_skipped(self):
         # Not evaluable without expansion: fail open, git hooks backstop.
@@ -408,10 +419,26 @@ class TestMainRule(TempRepoCase):
         # A redirect may come before the prefix or the command word.
         for command in (f"> {safe}/out HOME={main} cd; git reset --hard",
                         f"2>&1 >{safe}/out X=1 cd {main}; git reset --hard",
-                        f"> {safe}/out cd {main}; git reset --hard"):
+                        f"> {safe}/out cd {main}; git reset --hard",
+                        # Every operator form consumes its own operand.
+                        f"<<< payload HOME={main} cd; git reset --hard",
+                        f"<< EOF HOME={main} cd; git reset --hard",
+                        f"<> {safe}/f HOME={main} cd; git reset --hard",
+                        f">& {safe}/f HOME={main} cd; git reset --hard",
+                        f"<& 0 HOME={main} cd; git reset --hard",
+                        f"{{fd}}> {safe}/f HOME={main} cd; git reset --hard",
+                        f"cd <<< x {main}; git reset --hard",
+                        # `>|` is a clobber redirect, not a pipe.
+                        f">| {safe}/f cd {main}; git reset --hard",
+                        f"cd {main} >| {safe}/f; git reset --hard"):
             with self.subTest(command=command):
                 self.assertIsNotNone(coordination.deny_reason_for_shell(
                     command, safe, None))
+        for command in (f"<<< x cd {safe}; git status",
+                        f"cd {safe} 2>&1 | cat; git status"):
+            with self.subTest(command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, self.repo_path, self.repo))
         # A quoted name makes the word a command, not an assignment.
         for command in (f"F\\OO=x cd {safe}; git reset --hard",
                         f"'FOO'=x cd {safe}; git reset --hard"):
