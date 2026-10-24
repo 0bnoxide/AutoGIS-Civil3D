@@ -603,8 +603,9 @@ _PS_CONTROL_ESCAPES = "0abefnrtuv"
 def _dequote_word(word, shell):
     """The text a shell word names once its quotes and escapes are read."""
     out = []
+    quotes = {"bash": "\"'", "ps": _PS_DQ + _PS_SQ, "cmd": '"'}[shell]
     for frag in _TARGET_FRAGMENT_RE[shell].findall(word):
-        if len(frag) < 2 or frag[0] not in _PS_DQ + _PS_SQ:
+        if len(frag) < 2 or frag[0] not in quotes:
             if shell == "bash":
                 frag = re.sub(r"\\(.)", r"\1", frag)
             elif shell == "ps":

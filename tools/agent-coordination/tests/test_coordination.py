@@ -607,7 +607,10 @@ class TestMainRule(TempRepoCase):
                 ("bash", 'echo x > "a\\"b\\x"', 'a"b\\x'),
                 ("ps", "echo x > 'a''b'\"c`\"d\"", "a'bc\"d"),
                 ("ps", 'echo x > "a""b"', 'a"b'),
-                ("cmd", 'echo x > "a"b^c', "abc")):
+                ("cmd", 'echo x > "a"b^c', "abc"),
+                # Typographic quotes are PowerShell's only.
+                ("bash", "echo x > \u201ca\u201d", "\u201ca\u201d"),
+                ("cmd", "echo x > \u201ca\u201d", "\u201ca\u201d")):
             with self.subTest(kind=kind, command=command):
                 self.assertEqual(coordination.shell_write_targets(
                     command, "/r", ps=kind == "ps", cmd=kind == "cmd"),
