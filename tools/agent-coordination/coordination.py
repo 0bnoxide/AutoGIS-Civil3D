@@ -1001,8 +1001,11 @@ def _redirect_targets(segment, segment_masked, bash=False, cmd=False):
         target = _REDIR_TARGET_RE[shell].match(segment, match.start())
         if target:
             raw = target.group(1)
-            targets.append(_dequote_word(
-                _cmd_unescape(raw) if cmd else raw, shell))
+            word = _dequote_word(_cmd_unescape(raw) if cmd else raw, shell)
+            # Only Bash's unquoted leading `~` is a home; cmd has none.
+            if word.startswith("~") and (cmd or bash and raw[0] != "~"):
+                word = "./" + word
+            targets.append(word)
     return targets
 
 
@@ -1206,10 +1209,15 @@ def _move_destinations(moves, cwd, ps, cmd=False):
     return raw
 
 
-def _target_events(raw_targets, cwd, ps, cmd=False):
-    """Yield resolved target events for raw shell write operands."""
+def _target_events(raw_targets, cwd, ps, cmd=False, dequoted=False):
+    """Yield resolved target events for raw shell write operands.
+
+    `dequoted` targets (redirects) were already read as the shell reads
+    them, so a quote left in one is a literal filename character.
+    """
     for target in raw_targets:
-        target = target.strip("\"'" + (_PS_SQ + _PS_DQ if ps else ""))
+        if not dequoted:
+            target = target.strip("\"'" + (_PS_SQ + _PS_DQ if ps else ""))
         if ps or cmd:
             target = target.replace("\\", "/")
         if ps and re.match(r"[A-Za-z]{2,}:", target):
@@ -1542,7 +1550,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 else:
                     # `{ cd x; } > f` opens f before the group runs.
                     yield from _target_events(_redirect_targets(
-                        segment, seg_masked, bash=True), saved[0], ps)
+                        segment, seg_masked, bash=True), saved[0], ps, dequoted=True)
                 if ch == ")":
                     segment = segment[:i] + " " + segment[i + 1:]
                     seg_masked = seg_masked[:i] + " " + seg_masked[i + 1:]
@@ -1725,7 +1733,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 a.startswith("-") and "c" in a for a in first[1:]):
             yield from _target_events(_redirect_targets(
                 segment, seg_masked, bash=bash, cmd=cmd), effective_cwd, ps,
-                cmd=cmd)
+                cmd=cmd, dequoted=True)
             stack = []  # `dirs -c` clears the stack later popds would use
             if job is None:
                 parent_stack = []
@@ -1737,7 +1745,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             for base in cwds():
                 yield from _target_events(_redirect_targets(
                     segment, seg_masked, bash=bash, cmd=cmd), base, ps,
-                    cmd=cmd)
+                    cmd=cmd, dequoted=True)
             args = _drop_redirects(first[1:])
             path, modeled = _location_change(word, args, ps, cmd)
             if not modeled or alt and not path and (
@@ -1827,8 +1835,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         elif spans:
             stages = _pipeline_stages(
                 _drop_block_braces(segment, spans), seg_masked)
-        raw_targets = _redirect_targets(segment, seg_masked, bash=bash,
-                                        cmd=cmd)
+        redirects = _redirect_targets(segment, seg_masked, bash=bash,
+                                      cmd=cmd)
+        raw_targets = []
         raw_subtrees, moves = [], []
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
@@ -1862,6 +1871,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             raw_subtrees += operands
             moves += argv_moves
         for base in cwds():
+            yield from _target_events(redirects, base, ps, cmd=cmd,
+                                      dequoted=True)
             yield from _target_events(raw_targets, base, ps, cmd=cmd)
             subtrees = _subtree_operands(raw_subtrees, base, bash) \
                 + _move_destinations(moves, base, ps, cmd=cmd)

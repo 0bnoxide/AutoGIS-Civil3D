@@ -608,6 +608,13 @@ class TestMainRule(TempRepoCase):
                 ("ps", "echo x > 'a''b'\"c`\"d\"", "a'bc\"d"),
                 ("ps", 'echo x > "a""b"', 'a"b'),
                 ("cmd", 'echo x > "a"b^c', "abc"),
+                # A quote read as a literal stays in the name.
+                ("bash", 'echo x > "\\"/tmp/p.txt"', '"/tmp/p.txt'),
+                ("ps", "echo x > \"'/tmp/p.txt'\"", "'/tmp/p.txt'"),
+                # A quoted `~` (or any in cmd) is no home directory.
+                ("bash", 'echo x > "~"/f', "./~/f"),
+                ("bash", "echo x > '~/f'", "./~/f"),
+                ("cmd", "echo x > ~\\f", "./~/f"),
                 # Typographic quotes are PowerShell's only.
                 ("bash", "echo x > \u201ca\u201d", "\u201ca\u201d"),
                 ("cmd", "echo x > \u201ca\u201d", "\u201ca\u201d")):
