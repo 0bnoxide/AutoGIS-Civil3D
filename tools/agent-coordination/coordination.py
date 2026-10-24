@@ -575,11 +575,52 @@ _PS_QUOTE_RE = re.compile(
     rf"|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*[{_PS_SQ}]"
     rf"|[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*[{_PS_DQ}]")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
-_REDIR_TARGET_RE = re.compile(
-    rf"{_WRITE_REDIR_OP}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
-# Bash: a backslash escapes the next character, including a space (#178).
-_BASH_REDIR_TARGET_RE = re.compile(
-    rf"{_WRITE_REDIR_OP}\s*(\"[^\"]*\"|'[^']*'|(?:\\.|[^\s|;&<>\\])+)")
+# A redirect target is one whole shell word: quoted and unquoted fragments
+# run together (`"a"/../main/f` is `a/../main/f`), so every fragment is
+# captured and dequoted, not only the first (#230). A quote with no partner
+# is kept as a literal character. Bash: a backslash escapes the next
+# character, including a space (#178), and inside double quotes only `$`,
+# `` ` ``, `"` and `\`. PowerShell: typographic quotes pair with straight
+# ones, a backtick escapes, and a doubled quote is one quote. cmd has only
+# double quotes; its `^` escapes are dropped separately.
+_TARGET_FRAGMENT_RE = {
+    "bash": re.compile(r"\"(?:\\[\s\S]|[^\"\\])*\"|'[^']*'"
+                       r"|(?:\\.|[^\s|;&<>\\\"'])+|[\"']"),
+    "ps": re.compile(rf"[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*"
+                     rf"[{_PS_DQ}]|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*"
+                     rf"[{_PS_SQ}]|(?:`[\s\S]|[^\s|;&<>`{_PS_DQ}{_PS_SQ}])+"
+                     rf"|[{_PS_DQ}{_PS_SQ}]"),
+    "cmd": re.compile(r'"[^"]*"|[^\s|;&<>"]+|"'),
+}
+_REDIR_TARGET_RE = {
+    shell: re.compile(rf"{_WRITE_REDIR_OP}\s*((?:{fragment.pattern})+)")
+    for shell, fragment in _TARGET_FRAGMENT_RE.items()}
+# PowerShell backtick escapes that stand for a control character (`` `n ``);
+# left in place, they keep the target unresolved as before.
+_PS_CONTROL_ESCAPES = "0abefnrtuv"
+
+
+def _dequote_word(word, shell):
+    """The text a shell word names once its quotes and escapes are read."""
+    out = []
+    for frag in _TARGET_FRAGMENT_RE[shell].findall(word):
+        if len(frag) < 2 or frag[0] not in _PS_DQ + _PS_SQ:
+            if shell == "bash":
+                frag = re.sub(r"\\(.)", r"\1", frag)
+            elif shell == "ps":
+                frag = re.sub(rf"`([^{_PS_CONTROL_ESCAPES}])", r"\1", frag)
+        elif shell == "bash":
+            frag = frag[1:-1] if frag[0] == "'" else \
+                re.sub(r'\\([$`"\\\n])', r"\1", frag[1:-1])
+        elif shell == "ps" and frag[0] in _PS_SQ:
+            frag = re.sub(rf"([{_PS_SQ}])[{_PS_SQ}]", r"\1", frag[1:-1])
+        elif shell == "ps":
+            frag = re.sub(rf"`([^{_PS_CONTROL_ESCAPES}])|([{_PS_DQ}])[{_PS_DQ}]",
+                          lambda m: m.group(1) or m.group(2), frag[1:-1])
+        else:
+            frag = frag[1:-1]
+        out.append(frag)
+    return "".join(out)
 
 
 def _ps_certain_comment(command, start):
@@ -954,14 +995,13 @@ def _redirect_targets(segment, segment_masked, bash=False, cmd=False):
     cmd drops its `^` escapes; PowerShell backslashes stay path separators.
     """
     targets = []
-    target_re = _BASH_REDIR_TARGET_RE if bash else _REDIR_TARGET_RE
+    shell = "bash" if bash else "cmd" if cmd else "ps"
     for match in REDIRECT_RE.finditer(segment_masked):
-        target = target_re.match(segment, match.start())
+        target = _REDIR_TARGET_RE[shell].match(segment, match.start())
         if target:
             raw = target.group(1)
-            if bash and not raw.startswith(("'", '"')):
-                raw = re.sub(r"\\(.)", r"\1", raw)
-            targets.append(_cmd_unescape(raw) if cmd else raw)
+            targets.append(_dequote_word(
+                _cmd_unescape(raw) if cmd else raw, shell))
     return targets
 
 

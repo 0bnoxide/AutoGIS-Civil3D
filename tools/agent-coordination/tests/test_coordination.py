@@ -570,6 +570,49 @@ class TestMainRule(TempRepoCase):
             self.assertIsNotNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo), cmd)
 
+    def test_mixed_quote_redirect_target_is_one_word(self):
+        # #230: quoted and unquoted fragments form one target word; checking
+        # only the first fragment (`safe`) let the write land in main.
+        for name in ("safe", "sa fe"):
+            os.makedirs(os.path.join(self.base, name))
+        main = os.path.basename(self.repo_path)
+        for kind, command in (
+                ("bash", f'echo x > "safe"/../{main}/f.cs'),
+                ("bash", f"echo x > 'safe'/../{main}/f.cs"),
+                ("bash", f'echo x >"sa"fe/../{main}/f.cs'),
+                ("bash", f'echo x > "safe/.."/{main}/f.cs'),
+                ("bash", f'echo x > "sa fe"/../{main}/f.cs'),
+                ("bash", f'echo x > sa\\ "fe"/../{main}/f.cs'),
+                ("ps", f'echo x > "safe"/../{main}/f.cs'),
+                ("ps", f"echo x > 'safe'/../{main}/f.cs"),
+                ("ps", f"echo x > \u201csafe\u201d/../{main}/f.cs"),
+                ("ps", f"echo x > 'sa fe'/../{main}/f.cs"),
+                ("cmd", f'echo x > "safe"\\..\\{main}\\f.cs'),
+                ("cmd", f'echo x > "sa fe"\\..\\{main}\\f.cs')):
+            with self.subTest(kind=kind, command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, self.base, self.repo,
+                    ps=kind == "ps", cmd=kind == "cmd"))
+        # The whole word staying out of main is still allowed.
+        for kind, command in (("bash", 'echo x > "sa fe"/../f.txt'),
+                              ("ps", "echo x > 'sa fe'/../f.txt"),
+                              ("cmd", 'echo x > "sa fe"\\..\\f.txt')):
+            with self.subTest(kind=kind, command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, self.base, self.repo,
+                    ps=kind == "ps", cmd=kind == "cmd"))
+        # Quotes and escapes are read as each shell reads them.
+        for kind, command, word in (
+                ("bash", 'echo x > "a"b\'c\'\\ d', "abc d"),
+                ("bash", 'echo x > "a\\"b\\x"', 'a"b\\x'),
+                ("ps", "echo x > 'a''b'\"c`\"d\"", "a'bc\"d"),
+                ("ps", 'echo x > "a""b"', 'a"b'),
+                ("cmd", 'echo x > "a"b^c', "abc")):
+            with self.subTest(kind=kind, command=command):
+                self.assertEqual(coordination.shell_write_targets(
+                    command, "/r", ps=kind == "ps", cmd=kind == "cmd"),
+                    [os.path.join("/r", word)])
+
     def test_tilde_redirect_resolves_outside_repo(self):
         self.assertIsNone(coordination.deny_reason_for_shell(
             "echo x > ~/coord-test-elsewhere.txt", self.repo_path, self.repo))
