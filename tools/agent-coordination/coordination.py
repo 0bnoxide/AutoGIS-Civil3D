@@ -575,11 +575,53 @@ _PS_QUOTE_RE = re.compile(
     rf"|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*[{_PS_SQ}]"
     rf"|[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*[{_PS_DQ}]")
 _HEREDOC_RE = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)(\w+)\1")
-_REDIR_TARGET_RE = re.compile(
-    rf"{_WRITE_REDIR_OP}\s*(\"[^\"]*\"|'[^']*'|[^\s|;&<>]+)")
-# Bash: a backslash escapes the next character, including a space (#178).
-_BASH_REDIR_TARGET_RE = re.compile(
-    rf"{_WRITE_REDIR_OP}\s*(\"[^\"]*\"|'[^']*'|(?:\\.|[^\s|;&<>\\])+)")
+# A redirect target is one whole shell word: quoted and unquoted fragments
+# run together (`"a"/../main/f` is `a/../main/f`), so every fragment is
+# captured and dequoted, not only the first (#230). A quote with no partner
+# is kept as a literal character. Bash: a backslash escapes the next
+# character, including a space (#178), and inside double quotes only `$`,
+# `` ` ``, `"` and `\`. PowerShell: typographic quotes pair with straight
+# ones, a backtick escapes, and a doubled quote is one quote. cmd has only
+# double quotes; its `^` escapes are dropped separately.
+_TARGET_FRAGMENT_RE = {
+    "bash": re.compile(r"\"(?:\\[\s\S]|[^\"\\])*\"|'[^']*'"
+                       r"|(?:\\.|[^\s|;&<>\\\"'])+|[\"']"),
+    "ps": re.compile(rf"[{_PS_DQ}](?:`[\s\S]|[{_PS_DQ}]{{2}}|[^{_PS_DQ}`])*"
+                     rf"[{_PS_DQ}]|[{_PS_SQ}](?:[{_PS_SQ}]{{2}}|[^{_PS_SQ}])*"
+                     rf"[{_PS_SQ}]|(?:`[\s\S]|[^\s|;&<>`{_PS_DQ}{_PS_SQ}])+"
+                     rf"|[{_PS_DQ}{_PS_SQ}]"),
+    "cmd": re.compile(r'"[^"]*"|[^\s|;&<>"]+|"'),
+}
+_REDIR_TARGET_RE = {
+    shell: re.compile(rf"{_WRITE_REDIR_OP}\s*((?:{fragment.pattern})+)")
+    for shell, fragment in _TARGET_FRAGMENT_RE.items()}
+# PowerShell backtick escapes that stand for a control character (`` `n ``);
+# left in place, they keep the target unresolved as before.
+_PS_CONTROL_ESCAPES = "0abefnrtuv"
+
+
+def _dequote_word(word, shell):
+    """The text a shell word names once its quotes and escapes are read."""
+    out = []
+    quotes = {"bash": "\"'", "ps": _PS_DQ + _PS_SQ, "cmd": '"'}[shell]
+    for frag in _TARGET_FRAGMENT_RE[shell].findall(word):
+        if len(frag) < 2 or frag[0] not in quotes:
+            if shell == "bash":
+                frag = re.sub(r"\\(.)", r"\1", frag)
+            elif shell == "ps":
+                frag = re.sub(rf"`([^{_PS_CONTROL_ESCAPES}])", r"\1", frag)
+        elif shell == "bash":
+            frag = frag[1:-1] if frag[0] == "'" else \
+                re.sub(r'\\([$`"\\\n])', r"\1", frag[1:-1])
+        elif shell == "ps" and frag[0] in _PS_SQ:
+            frag = re.sub(rf"([{_PS_SQ}])[{_PS_SQ}]", r"\1", frag[1:-1])
+        elif shell == "ps":
+            frag = re.sub(rf"`([^{_PS_CONTROL_ESCAPES}])|([{_PS_DQ}])[{_PS_DQ}]",
+                          lambda m: m.group(1) or m.group(2), frag[1:-1])
+        else:
+            frag = frag[1:-1]
+        out.append(frag)
+    return "".join(out)
 
 
 def _ps_certain_comment(command, start):
@@ -954,14 +996,16 @@ def _redirect_targets(segment, segment_masked, bash=False, cmd=False):
     cmd drops its `^` escapes; PowerShell backslashes stay path separators.
     """
     targets = []
-    target_re = _BASH_REDIR_TARGET_RE if bash else _REDIR_TARGET_RE
+    shell = "bash" if bash else "cmd" if cmd else "ps"
     for match in REDIRECT_RE.finditer(segment_masked):
-        target = target_re.match(segment, match.start())
+        target = _REDIR_TARGET_RE[shell].match(segment, match.start())
         if target:
             raw = target.group(1)
-            if bash and not raw.startswith(("'", '"')):
-                raw = re.sub(r"\\(.)", r"\1", raw)
-            targets.append(_cmd_unescape(raw) if cmd else raw)
+            word = _dequote_word(_cmd_unescape(raw) if cmd else raw, shell)
+            # Only Bash's unquoted leading `~` is a home; cmd has none.
+            if word.startswith("~") and (cmd or bash and raw[0] != "~"):
+                word = "./" + word
+            targets.append(word)
     return targets
 
 
@@ -1165,10 +1209,15 @@ def _move_destinations(moves, cwd, ps, cmd=False):
     return raw
 
 
-def _target_events(raw_targets, cwd, ps, cmd=False):
-    """Yield resolved target events for raw shell write operands."""
+def _target_events(raw_targets, cwd, ps, cmd=False, dequoted=False):
+    """Yield resolved target events for raw shell write operands.
+
+    `dequoted` targets (redirects) were already read as the shell reads
+    them, so a quote left in one is a literal filename character.
+    """
     for target in raw_targets:
-        target = target.strip("\"'" + (_PS_SQ + _PS_DQ if ps else ""))
+        if not dequoted:
+            target = target.strip("\"'" + (_PS_SQ + _PS_DQ if ps else ""))
         if ps or cmd:
             target = target.replace("\\", "/")
         if ps and re.match(r"[A-Za-z]{2,}:", target):
@@ -1501,7 +1550,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 else:
                     # `{ cd x; } > f` opens f before the group runs.
                     yield from _target_events(_redirect_targets(
-                        segment, seg_masked, bash=True), saved[0], ps)
+                        segment, seg_masked, bash=True), saved[0], ps, dequoted=True)
                 if ch == ")":
                     segment = segment[:i] + " " + segment[i + 1:]
                     seg_masked = seg_masked[:i] + " " + seg_masked[i + 1:]
@@ -1684,7 +1733,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
                 a.startswith("-") and "c" in a for a in first[1:]):
             yield from _target_events(_redirect_targets(
                 segment, seg_masked, bash=bash, cmd=cmd), effective_cwd, ps,
-                cmd=cmd)
+                cmd=cmd, dequoted=True)
             stack = []  # `dirs -c` clears the stack later popds would use
             if job is None:
                 parent_stack = []
@@ -1696,7 +1745,7 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             for base in cwds():
                 yield from _target_events(_redirect_targets(
                     segment, seg_masked, bash=bash, cmd=cmd), base, ps,
-                    cmd=cmd)
+                    cmd=cmd, dequoted=True)
             args = _drop_redirects(first[1:])
             path, modeled = _location_change(word, args, ps, cmd)
             if not modeled or alt and not path and (
@@ -1786,8 +1835,9 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
         elif spans:
             stages = _pipeline_stages(
                 _drop_block_braces(segment, spans), seg_masked)
-        raw_targets = _redirect_targets(segment, seg_masked, bash=bash,
-                                        cmd=cmd)
+        redirects = _redirect_targets(segment, seg_masked, bash=bash,
+                                      cmd=cmd)
+        raw_targets = []
         raw_subtrees, moves = [], []
         for stage in stages:
             argv = _strip_cmd_prefixes(_argv_of(stage, ps=ps, cmd=cmd))
@@ -1821,6 +1871,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             raw_subtrees += operands
             moves += argv_moves
         for base in cwds():
+            yield from _target_events(redirects, base, ps, cmd=cmd,
+                                      dequoted=True)
             yield from _target_events(raw_targets, base, ps, cmd=cmd)
             subtrees = _subtree_operands(raw_subtrees, base, bash) \
                 + _move_destinations(moves, base, ps, cmd=cmd)
