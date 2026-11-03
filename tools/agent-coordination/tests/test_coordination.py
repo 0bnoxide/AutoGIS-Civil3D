@@ -614,6 +614,8 @@ class TestMainRule(TempRepoCase):
                 # A quoted `~` (or any in cmd) is no home directory.
                 ("bash", 'echo x > "~"/f', "./~/f"),
                 ("bash", "echo x > '~/f'", "./~/f"),
+                ("bash", 'echo x > ~"/f"', "./~/f"),
+                ("bash", "echo x > ~\\/f", "./~/f"),
                 ("cmd", "echo x > ~\\f", "./~/f"),
                 # Typographic quotes are PowerShell's only.
                 ("bash", "echo x > \u201ca\u201d", "\u201ca\u201d"),

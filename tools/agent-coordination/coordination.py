@@ -1002,8 +1002,10 @@ def _redirect_targets(segment, segment_masked, bash=False, cmd=False):
         if target:
             raw = target.group(1)
             word = _dequote_word(_cmd_unescape(raw) if cmd else raw, shell)
-            # Only Bash's unquoted leading `~` is a home; cmd has none.
-            if word.startswith("~") and (cmd or bash and raw[0] != "~"):
+            # Only Bash's leading `~` is a home, and only when no character
+            # up to the first unquoted `/` is quoted; cmd has none.
+            if word.startswith("~") and (cmd or bash and not re.match(
+                    r"~[^/\"'\\]*(?:/|$)", raw)):
                 word = "./" + word
             targets.append(word)
     return targets
