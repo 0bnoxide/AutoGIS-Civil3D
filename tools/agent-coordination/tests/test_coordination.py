@@ -402,6 +402,16 @@ class TestMainRule(TempRepoCase):
             with self.subTest(command=command):
                 self.assertIsNone(coordination.deny_reason_for_shell(
                     command, nested, self.repo))
+        # `link/..` follows the link out of main before going up.
+        os.makedirs(os.path.join(safe, "child"))
+        try:
+            os.symlink(os.path.join(safe, "child"),
+                       os.path.join(self.repo_path, "link"))
+        except OSError:  # Windows without symlink privilege
+            pass
+        else:
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                'echo x > "link/../$n"', main, self.repo))
         # The main rule only: no unexpanded path reaches the claim check.
         self.assertEqual(coordination.shell_write_targets(
             "echo x > out/$n.txt", main), [])
