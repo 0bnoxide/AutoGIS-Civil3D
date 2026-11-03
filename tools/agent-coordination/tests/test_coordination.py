@@ -392,6 +392,16 @@ class TestMainRule(TempRepoCase):
             with self.subTest(kind=kind, command=command):
                 self.assertIsNone(coordination.deny_reason_for_shell(
                     command, cwd, self.repo, ps=kind == "ps"))
+        # A fully resolved $PWD keeps its last component: a worktree nested
+        # under main (`<main>/.worktrees/x`) is not main.
+        nested = os.path.join(self.repo_path, ".worktrees", "x")
+        run_git(["worktree", "add", "-q", "-b", "feat", nested],
+                self.repo_path)
+        nested = nested.replace(os.sep, "/")
+        for command in ('cp a "$PWD"', "echo x > $PWD"):
+            with self.subTest(command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, nested, self.repo))
         # The main rule only: no unexpanded path reaches the claim check.
         self.assertEqual(coordination.shell_write_targets(
             "echo x > out/$n.txt", main), [])

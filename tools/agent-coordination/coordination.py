@@ -1260,6 +1260,8 @@ def _expansion_base(target, cwd, ps):
         if cwd is None or "$" in cwd or "`" in cwd:
             return None
         target = cwd + target[cwd_var.end():]
+        if not re.search(r"[$`]", target):
+            return os.path.normpath(target)  # fully resolved: `cp a "$PWD"`
     head = re.split(r"[$`]", target, maxsplit=1)[0]
     if not head and not cwd_var:
         return None
