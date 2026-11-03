@@ -398,6 +398,10 @@ def deny_reason_for_shell(command, cwd, repo_hint=None, ps=False, cmd=False):
             return (event[2] if len(event) > 2 else
                     "nested interpreter depth exceeds the parser limit; "
                     "command is denied while repository protection applies")
+        elif event[0] == "expansion":
+            reason = deny_reason_for_target(event[1], repo_hint)
+            if reason:
+                reason = "a write operand with an unexpanded part: " + reason
         else:
             reason = deny_reason_for_target(event[1], repo_hint)
         if reason:
@@ -1228,8 +1232,47 @@ def _target_events(raw_targets, cwd, ps, cmd=False, dequoted=False):
         resolved = target if os.path.isabs(target) \
             else os.path.join(cwd or ".", target)
         if "$" in resolved or "`" in resolved:
+            base = _expansion_base(target, cwd, ps)
+            if base is not None:
+                yield ("expansion", base)
             continue
         yield ("target", resolved)
+
+
+# A leading expansion that names the working directory itself (#230).
+_CWD_EXPANSION_RE = {
+    False: re.compile(r"(?:\$PWD(?!\w)|\$\{PWD\}|\$\(\s*pwd\s*\)|`\s*pwd\s*`)"),
+    True: re.compile(r"(?:\$pwd(?!\w)|\$\{pwd\}|\$\(\s*(?:Get-Location|gl|pwd)"
+                     r"\s*\))(?:\.Path(?!\w))?", re.I),
+}
+
+
+def _expansion_base(target, cwd, ps):
+    """The directory a write operand with an unexpanded part lands under, or
+    None when an expansion leads it (`$TMPDIR/x`): that could be anywhere.
+
+    The literal directory in front of the first expansion is certain
+    (`out/$n.txt` writes under `out`), and so is a leading `$PWD` or
+    `$(pwd)`, so a write that may land in main fails closed (#230).
+    """
+    cwd_var = _CWD_EXPANSION_RE[ps].match(target)
+    if cwd_var:
+        if cwd is None or "$" in cwd or "`" in cwd:
+            return None
+        target = cwd + target[cwd_var.end():]
+        if not re.search(r"[$`]", target):
+            return os.path.realpath(target)  # fully resolved: `cp a "$PWD"`
+    head = re.split(r"[$`]", target, maxsplit=1)[0]
+    if not head and not cwd_var:
+        return None
+    head = head.rsplit("/", 1)[0] + "/" if "/" in head else ""
+    # realpath, not normpath: `link/..` leaves through the link, as the
+    # shell does, rather than collapsing back to where the link sits.
+    if os.path.isabs(head):
+        return os.path.realpath(head)
+    if cwd is None or "$" in cwd or "`" in cwd:
+        return None
+    return os.path.realpath(os.path.join(cwd, head))
 
 
 _PUSHD_WORDS = {"pushd", "push-location"}
@@ -1879,7 +1922,8 @@ def _shell_events(command, cwd, ps=False, _depth=0, cmd=False,
             subtrees = _subtree_operands(raw_subtrees, base, bash) \
                 + _move_destinations(moves, base, ps, cmd=cmd)
             for event in _target_events(subtrees, base, ps, cmd=cmd):
-                yield ("subtree", event[1])
+                yield ("subtree", event[1]) if event[0] == "target" \
+                    else event
     if _report_cwd:
         for final in [parent_cwd] + parent_alt:
             yield ("cwd", final)

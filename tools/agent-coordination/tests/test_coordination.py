@@ -362,6 +362,58 @@ class TestMainRule(TempRepoCase):
             self.assertIsNone(coordination.deny_reason_for_shell(
                 cmd, self.repo_path, self.repo), cmd)
 
+    def test_unexpanded_write_under_main_denied(self):
+        # #230: the literal directory before an expansion, or a leading
+        # $PWD/$(pwd), is certain, so a write that lands under main denies.
+        safe = os.path.join(self.base, "safe").replace(os.sep, "/")
+        os.makedirs(safe)
+        main = self.repo_path.replace(os.sep, "/")
+        for kind, cwd, command in (
+                ("bash", main, "echo x > out/$n.txt"),
+                ("bash", main, 'echo x > "log-$(date).txt"'),
+                ("bash", main, 'echo x > "$PWD/f"'),
+                ("bash", main, "echo x > ${PWD}/f"),
+                ("bash", main, 'printf x | tee "$(pwd)/f"'),
+                ("bash", safe, f'echo x > "{main}/$n"'),
+                ("bash", safe, f"cp a ../{os.path.basename(main)}/$n"),
+                ("ps", main, 'echo x > "$pwd\\f"'),
+                ("ps", main, "echo x > $(Get-Location).Path/f"),
+                ("ps", main, "Set-Content out/$n.txt x")):
+            with self.subTest(kind=kind, command=command):
+                self.assertIsNotNone(coordination.deny_reason_for_shell(
+                    command, cwd, self.repo, ps=kind == "ps"))
+        # A leading expansion could be anywhere; outside main is certain.
+        for kind, cwd, command in (
+                ("bash", main, "echo x > $n.txt"),
+                ("bash", main, 'cp a "$HOME/x"'),
+                ("bash", safe, 'echo x > "$PWD/f"'),
+                ("bash", safe, "echo x > out/$n.txt"),
+                ("ps", main, 'echo x > "$env:TEMP/y"')):
+            with self.subTest(kind=kind, command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, cwd, self.repo, ps=kind == "ps"))
+        # A fully resolved $PWD keeps its last component: a worktree nested
+        # under main (`<main>/.worktrees/x`) is not main.
+        nested = os.path.join(self.repo_path, ".worktrees", "x")
+        run_git(["worktree", "add", "-q", "-b", "feat", nested],
+                self.repo_path)
+        nested = nested.replace(os.sep, "/")
+        for command in ('cp a "$PWD"', "echo x > $PWD"):
+            with self.subTest(command=command):
+                self.assertIsNone(coordination.deny_reason_for_shell(
+                    command, nested, self.repo))
+        # POSIX `link/..` follows the link out of main before going up;
+        # Win32 collapses `..` lexically, so there it stays in main.
+        if os.name != "nt":
+            os.makedirs(os.path.join(safe, "child"))
+            os.symlink(os.path.join(safe, "child"),
+                       os.path.join(self.repo_path, "link"))
+            self.assertIsNone(coordination.deny_reason_for_shell(
+                'echo x > "link/../$n"', main, self.repo))
+        # The main rule only: no unexpanded path reaches the claim check.
+        self.assertEqual(coordination.shell_write_targets(
+            "echo x > out/$n.txt", main), [])
+
     def test_unresolved_location_operand_denied(self):
         # #230 (supersedes #56's skip): a location operand that needs run-time
         # expansion leaves the working directory unknown, so the command is
